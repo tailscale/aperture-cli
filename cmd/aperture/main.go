@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/profiles"
@@ -19,6 +20,41 @@ var (
 	buildCommit  = "unknown"
 	buildDate    = "unknown"
 )
+
+func init() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+
+	if buildVersion == "v0.0.0-dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		buildVersion = info.Main.Version
+	}
+
+	// Only fill in VCS info when ldflags haven't already set these values.
+	if buildCommit != "unknown" {
+		return
+	}
+
+	var dirty bool
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if len(s.Value) >= 7 {
+				buildCommit = s.Value[:7]
+			}
+		case "vcs.time":
+			if buildDate == "unknown" {
+				buildDate = s.Value
+			}
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if dirty && buildCommit != "unknown" {
+		buildCommit += "-dirty"
+	}
+}
 
 func main() {
 	flag.Parse()
