@@ -15,15 +15,16 @@ var (
 	flagVersion = flag.Bool("version", false, "print version and exit")
 	flagDebug   = flag.Bool("debug", false, "print env vars set before launching agent")
 
-	buildCommit = "dev"
-	buildDate   = "unknown"
+	buildVersion = "v0.0.0-dev"
+	buildCommit  = "unknown"
+	buildDate    = "unknown"
 )
 
 func main() {
 	flag.Parse()
 
 	if *flagVersion {
-		fmt.Printf("%s %s\n", buildDate, buildCommit)
+		fmt.Printf("%s (%s, %s)\n", buildVersion, buildCommit, buildDate)
 		os.Exit(0)
 	}
 
