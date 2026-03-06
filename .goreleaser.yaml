@@ -17,7 +17,6 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -26,6 +25,8 @@ archives:
   - formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+    # leaving this here for when windows builds are supported
     format_overrides:
       - goos: windows
         formats:
