@@ -1,0 +1,4 @@
+aperture
+dist/
+*.test
+*.out
