@@ -31,7 +31,7 @@ jobs:
           token: ${{ secrets.GOVULNCHECK_BOT_TOKEN }}
           payload: |
             {
-              "channel": "TO_BE_MANUALLY_INPUT_LATER",
+              "channel": "C0AALS0EQF5",
               "blocks": [
                 {
                   "type": "section",
