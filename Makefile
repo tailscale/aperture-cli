@@ -16,7 +16,7 @@ test:
 	go test ./...
 
 install:
-	go install ./cmd/aperture
+	go install -ldflags "$(LDFLAGS)" ./cmd/aperture
 
 clean:
 	rm -rf .build/
