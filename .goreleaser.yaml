@@ -10,6 +10,7 @@ builds:
     main: ./cmd/aperture
     ldflags:
       - -s -w
+      - -X main.buildVersion={{.Tag}}
       - -X main.buildCommit={{.ShortCommit}}
       - -X main.buildDate={{.Date}}
     env:
