@@ -60,7 +60,11 @@ func main() {
 	flag.Parse()
 
 	if *flagVersion {
-		fmt.Printf("%s (%s, %s)\n", buildVersion, buildCommit, buildDate)
+		if buildCommit != "unknown" {
+			fmt.Printf("%s (%s, %s)\n", buildVersion, buildCommit, buildDate)
+		} else {
+			fmt.Println(buildVersion)
+		}
 		os.Exit(0)
 	}
 
