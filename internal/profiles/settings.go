@@ -10,8 +10,7 @@ const defaultLocation = "http://ai"
 
 // Endpoint holds the URL and per-endpoint configuration for an Aperture proxy.
 type Endpoint struct {
-	URL             string `json:"url"`
-	VertexProjectID string `json:"vertexProjectID,omitempty"`
+	URL string `json:"url"`
 }
 
 // Settings holds persistent launcher configuration managed by the user.

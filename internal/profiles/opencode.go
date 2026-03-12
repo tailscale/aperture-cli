@@ -10,7 +10,6 @@ import (
 
 // OpenCodeProfile implements Profile for the `opencode` CLI tool.
 type OpenCodeProfile struct {
-	vertexProjectID string
 }
 
 func (o *OpenCodeProfile) Name() string { return "OpenCode" }
@@ -48,8 +47,6 @@ func (o *OpenCodeProfile) Uninstall() func() error {
 		return os.RemoveAll(filepath.Join(home, ".opencode", "bin"))
 	}
 }
-
-func (o *OpenCodeProfile) SetVertexProjectID(id string) { o.vertexProjectID = id }
 
 func (o *OpenCodeProfile) SupportedBackends() []Backend {
 	return []Backend{
@@ -92,8 +89,8 @@ func (o *OpenCodeProfile) Env(apertureHost string, b Backend) (map[string]string
 		}, nil
 	case BackendVertex:
 		return map[string]string{
-			"GOOGLE_CLOUD_PROJECT":  o.vertexProjectID,
-			"GOOGLE_CLOUD_LOCATION": "global",
+			"GOOGLE_CLOUD_PROJECT":  "_aperture_auto_vertex_project_id_",
+			"GOOGLE_CLOUD_LOCATION": "_aperture_auto_vertex_region_",
 		}, nil
 	case BackendOpenAI:
 		return map[string]string{
@@ -134,8 +131,8 @@ func (o *OpenCodeProfile) WriteConfig(apertureHost string, b Backend) (string, s
 	case BackendVertex:
 		providerKey = "google-vertex"
 		options = map[string]string{
-			"project":  o.vertexProjectID,
-			"location": "global",
+			"project":  "_aperture_auto_vertex_project_id_",
+			"location": "_aperture_auto_vertex_region_",
 			"baseURL":  apertureHost + "/v1",
 		}
 	case BackendOpenAI:
