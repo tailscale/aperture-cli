@@ -45,12 +45,6 @@ type YoloProfile interface {
 	YoloArgs() []string
 }
 
-// VertexConfigurer is implemented by profiles that use a Google Cloud
-// project ID for the Vertex backend.
-type VertexConfigurer interface {
-	SetVertexProjectID(id string)
-}
-
 // ProviderInfo mirrors the JSON response from GET /api/providers.
 type ProviderInfo struct {
 	ID            string          `json:"id"`

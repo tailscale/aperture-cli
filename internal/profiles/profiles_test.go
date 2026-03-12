@@ -62,7 +62,6 @@ func TestLauncher_ClaudeCode_Env_Bedrock(t *testing.T) {
 
 func TestLauncher_ClaudeCode_Env_Vertex(t *testing.T) {
 	p := &profiles.ClaudeCodeProfile{}
-	p.SetVertexProjectID("my-test-project")
 	b := profiles.Backend{Type: profiles.BackendVertex, DisplayName: "Google Vertex"}
 
 	env, err := p.Env(testHost, b)
@@ -71,9 +70,9 @@ func TestLauncher_ClaudeCode_Env_Vertex(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"CLOUD_ML_REGION":             "global",
+		"CLOUD_ML_REGION":             "_aperture_auto_vertex_region_",
 		"CLAUDE_CODE_USE_VERTEX":      "1",
-		"ANTHROPIC_VERTEX_PROJECT_ID": "my-test-project",
+		"ANTHROPIC_VERTEX_PROJECT_ID": "_aperture_auto_vertex_project_id_",
 		"ANTHROPIC_VERTEX_BASE_URL":   testHost + "/v1",
 	}
 	for k, wantV := range want {
@@ -159,16 +158,15 @@ func TestLauncher_OpenCode_Env_Bedrock(t *testing.T) {
 
 func TestLauncher_OpenCode_Env_Vertex(t *testing.T) {
 	p := &profiles.OpenCodeProfile{}
-	p.SetVertexProjectID("my-test-project")
 	env, err := p.Env(testHost, profiles.Backend{Type: profiles.BackendVertex})
 	if err != nil {
 		t.Fatalf("Env returned error: %v", err)
 	}
-	if got := env["GOOGLE_CLOUD_PROJECT"]; got != "my-test-project" {
-		t.Errorf("GOOGLE_CLOUD_PROJECT = %q, want %q", got, "my-test-project")
+	if got := env["GOOGLE_CLOUD_PROJECT"]; got != "_aperture_auto_vertex_project_id_" {
+		t.Errorf("GOOGLE_CLOUD_PROJECT = %q, want %q", got, "_aperture_auto_vertex_project_id_")
 	}
-	if got := env["GOOGLE_CLOUD_LOCATION"]; got != "global" {
-		t.Errorf("GOOGLE_CLOUD_LOCATION = %q, want %q", got, "global")
+	if got := env["GOOGLE_CLOUD_LOCATION"]; got != "_aperture_auto_vertex_region_" {
+		t.Errorf("GOOGLE_CLOUD_LOCATION = %q, want %q", got, "_aperture_auto_vertex_region_")
 	}
 }
 
@@ -189,7 +187,6 @@ func TestLauncher_OpenCode_WriteConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	p := &profiles.OpenCodeProfile{}
-	p.SetVertexProjectID("my-test-project")
 
 	cw, ok := profiles.Profile(p).(profiles.ConfigWriter)
 	if !ok {
@@ -225,8 +222,8 @@ func TestLauncher_OpenCode_WriteConfig(t *testing.T) {
 			backend: profiles.Backend{Type: profiles.BackendVertex},
 			wantKey: "google-vertex",
 			wantOptions: map[string]string{
-				"project":  "my-test-project",
-				"location": "global",
+				"project":  "_aperture_auto_vertex_project_id_",
+				"location": "_aperture_auto_vertex_region_",
 				"baseURL":  testHost + "/v1",
 			},
 		},

@@ -19,20 +19,18 @@ import (
 type step int
 
 const (
-	stepPreflight          step = iota // checking /api/providers
-	stepSelectAgent                    // choose profile
-	stepSelectBackend                  // choose provider
-	stepSettings                       // top-level settings menu
-	stepEndpoints                      // manage aperture endpoints
-	stepAddLocation                    // type a new endpoint URL
-	stepAddLocationVertex              // optional vertex project ID for new endpoint
-	stepInstall                        // show install hint for an uninstalled profile
-	stepInstallAgents                  // choose an uninstalled profile to install
-	stepUninstall                      // list installed profiles to uninstall
-	stepUninstallConfirm               // confirm uninstall for a chosen profile
-	stepEnterVertexProject             // prompt for Vertex project ID
-	stepCheckError                     // pre-launch validation failure
-	stepError                          // fatal error
+	stepPreflight        step = iota // checking /api/providers
+	stepSelectAgent                  // choose profile
+	stepSelectBackend                // choose provider
+	stepSettings                     // top-level settings menu
+	stepEndpoints                    // manage aperture endpoints
+	stepAddLocation                  // type a new endpoint URL
+	stepInstall                      // show install hint for an uninstalled profile
+	stepInstallAgents                // choose an uninstalled profile to install
+	stepUninstall                    // list installed profiles to uninstall
+	stepUninstallConfirm             // confirm uninstall for a chosen profile
+	stepCheckError                   // pre-launch validation failure
+	stepError                        // fatal error
 )
 
 var (
@@ -79,10 +77,6 @@ type model struct {
 	providers         []profiles.ProviderInfo
 	preflightErr      string
 
-	// pendingLocationURL holds the URL staged during stepAddLocation
-	// before transitioning to stepAddLocationVertex.
-	pendingLocationURL string
-
 	// endpointsFromSetup is true when stepEndpoints was reached via preflight failure.
 	endpointsFromSetup bool
 
@@ -100,10 +94,6 @@ type model struct {
 
 	// add-location step
 	addLocationInput string
-
-	// vertex project ID step
-	vertexProjectInput string
-	pendingCombo       *profiles.Combo
 
 	debug bool
 	err   string
@@ -224,7 +214,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case autoSelectMsg:
-		return m.prepareAndExec(msg.combo)
+		return m, m.execCombo(msg.combo)
 
 	case installDoneMsg:
 		// Re-check installed CLIs after the install command finishes.
@@ -292,12 +282,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case stepAddLocation:
 			return m.updateAddLocation(msg)
-
-		case stepAddLocationVertex:
-			return m.updateAddLocationVertex(msg)
-
-		case stepEnterVertexProject:
-			return m.updateEnterVertexProject(msg)
 
 		case stepInstall:
 			return m.updateInstall(msg)
@@ -393,7 +377,7 @@ func (m model) updateSelectAgent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err == nil {
 			if hasLast && n == 0 {
 				combo := *m.lastCombo
-				return m.prepareAndExec(combo)
+				return m, m.execCombo(combo)
 			}
 			idx := n - 1
 			if idx >= 0 && idx < profileCount {
@@ -415,7 +399,7 @@ func (m model) confirmAgentSelection() (model, tea.Cmd) {
 
 	if hasLast && m.agentCursor == 0 {
 		combo := *m.lastCombo
-		return m.prepareAndExec(combo)
+		return m, m.execCombo(combo)
 	}
 
 	profileIdx := m.agentCursor
@@ -444,7 +428,7 @@ func (m model) confirmAgentSelection() (model, tea.Cmd) {
 				}
 			}
 			combo := profiles.Combo{Profile: chosen, Backend: b}
-			return m.prepareAndExec(combo)
+			return m, m.execCombo(combo)
 		}
 		m.backendCursor = 0
 		m.step = stepSelectBackend
@@ -706,9 +690,6 @@ func (m model) endpointsRows() []string {
 		if i == 0 {
 			label += " (active)"
 		}
-		if ep.VertexProjectID != "" {
-			label += dimStyle.Render(" vertex:" + ep.VertexProjectID)
-		}
 		rows = append(rows, label)
 	}
 	return rows
@@ -806,9 +787,10 @@ func (m model) updateAddLocation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if loc == "" {
 			return m, nil
 		}
-		m.pendingLocationURL = loc
-		m.vertexProjectInput = ""
-		m.step = stepAddLocationVertex
+		m.settings = upsertLocation(m.settings, loc)
+		_ = profiles.SaveSettings(m.settings)
+		m.step = stepEndpoints
+		m.endpointsCursor = 0
 		return m, nil
 	case "backspace":
 		if len(m.addLocationInput) > 0 {
@@ -834,49 +816,6 @@ func upsertLocation(s profiles.Settings, loc string) profiles.Settings {
 	return s
 }
 
-func (m model) updateAddLocationVertex(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "esc":
-		m.settings = upsertEndpointVertex(m.settings, m.pendingLocationURL, "")
-		_ = profiles.SaveSettings(m.settings)
-		m.step = stepEndpoints
-		m.endpointsCursor = 0
-		return m, nil
-	case "enter":
-		val := strings.TrimSpace(m.vertexProjectInput)
-		m.settings = upsertEndpointVertex(m.settings, m.pendingLocationURL, val)
-		_ = profiles.SaveSettings(m.settings)
-		m.step = stepEndpoints
-		m.endpointsCursor = 0
-		return m, nil
-	case "backspace":
-		if len(m.vertexProjectInput) > 0 {
-			m.vertexProjectInput = m.vertexProjectInput[:len(m.vertexProjectInput)-1]
-		}
-	default:
-		if len(msg.String()) == 1 {
-			m.vertexProjectInput += msg.String()
-		}
-	}
-	return m, nil
-}
-
-// upsertEndpointVertex ensures an endpoint with the given URL is in
-// settings.Endpoints. If the URL exists, its VertexProjectID is updated
-// in place; otherwise a new Endpoint is appended.
-func upsertEndpointVertex(s profiles.Settings, url, vertexProjectID string) profiles.Settings {
-	for i, ep := range s.Endpoints {
-		if ep.URL == url {
-			s.Endpoints[i].VertexProjectID = vertexProjectID
-			return s
-		}
-	}
-	s.Endpoints = append(s.Endpoints, profiles.Endpoint{URL: url, VertexProjectID: vertexProjectID})
-	return s
-}
-
 func (m model) checkAndExecSelectedBackend() (model, tea.Cmd) {
 	if m.backendCursor < 0 || m.backendCursor >= len(m.backendItems) {
 		return m, nil
@@ -890,73 +829,7 @@ func (m model) checkAndExecSelectedBackend() (model, tea.Cmd) {
 		}
 	}
 	combo := profiles.Combo{Profile: m.chosenProfile, Backend: b}
-	return m.prepareAndExec(combo)
-}
-
-// prepareAndExec intercepts a launch to prompt for the Vertex project ID
-// when needed. If the combo uses a Vertex backend and the profile implements
-// VertexConfigurer, it either injects the saved project ID or transitions
-// to the text-input step. For non-Vertex combos or profiles that don't
-// implement VertexConfigurer (e.g. Gemini CLI) it proceeds directly.
-func (m model) prepareAndExec(combo profiles.Combo) (model, tea.Cmd) {
-	vc, ok := combo.Profile.(profiles.VertexConfigurer)
-	if !ok || combo.Backend.Type != profiles.BackendVertex {
-		return m, m.execCombo(combo)
-	}
-	if len(m.settings.Endpoints) > 0 && m.settings.Endpoints[0].VertexProjectID != "" {
-		vc.SetVertexProjectID(m.settings.Endpoints[0].VertexProjectID)
-		return m, m.execCombo(combo)
-	}
-	// Need to ask.
-	m.pendingCombo = &combo
-	m.vertexProjectInput = ""
-	m.step = stepEnterVertexProject
-	return m, nil
-}
-
-func (m model) updateEnterVertexProject(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "esc":
-		if m.pendingCombo != nil {
-			// Came from exec flow, go back to backend selection.
-			m.pendingCombo = nil
-			m.step = stepSelectBackend
-		} else {
-			m.step = stepSelectAgent
-		}
-		return m, nil
-	case "enter":
-		val := strings.TrimSpace(m.vertexProjectInput)
-		if val == "" {
-			return m, nil
-		}
-		if len(m.settings.Endpoints) > 0 {
-			m.settings.Endpoints[0].VertexProjectID = val
-		}
-		_ = profiles.SaveSettings(m.settings)
-		if m.pendingCombo != nil {
-			combo := *m.pendingCombo
-			m.pendingCombo = nil
-			if vc, ok := combo.Profile.(profiles.VertexConfigurer); ok {
-				vc.SetVertexProjectID(val)
-			}
-			return m, m.execCombo(combo)
-		}
-		// Came from settings, return there.
-		m.step = stepSettings
-		return m, nil
-	case "backspace":
-		if len(m.vertexProjectInput) > 0 {
-			m.vertexProjectInput = m.vertexProjectInput[:len(m.vertexProjectInput)-1]
-		}
-	default:
-		if len(msg.String()) == 1 {
-			m.vertexProjectInput += msg.String()
-		}
-	}
-	return m, nil
+	return m, m.execCombo(combo)
 }
 
 func (m model) execCombo(combo profiles.Combo) tea.Cmd {
@@ -1263,20 +1136,6 @@ func (m model) View() string {
 		sb.WriteString(titleStyle.Render("Add Endpoint:"))
 		sb.WriteString("\n")
 		sb.WriteString("  > " + m.addLocationInput + "█\n")
-		sb.WriteString("\n")
-		sb.WriteString(dimStyle.Render("Press Enter to save, Esc to cancel.\n"))
-
-	case stepAddLocationVertex:
-		sb.WriteString(titleStyle.Render("Vertex Project ID (optional):"))
-		sb.WriteString("\n")
-		sb.WriteString("  > " + m.vertexProjectInput + "█\n")
-		sb.WriteString("\n")
-		sb.WriteString(dimStyle.Render("Press Enter to save, Esc to skip.\n"))
-
-	case stepEnterVertexProject:
-		sb.WriteString(titleStyle.Render("Vertex Project ID:"))
-		sb.WriteString("\n")
-		sb.WriteString("  > " + m.vertexProjectInput + "█\n")
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Press Enter to save, Esc to cancel.\n"))
 	}

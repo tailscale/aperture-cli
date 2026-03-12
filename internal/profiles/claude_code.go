@@ -11,7 +11,6 @@ import (
 
 // ClaudeCodeProfile implements Profile for the `claude` CLI tool.
 type ClaudeCodeProfile struct {
-	vertexProjectID string
 }
 
 func (c *ClaudeCodeProfile) Name() string { return "Claude Code" }
@@ -54,8 +53,6 @@ func (c *ClaudeCodeProfile) Uninstall() func() error {
 		return os.RemoveAll(filepath.Join(home, ".local", "share", "claude"))
 	}
 }
-
-func (c *ClaudeCodeProfile) SetVertexProjectID(id string) { c.vertexProjectID = id }
 
 func (c *ClaudeCodeProfile) YoloArgs() []string {
 	return []string{"--dangerously-skip-permissions"}
@@ -191,10 +188,10 @@ func (c *ClaudeCodeProfile) Env(apertureHost string, b Backend) (map[string]stri
 		}, nil
 	case BackendVertex:
 		return map[string]string{
-			"CLOUD_ML_REGION":              "global",
+			"CLOUD_ML_REGION":              "_aperture_auto_vertex_region_",
 			"CLAUDE_CODE_USE_VERTEX":       "1",
 			"CLAUDE_CODE_SKIP_VERTEX_AUTH": "1",
-			"ANTHROPIC_VERTEX_PROJECT_ID":  c.vertexProjectID,
+			"ANTHROPIC_VERTEX_PROJECT_ID":  "_aperture_auto_vertex_project_id_",
 			"ANTHROPIC_VERTEX_BASE_URL":    apertureHost + "/v1",
 		}, nil
 	default:
