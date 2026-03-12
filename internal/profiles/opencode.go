@@ -76,7 +76,7 @@ func (o *OpenCodeProfile) Env(apertureHost string, b Backend) (map[string]string
 	switch b.Type {
 	case BackendAnthropic:
 		return map[string]string{
-			"ANTHROPIC_BASE_URL":   apertureHost + "/bedrock",
+			"ANTHROPIC_BASE_URL":   apertureHost + "/v1",
 			"ANTHROPIC_AUTH_TOKEN": "-",
 		}, nil
 	case BackendBedrock:
