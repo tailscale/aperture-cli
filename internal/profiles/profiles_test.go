@@ -137,8 +137,8 @@ func TestLauncher_OpenCode_Env_Anthropic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Env returned error: %v", err)
 	}
-	if got := env["ANTHROPIC_BASE_URL"]; got != testHost+"/bedrock" {
-		t.Errorf("ANTHROPIC_BASE_URL = %q, want %q", got, testHost+"/bedrock")
+	if got := env["ANTHROPIC_BASE_URL"]; got != testHost+"/v1" {
+		t.Errorf("ANTHROPIC_BASE_URL = %q, want %q", got, testHost+"/v1")
 	}
 }
 
