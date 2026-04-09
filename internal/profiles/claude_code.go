@@ -32,6 +32,7 @@ func (c *ClaudeCodeProfile) SupportedBackends() []Backend {
 		{Type: BackendAnthropic, DisplayName: "Anthropic API"},
 		{Type: BackendBedrock, DisplayName: "AWS Bedrock"},
 		{Type: BackendVertex, DisplayName: "Google Vertex"},
+		{Type: BackendZAI, DisplayName: "z.ai"},
 	}
 }
 
@@ -66,12 +67,19 @@ func (c *ClaudeCodeProfile) RequiredCompat(b Backend) []string {
 		return []string{"bedrock_model_invoke"}
 	case BackendVertex:
 		return []string{"google_raw_predict"}
+	case BackendZAI:
+		return []string{"anthropic_messages"}
 	default:
 		return nil
 	}
 }
 
 func (c *ClaudeCodeProfile) ProviderEnv(b Backend, providers []ProviderInfo) map[string]string {
+	// ZAI uses fixed model names set in Env; do not override them.
+	if b.Type == BackendZAI {
+		return nil
+	}
+
 	keys := c.RequiredCompat(b)
 
 	// Collect models from all providers compatible with the chosen backend.
@@ -112,6 +120,7 @@ func (c *ClaudeCodeProfile) ProviderEnv(b Backend, providers []ProviderInfo) map
 // may set when launching Claude Code, across all backends.
 var managedEnvVars = []string{
 	"ANTHROPIC_BASE_URL",
+	"ANTHROPIC_MODEL",
 	"ANTHROPIC_AUTH_TOKEN",
 	"ANTHROPIC_BEDROCK_BASE_URL",
 	"CLAUDE_CODE_USE_BEDROCK",
@@ -124,6 +133,8 @@ var managedEnvVars = []string{
 	"ANTHROPIC_DEFAULT_OPUS_MODEL",
 	"ANTHROPIC_DEFAULT_SONNET_MODEL",
 	"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+	"API_TIMEOUT_MS",
+	"ANTHROPIC_API_KEY",
 }
 
 // Check validates that ~/.claude/settings.json does not set environment
@@ -193,6 +204,16 @@ func (c *ClaudeCodeProfile) Env(apertureHost string, b Backend) (map[string]stri
 			"CLAUDE_CODE_SKIP_VERTEX_AUTH": "1",
 			"ANTHROPIC_VERTEX_PROJECT_ID":  "_aperture_auto_vertex_project_id_",
 			"ANTHROPIC_VERTEX_BASE_URL":    apertureHost + "/v1",
+		}, nil
+	case BackendZAI:
+		return map[string]string{
+			"ANTHROPIC_BASE_URL":             apertureHost,
+			"ANTHROPIC_MODEL":                "glm-5.1",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL":   "glm-5.1",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "glm-5-turbo",
+			"API_TIMEOUT_MS":                 "3000000",
+			"ANTHROPIC_API_KEY":              "-",
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported backend %q for Claude Code", b.Type)
