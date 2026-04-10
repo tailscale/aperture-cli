@@ -703,6 +703,51 @@ func TestLauncher_ClaudeCode_Check_EmptyEnv(t *testing.T) {
 	}
 }
 
+func TestLauncher_ClaudeDesktop_GatewayURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"http://ai", "https://ai"},
+		{"https://my-aperture.ts.net", "https://my-aperture.ts.net"},
+		{"http://ai/", "https://ai"},
+		{"https://aperture.example.com/", "https://aperture.example.com"},
+		{"ai.example.com", "https://ai.example.com"},
+		{"http://ai:8080/", "https://ai:8080"},
+	}
+	for _, tt := range tests {
+		got := profiles.GatewayURL(tt.input)
+		if got != tt.want {
+			t.Errorf("GatewayURL(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestLauncher_ClaudeDesktop_ImplementsLauncher(t *testing.T) {
+	p := &profiles.ClaudeDesktopProfile{}
+	if _, ok := profiles.Profile(p).(profiles.Launcher); !ok {
+		t.Fatal("ClaudeDesktopProfile does not implement Launcher")
+	}
+}
+
+func TestLauncher_ClaudeDesktop_ImplementsHostAwareInstaller(t *testing.T) {
+	p := &profiles.ClaudeDesktopProfile{}
+	if _, ok := profiles.Profile(p).(profiles.HostAwareInstaller); !ok {
+		t.Fatal("ClaudeDesktopProfile does not implement HostAwareInstaller")
+	}
+}
+
+func TestLauncher_ClaudeDesktop_SupportedBackends(t *testing.T) {
+	p := &profiles.ClaudeDesktopProfile{}
+	backends := p.SupportedBackends()
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend, got %d", len(backends))
+	}
+	if backends[0].Type != profiles.BackendAnthropic {
+		t.Errorf("backend type = %q, want %q", backends[0].Type, profiles.BackendAnthropic)
+	}
+}
+
 func TestLauncher_AllProfiles_ImplementPathHinter(t *testing.T) {
 	mgr := profiles.NewManager()
 	for _, p := range mgr.AllProfiles() {
