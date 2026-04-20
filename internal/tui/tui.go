@@ -172,6 +172,7 @@ type execDoneMsg struct{ err error }
 type launchDoneMsg struct{ err error }
 type installDoneMsg struct{ err error }
 type uninstallDoneMsg struct{ err error }
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case preflightResult:

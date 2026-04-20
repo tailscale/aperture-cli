@@ -11,8 +11,8 @@ import (
 // On launch, it re-checks the configuration and starts the desktop app.
 type ClaudeDesktopProfile struct{}
 
-func (c *ClaudeDesktopProfile) Name() string        { return "Claude Cowork" }
-func (c *ClaudeDesktopProfile) BinaryName() string   { return platformBinaryName() }
+func (c *ClaudeDesktopProfile) Name() string          { return "Claude Cowork" }
+func (c *ClaudeDesktopProfile) BinaryName() string    { return platformBinaryName() }
 func (c *ClaudeDesktopProfile) CommonPaths() []string { return platformCommonPaths() }
 
 func (c *ClaudeDesktopProfile) SupportedBackends() []Backend {
