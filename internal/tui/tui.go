@@ -169,6 +169,7 @@ func runPreflight(host string) tea.Cmd {
 
 type autoSelectMsg struct{ combo profiles.Combo }
 type execDoneMsg struct{ err error }
+type launchDoneMsg struct{ err error }
 type installDoneMsg struct{ err error }
 type uninstallDoneMsg struct{ err error }
 
@@ -257,6 +258,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.preflightChecking = true
 		m.agentCursor = 0
 		return m, runPreflight(m.apertureHost)
+
+	case launchDoneMsg:
+		// Desktop app launched (returns immediately). Go back to the agent
+		// selection screen without re-running preflight to avoid an
+		// auto-select loop.
+		if msg.err != nil {
+			m.err = msg.err.Error()
+			m.step = stepError
+			return m, nil
+		}
+		m.step = stepSelectAgent
+		m.agentCursor = 0
+		return m, tea.ClearScreen
 
 	case tea.KeyMsg:
 		switch m.step {
@@ -508,6 +522,20 @@ func (m model) updateInstallAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) runInstall() tea.Cmd {
+	// Host-aware installers write platform config and return a download command.
+	if hai, ok := m.chosenProfile.(profiles.HostAwareInstaller); ok {
+		cmd, err := hai.RunInstall(m.apertureHost)
+		if err != nil {
+			return func() tea.Msg { return installDoneMsg{err: err} }
+		}
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return tea.ExecProcess(cmd, func(err error) tea.Msg {
+			return installDoneMsg{err: err}
+		})
+	}
+
 	inst, ok := m.chosenProfile.(profiles.Installer)
 	if !ok {
 		return nil
@@ -833,6 +861,19 @@ func (m model) checkAndExecSelectedBackend() (model, tea.Cmd) {
 }
 
 func (m model) execCombo(combo profiles.Combo) tea.Cmd {
+	// Desktop app profiles update config if needed and launch the app.
+	// The launch returns immediately (unlike CLI profiles which block).
+	if launcher, ok := combo.Profile.(profiles.Launcher); ok {
+		_ = profiles.SaveState(profiles.StateFile{
+			LastProfileName: combo.Profile.Name(),
+			LastBackendType: string(combo.Backend.Type),
+		})
+		host := m.apertureHost
+		return func() tea.Msg {
+			return launchDoneMsg{err: launcher.Launch(host)}
+		}
+	}
+
 	env, err := combo.Profile.Env(m.apertureHost, combo.Backend)
 	if err != nil {
 		return tea.Quit
@@ -1099,7 +1140,11 @@ func (m model) View() string {
 		sb.WriteString(titleStyle.Render("Install " + m.chosenProfile.Name() + "?"))
 		sb.WriteString("\n")
 		if inst, ok := m.chosenProfile.(profiles.Installer); ok {
-			sb.WriteString("  This will run: " + inst.InstallHint() + "\n")
+			if _, isHA := m.chosenProfile.(profiles.HostAwareInstaller); isHA {
+				sb.WriteString("  " + inst.InstallHint() + "\n")
+			} else {
+				sb.WriteString("  This will run: " + inst.InstallHint() + "\n")
+			}
 		}
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("y to install · Enter/Esc to cancel\n"))

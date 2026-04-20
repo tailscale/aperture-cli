@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // BackendType identifies the upstream LLM provider.
@@ -80,14 +82,16 @@ type Manager struct {
 
 // NewManager returns a Manager with all built-in profiles registered.
 func NewManager() *Manager {
-	return &Manager{
-		profiles: []Profile{
-			&ClaudeCodeProfile{},
-			&GeminiCLIProfile{},
-			&OpenCodeProfile{},
-			&CodexProfile{},
-		},
+	p := []Profile{
+		&ClaudeCodeProfile{},
+		&GeminiCLIProfile{},
+		&OpenCodeProfile{},
+		&CodexProfile{},
 	}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		p = append(p, &ClaudeDesktopProfile{})
+	}
+	return &Manager{profiles: p}
 }
 
 // PathHinter is implemented by profiles that know common filesystem
@@ -168,8 +172,16 @@ func isExecutable(path string) bool {
 	if err != nil {
 		return false
 	}
+	if info.IsDir() {
+		return false
+	}
+	// On Windows, permission bits are not meaningful; check the file extension.
+	if runtime.GOOS == "windows" {
+		ext := strings.ToLower(filepath.Ext(path))
+		return ext == ".exe" || ext == ".cmd" || ext == ".bat" || ext == ".com"
+	}
 	// On Unix, check that at least one execute bit is set.
-	return !info.IsDir() && info.Mode()&0o111 != 0
+	return info.Mode()&0o111 != 0
 }
 
 // Installer is implemented by profiles that can provide installation
@@ -190,6 +202,22 @@ type Checker interface {
 type Uninstaller interface {
 	UninstallHint() string
 	Uninstall() func() error
+}
+
+// Launcher is implemented by profiles that launch a desktop application
+// rather than a CLI tool. Launch may update configuration before starting
+// the app, and returns immediately after launch.
+type Launcher interface {
+	Launch(apertureHost string) error
+}
+
+// HostAwareInstaller is implemented by profiles whose installation requires
+// the aperture host URL (e.g. to write platform config alongside the binary
+// install). RunInstall writes any platform config and returns an exec.Cmd
+// that downloads and runs the installer. The TUI executes the command with
+// terminal takeover so the user sees download progress.
+type HostAwareInstaller interface {
+	RunInstall(apertureHost string) (*exec.Cmd, error)
 }
 
 // AllProfiles returns all registered profiles regardless of installation status.
