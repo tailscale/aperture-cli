@@ -18,6 +18,7 @@ const (
 	BackendVertex    BackendType = "vertex"
 	BackendGemini    BackendType = "gemini"
 	BackendOpenAI    BackendType = "openai"
+	BackendZAI       BackendType = "zai"
 )
 
 // Backend is a selectable upstream destination.

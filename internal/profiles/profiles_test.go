@@ -82,6 +82,31 @@ func TestLauncher_ClaudeCode_Env_Vertex(t *testing.T) {
 	}
 }
 
+func TestLauncher_ClaudeCode_Env_ZAI(t *testing.T) {
+	p := &profiles.ClaudeCodeProfile{}
+	b := profiles.Backend{Type: profiles.BackendZAI, DisplayName: "z.ai"}
+
+	env, err := p.Env(testHost, b)
+	if err != nil {
+		t.Fatalf("Env returned error: %v", err)
+	}
+
+	want := map[string]string{
+		"ANTHROPIC_BASE_URL":             testHost,
+		"ANTHROPIC_MODEL":                "glm-5.1",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":   "glm-5.1",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "glm-5-turbo",
+		"API_TIMEOUT_MS":                 "3000000",
+		"ANTHROPIC_API_KEY":              "-",
+	}
+	for k, wantV := range want {
+		if got := env[k]; got != wantV {
+			t.Errorf("%s = %q, want %q", k, got, wantV)
+		}
+	}
+}
+
 func TestLauncher_GeminiCLI_Env_Vertex(t *testing.T) {
 	p := &profiles.GeminiCLIProfile{}
 	b := profiles.Backend{Type: profiles.BackendVertex, DisplayName: "Google Vertex"}
