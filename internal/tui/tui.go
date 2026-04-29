@@ -54,23 +54,29 @@ type preflightResult struct {
 	err       error
 }
 
+type resolvedSelection struct {
+	combo         profiles.Combo
+	provider      profiles.ProviderInfo
+	selectedModel string
+}
+
 type model struct {
 	apertureHost string
 	settings     profiles.Settings
 	state        profiles.StateFile
 	manager      *profiles.Manager
 
-	// resolved combos for the last-used shortcut
-	lastCombo *profiles.Combo
+	// resolved selection for the last-used shortcut
+	lastSelection *resolvedSelection
 
 	// all known profiles; installedProfiles is the subset on PATH
 	allProfiles       []profiles.Profile
 	installedProfiles []profiles.Profile
 
-	step           step
-	profileCursor  int
-	backendItems   []profiles.Backend
-	backendCursor  int
+	step          step
+	profileCursor int
+	backendItems  []profiles.Backend
+	backendCursor int
 
 	chosenProfile  profiles.Profile
 	chosenProvider profiles.ProviderInfo
@@ -81,8 +87,8 @@ type model struct {
 	providerCursor int
 
 	// model selection step
-	modelItems  []string
-	modelCursor int
+	modelItems    []string
+	modelCursor   int
 	selectedModel string
 
 	// preflight state
@@ -128,20 +134,6 @@ func NewModel(apertureHost string, settings profiles.Settings, state profiles.St
 		preflightChecking: true,
 	}
 
-	// Resolve last-used combo (only from installed profiles).
-	if state.LastProfileName != "" && state.LastBackendType != "" {
-		for _, p := range m.installedProfiles {
-			if p.Name() == state.LastProfileName {
-				for _, b := range p.SupportedBackends() {
-					if string(b.Type) == state.LastBackendType {
-						combo := profiles.Combo{Profile: p, Backend: b}
-						m.lastCombo = &combo
-					}
-				}
-			}
-		}
-	}
-
 	return m
 }
 
@@ -180,7 +172,7 @@ func runPreflight(host string) tea.Cmd {
 	}
 }
 
-type autoSelectMsg struct{ combo profiles.Combo }
+type autoSelectMsg struct{ selection resolvedSelection }
 type execDoneMsg struct{ err error }
 type launchDoneMsg struct{ err error }
 type installDoneMsg struct{ err error }
@@ -205,36 +197,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = profiles.SaveSettings(m.settings)
 		// Re-check which CLIs are installed now.
 		m.installedProfiles = m.manager.InstalledProfiles()
-		// Validate lastCombo against filtered backends.
-		if m.lastCombo != nil {
-			filtered := m.manager.FilteredBackends(m.lastCombo.Profile, m.providers)
-			found := false
-			for _, b := range filtered {
-				if b.Type == m.lastCombo.Backend.Type {
-					found = true
-					break
-				}
-			}
-			if !found {
-				m.lastCombo = nil
-			}
-		}
+		m.refreshLastSelection()
+		m.resetProfileCursor()
 		// Auto-select only when there's a single unambiguous path through
 		// profile → provider → backend.
-		if autoCombo, ok := m.tryAutoSelect(); ok {
-			return m, func() tea.Msg { return autoSelectMsg{combo: autoCombo} }
+		if selection, ok := m.tryAutoSelect(); ok {
+			return m, func() tea.Msg { return autoSelectMsg{selection: selection} }
 		}
 		m.step = stepSelectProfile
 		return m, tea.ClearScreen
 
 	case autoSelectMsg:
-		return m, m.execCombo(msg.combo)
+		return m, m.execSelection(msg.selection)
 
 	case installDoneMsg:
 		// Re-check installed CLIs after the install command finishes.
 		m.installedProfiles = m.manager.InstalledProfiles()
 		m.step = stepSelectProfile
-		m.profileCursor = 0
+		m.refreshLastSelection()
+		m.resetProfileCursor()
 		return m, tea.ClearScreen
 
 	case uninstallDoneMsg:
@@ -248,23 +229,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reload state from disk to reflect the last-used profile that just exited.
 		state, _ := profiles.LoadState()
 		m.state = state
-		m.lastCombo = nil
+		m.lastSelection = nil
 		// Re-check installed CLIs in case something changed while the agent ran.
 		m.installedProfiles = m.manager.InstalledProfiles()
-
-		// Re-resolve the last-used combo from updated state.
-		if state.LastProfileName != "" && state.LastBackendType != "" {
-			for _, p := range m.installedProfiles {
-				if p.Name() == state.LastProfileName {
-					for _, b := range p.SupportedBackends() {
-						if string(b.Type) == state.LastBackendType {
-							combo := profiles.Combo{Profile: p, Backend: b}
-							m.lastCombo = &combo
-						}
-					}
-				}
-			}
-		}
 
 		// Re-run preflight after agent exits.
 		m.step = stepPreflight
@@ -281,8 +248,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.step = stepError
 			return m, nil
 		}
+		state, _ := profiles.LoadState()
+		m.state = state
+		m.installedProfiles = m.manager.InstalledProfiles()
+		m.refreshLastSelection()
 		m.step = stepSelectProfile
-		m.profileCursor = 0
+		m.resetProfileCursor()
 		return m, tea.ClearScreen
 
 	case tea.KeyMsg:
@@ -340,30 +311,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// tryAutoSelect returns a Combo and true when there is exactly one installed
+// tryAutoSelect returns a resolved selection and true when there is exactly one installed
 // profile, one compatible provider, and one deduped backend for that provider,
 // and either the provider has 0-1 models or the profile doesn't support model
 // selection. This is the only case where we skip the menu entirely.
-func (m model) tryAutoSelect() (profiles.Combo, bool) {
+func (m model) tryAutoSelect() (resolvedSelection, bool) {
 	if len(m.installedProfiles) != 1 {
-		return profiles.Combo{}, false
+		return resolvedSelection{}, false
 	}
 	p := m.installedProfiles[0]
 	providers := m.manager.CompatibleProviders(p, m.providers)
 	if len(providers) != 1 {
-		return profiles.Combo{}, false
+		return resolvedSelection{}, false
 	}
 	backends := m.manager.BackendsForProvider(p, providers[0])
 	backends = m.manager.DedupBackends(p, backends)
 	if len(backends) != 1 {
-		return profiles.Combo{}, false
+		return resolvedSelection{}, false
 	}
 	// If the profile supports model selection and the provider has multiple
 	// models, don't auto-select — the user needs to pick a model.
 	if _, ok := p.(profiles.ModelSelector); ok && len(providers[0].Models) > 1 {
-		return profiles.Combo{}, false
+		return resolvedSelection{}, false
 	}
-	return profiles.Combo{Profile: p, Backend: backends[0]}, true
+	selectedModel := ""
+	if len(providers[0].Models) == 1 {
+		selectedModel = providers[0].ID + "/" + providers[0].Models[0]
+	}
+	return resolvedSelection{
+		combo:         profiles.Combo{Profile: p, Backend: backends[0]},
+		provider:      providers[0],
+		selectedModel: selectedModel,
+	}, true
 }
 
 // isInstalled reports whether a profile's binary is currently on PATH,
@@ -375,6 +354,14 @@ func (m model) isInstalled(p profiles.Profile) bool {
 		}
 	}
 	return false
+}
+
+func (m *model) resetProfileCursor() {
+	if m.lastSelection != nil {
+		m.profileCursor = -1
+		return
+	}
+	m.profileCursor = 0
 }
 
 // uninstalledProfiles returns profiles that are not currently installed.
@@ -390,6 +377,10 @@ func (m model) uninstalledProfiles() []profiles.Profile {
 
 func (m model) updateSelectProfile(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	profileCount := len(m.installedProfiles)
+	minCursor := 0
+	if m.lastSelection != nil {
+		minCursor = -1
+	}
 
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -408,7 +399,7 @@ func (m model) updateSelectProfile(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "up", "k":
-		if m.profileCursor > 0 {
+		if m.profileCursor > minCursor {
 			m.profileCursor--
 		}
 
@@ -418,15 +409,17 @@ func (m model) updateSelectProfile(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter":
+		if m.profileCursor == -1 && m.lastSelection != nil {
+			return m, m.execSelection(*m.lastSelection)
+		}
 		return m.confirmProfileSelection()
 
 	default:
 		n, err := strconv.Atoi(msg.String())
 		if err == nil {
-			// [0] re-launches last-used combo.
-			if n == 0 && m.lastCombo != nil {
-				combo := *m.lastCombo
-				return m, m.execCombo(combo)
+			// [0] launches the last-used profile/provider/model selection.
+			if n == 0 && m.lastSelection != nil {
+				return m, m.execSelection(*m.lastSelection)
 			}
 			// [1..N] selects a profile directly.
 			idx := n - 1
@@ -980,6 +973,111 @@ func fqnModels(p profiles.ProviderInfo) []string {
 	return out
 }
 
+func containsString(items []string, item string) bool {
+	for _, v := range items {
+		if v == item {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) refreshLastSelection() {
+	m.lastSelection = nil
+
+	if m.state.LastProfileName == "" || m.state.LastBackendType == "" {
+		return
+	}
+
+	var selectedProfile profiles.Profile
+	var selectedBackend profiles.Backend
+	for _, p := range m.installedProfiles {
+		if p.Name() != m.state.LastProfileName {
+			continue
+		}
+		for _, b := range p.SupportedBackends() {
+			if string(b.Type) == m.state.LastBackendType {
+				selectedProfile = p
+				selectedBackend = b
+				break
+			}
+		}
+		break
+	}
+	if selectedProfile == nil {
+		return
+	}
+
+	provider, ok := m.resolveLastProvider(selectedProfile, selectedBackend)
+	if !ok {
+		return
+	}
+
+	selectedModel, ok := m.resolveLastModel(selectedProfile, provider)
+	if !ok {
+		return
+	}
+
+	m.lastSelection = &resolvedSelection{
+		combo: profiles.Combo{
+			Profile: selectedProfile,
+			Backend: selectedBackend,
+		},
+		provider:      provider,
+		selectedModel: selectedModel,
+	}
+}
+
+func (m model) resolveLastProvider(p profiles.Profile, b profiles.Backend) (profiles.ProviderInfo, bool) {
+	var candidates []profiles.ProviderInfo
+	for _, provider := range m.manager.CompatibleProviders(p, m.providers) {
+		for _, supportedBackend := range m.manager.BackendsForProvider(p, provider) {
+			if supportedBackend.Type == b.Type {
+				candidates = append(candidates, provider)
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return profiles.ProviderInfo{}, false
+	}
+
+	if m.state.LastProviderID != "" {
+		for _, provider := range candidates {
+			if provider.ID == m.state.LastProviderID {
+				return provider, true
+			}
+		}
+		return profiles.ProviderInfo{}, false
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0], true
+	}
+	return profiles.ProviderInfo{}, false
+}
+
+func (m model) resolveLastModel(p profiles.Profile, provider profiles.ProviderInfo) (string, bool) {
+	if _, ok := p.(profiles.ModelSelector); !ok {
+		return "", true
+	}
+
+	models := fqnModels(provider)
+	if len(models) == 0 {
+		return "", true
+	}
+
+	if m.state.LastModel != "" && containsString(models, m.state.LastModel) {
+		return m.state.LastModel, true
+	}
+
+	if len(models) == 1 {
+		return models[0], true
+	}
+
+	return "", false
+}
+
 func upsertLocation(s profiles.Settings, loc string) profiles.Settings {
 	for _, ep := range s.Endpoints {
 		if ep.URL == loc {
@@ -1016,6 +1114,12 @@ func (m model) checkAndExecSelectedBackend() (model, tea.Cmd) {
 	}
 	combo := profiles.Combo{Profile: m.chosenProfile, Backend: b}
 	return m, m.execCombo(combo)
+}
+
+func (m model) execSelection(selection resolvedSelection) tea.Cmd {
+	m.chosenProvider = selection.provider
+	m.selectedModel = selection.selectedModel
+	return m.execCombo(selection.combo)
 }
 
 func (m model) execCombo(combo profiles.Combo) tea.Cmd {
@@ -1143,6 +1247,23 @@ func (m model) View() string {
 		sb.WriteString(titleStyle.Render("Which editor do you want to use?"))
 		sb.WriteString("\n")
 
+		if m.lastSelection != nil {
+			label := fmt.Sprintf("  [0] Quick select: %s via %s - %s",
+				m.lastSelection.combo.Profile.Name(),
+				m.lastSelection.provider.DisplayName(),
+				m.lastSelection.combo.Backend.DisplayName)
+			if m.lastSelection.selectedModel != "" {
+				label += " - " + m.lastSelection.selectedModel
+			}
+			if m.profileCursor == -1 {
+				sb.WriteString(selectedStyle.Render(label))
+			} else {
+				sb.WriteString(label)
+			}
+			sb.WriteString("\n")
+			sb.WriteString("\n")
+		}
+
 		for i, p := range m.installedProfiles {
 			n := i + 1
 			label := fmt.Sprintf("  [%d] %s", n, p.Name())
@@ -1155,13 +1276,6 @@ func (m model) View() string {
 		}
 
 		sb.WriteString("\n")
-
-		// Last-used shortcut (non-selectable hint).
-		if m.lastCombo != nil {
-			sb.WriteString(dimStyle.Render(fmt.Sprintf("  [0] Re-launch last: %s - %s",
-				m.lastCombo.Profile.Name(), m.lastCombo.Backend.DisplayName)))
-			sb.WriteString("\n")
-		}
 
 		// Keyboard shortcut hints.
 		hints := []string{"[s] Settings"}

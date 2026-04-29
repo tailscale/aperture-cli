@@ -981,6 +981,7 @@ func TestLauncher_StateFile_LastProviderID_RoundTrip(t *testing.T) {
 		LastProfileName: "Claude Code",
 		LastBackendType: string(profiles.BackendAnthropic),
 		LastProviderID:  "anthropic-via-aperture",
+		LastModel:       "anthropic-via-aperture/claude-sonnet",
 	}
 	if err := profiles.SaveState(want); err != nil {
 		t.Fatalf("SaveState: %v", err)
@@ -993,6 +994,9 @@ func TestLauncher_StateFile_LastProviderID_RoundTrip(t *testing.T) {
 
 	if got.LastProviderID != want.LastProviderID {
 		t.Errorf("LastProviderID = %q, want %q", got.LastProviderID, want.LastProviderID)
+	}
+	if got.LastModel != want.LastModel {
+		t.Errorf("LastModel = %q, want %q", got.LastModel, want.LastModel)
 	}
 }
 
