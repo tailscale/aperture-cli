@@ -47,7 +47,7 @@ func (c *CodexProfile) Uninstall() func() error {
 }
 
 func (c *CodexProfile) YoloArgs() []string {
-	return []string{"--full-auto"}
+	return []string{"--dangerously-bypass-approvals-and-sandbox"}
 }
 
 func (c *CodexProfile) RequiredCompat(b Backend) []string {

@@ -339,8 +339,8 @@ func TestLauncher_Codex_Env_UnsupportedBackend(t *testing.T) {
 func TestLauncher_Codex_YoloArgs(t *testing.T) {
 	p := &profiles.CodexProfile{}
 	args := p.YoloArgs()
-	if len(args) != 1 || args[0] != "--full-auto" {
-		t.Errorf("YoloArgs() = %v, want [--full-auto]", args)
+	if len(args) != 1 || args[0] != "--dangerously-bypass-approvals-and-sandbox" {
+		t.Errorf("YoloArgs() = %v, want [--dangerously-bypass-approvals-and-sandbox]", args)
 	}
 }
 
@@ -900,8 +900,8 @@ func TestLauncher_BackendsForProvider_NoCompatChecker(t *testing.T) {
 	mgr := profiles.NewManager()
 	p := &noCompatProfile{}
 	provider := profiles.ProviderInfo{
-		ID:   "any",
-		Name: "Any",
+		ID:            "any",
+		Name:          "Any",
 		Compatibility: map[string]bool{},
 	}
 
@@ -1003,8 +1003,8 @@ func TestLauncher_StateFile_LastProviderID_RoundTrip(t *testing.T) {
 // noCompatProfile is a test Profile that does not implement CompatChecker.
 type noCompatProfile struct{}
 
-func (noCompatProfile) Name() string            { return "no-compat" }
-func (noCompatProfile) BinaryName() string      { return "no-compat-binary" }
+func (noCompatProfile) Name() string       { return "no-compat" }
+func (noCompatProfile) BinaryName() string { return "no-compat-binary" }
 func (noCompatProfile) SupportedBackends() []profiles.Backend {
 	return []profiles.Backend{
 		{Type: profiles.BackendAnthropic, DisplayName: "Anthropic"},
