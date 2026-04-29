@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 )
 
 // CodexProfile implements Profile for the OpenAI `codex` CLI tool.
@@ -58,6 +59,10 @@ func (c *CodexProfile) RequiredCompat(b Backend) []string {
 	}
 }
 
+func (c *CodexProfile) ApplyModel(model string, env map[string]string) {
+	env["OPENAI_MODEL"] = model
+}
+
 func (c *CodexProfile) Env(apertureHost string, b Backend) (map[string]string, error) {
 	switch b.Type {
 	case BackendOpenAI:
@@ -72,7 +77,7 @@ func (c *CodexProfile) Env(apertureHost string, b Backend) (map[string]string, e
 
 // WriteConfig creates a persistent CODEX_HOME with auth.json pre-populated
 // so Codex does not prompt for interactive login on first run.
-func (c *CodexProfile) WriteConfig(_ string, _ Backend) (envKey, configPath string, cleanup func(), err error) {
+func (c *CodexProfile) WriteConfig(apertureHost string, _ Backend) (envKey, configPath string, cleanup func(), err error) {
 	cfgDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", "", nil, err
@@ -93,5 +98,17 @@ func (c *CodexProfile) WriteConfig(_ string, _ Backend) (envKey, configPath stri
 	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), data, 0o600); err != nil {
 		return "", "", nil, err
 	}
+
+	baseURL := apertureHost + "/v1"
+	cfg := "model_provider = \"aperture\"\n\n" +
+		"[model_providers.aperture]\n" +
+		"name = \"Aperture\"\n" +
+		"base_url = " + strconv.Quote(baseURL) + "\n" +
+		"env_key = \"OPENAI_API_KEY\"\n" +
+		"supports_websockets = false\n"
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(cfg), 0o600); err != nil {
+		return "", "", nil, err
+	}
+
 	return "CODEX_HOME", codexHome, func() {}, nil
 }
