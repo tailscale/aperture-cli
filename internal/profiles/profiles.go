@@ -84,6 +84,12 @@ type ModelSelector interface {
 	ApplyModel(model string, env map[string]string)
 }
 
+// ModelArgSelector is implemented by profiles that need a user-chosen
+// default model passed as command-line arguments.
+type ModelArgSelector interface {
+	ModelArgs(model string) []string
+}
+
 // Combo is a resolved (profile, backend) pair.
 type Combo struct {
 	Profile Profile

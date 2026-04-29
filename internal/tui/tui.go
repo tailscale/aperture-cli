@@ -1196,9 +1196,14 @@ func (m model) execCombo(combo profiles.Combo) tea.Cmd {
 	}
 
 	var extraArgs []string
+	if m.selectedModel != "" {
+		if ma, ok := combo.Profile.(profiles.ModelArgSelector); ok {
+			extraArgs = append(extraArgs, ma.ModelArgs(m.selectedModel)...)
+		}
+	}
 	if m.settings.YoloMode {
 		if yp, ok := combo.Profile.(profiles.YoloProfile); ok {
-			extraArgs = yp.YoloArgs()
+			extraArgs = append(extraArgs, yp.YoloArgs()...)
 		}
 	}
 

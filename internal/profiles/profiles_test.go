@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -341,6 +342,15 @@ func TestLauncher_Codex_YoloArgs(t *testing.T) {
 	args := p.YoloArgs()
 	if len(args) != 1 || args[0] != "--dangerously-bypass-approvals-and-sandbox" {
 		t.Errorf("YoloArgs() = %v, want [--dangerously-bypass-approvals-and-sandbox]", args)
+	}
+}
+
+func TestLauncher_Codex_ModelArgs(t *testing.T) {
+	p := &profiles.CodexProfile{}
+	args := p.ModelArgs("test-provider/gpt-5.3-codex")
+	want := []string{"--model", "test-provider/gpt-5.3-codex"}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("ModelArgs() = %v, want %v", args, want)
 	}
 }
 

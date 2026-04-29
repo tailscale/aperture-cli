@@ -63,6 +63,13 @@ func (c *CodexProfile) ApplyModel(model string, env map[string]string) {
 	env["OPENAI_MODEL"] = model
 }
 
+func (c *CodexProfile) ModelArgs(model string) []string {
+	if model == "" {
+		return nil
+	}
+	return []string{"--model", model}
+}
+
 func (c *CodexProfile) Env(apertureHost string, b Backend) (map[string]string, error) {
 	switch b.Type {
 	case BackendOpenAI:
