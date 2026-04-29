@@ -116,6 +116,10 @@ func (c *ClaudeCodeProfile) ProviderEnv(b Backend, providers []ProviderInfo) map
 	return env
 }
 
+func (c *ClaudeCodeProfile) ApplyModel(model string, env map[string]string) {
+	env["ANTHROPIC_MODEL"] = model
+}
+
 // managedEnvVars returns every environment variable name that the launcher
 // may set when launching Claude Code, across all backends.
 var managedEnvVars = []string{

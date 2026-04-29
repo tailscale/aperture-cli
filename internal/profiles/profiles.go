@@ -57,6 +57,14 @@ type ProviderInfo struct {
 	Compatibility map[string]bool `json:"compatibility"`
 }
 
+// DisplayName returns the provider's Name, falling back to ID if Name is empty.
+func (p ProviderInfo) DisplayName() string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return p.ID
+}
+
 // CompatChecker is implemented by profiles that declare which API
 // compatibility keys they require for each backend. The TUI uses this
 // to hide backends that no provider supports.
@@ -68,6 +76,12 @@ type CompatChecker interface {
 // environment variables from provider metadata (e.g. model names).
 type ProviderEnvSetter interface {
 	ProviderEnv(b Backend, providers []ProviderInfo) map[string]string
+}
+
+// ModelSelector is implemented by profiles that can apply a user-chosen
+// default model to their environment variables.
+type ModelSelector interface {
+	ApplyModel(model string, env map[string]string)
 }
 
 // Combo is a resolved (profile, backend) pair.
@@ -259,6 +273,81 @@ func anyProviderSupports(providers []ProviderInfo, keys []string) bool {
 	return false
 }
 
+// CompatibleProviders returns providers whose Compatibility map has at least one
+// key matching any of the profile's backends' RequiredCompat keys. If the
+// profile does not implement CompatChecker, all providers are returned.
+func (m *Manager) CompatibleProviders(p Profile, providers []ProviderInfo) []ProviderInfo {
+	checker, ok := p.(CompatChecker)
+	if !ok {
+		return providers
+	}
+	var out []ProviderInfo
+	for _, prov := range providers {
+		if providerMatchesProfile(prov, p, checker) {
+			out = append(out, prov)
+		}
+	}
+	return out
+}
+
+// providerMatchesProfile reports whether the provider's Compatibility map
+// has at least one key that matches one of the profile's backends' RequiredCompat keys.
+func providerMatchesProfile(prov ProviderInfo, p Profile, checker CompatChecker) bool {
+	for _, b := range p.SupportedBackends() {
+		for _, key := range checker.RequiredCompat(b) {
+			if prov.Compatibility[key] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// BackendsForProvider returns the backends of a profile that are supported by
+// a specific provider. If the profile does not implement CompatChecker, all
+// supported backends are returned.
+func (m *Manager) BackendsForProvider(p Profile, provider ProviderInfo) []Backend {
+	checker, ok := p.(CompatChecker)
+	if !ok {
+		return p.SupportedBackends()
+	}
+	var out []Backend
+	for _, b := range p.SupportedBackends() {
+		for _, key := range checker.RequiredCompat(b) {
+			if provider.Compatibility[key] {
+				out = append(out, b)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// DedupBackends removes backends with identical compat key signatures,
+// keeping only the first backend for each unique signature. This avoids
+// showing the user multiple backends that are functionally equivalent
+// (e.g. Anthropic and ZAI both require only "anthropic_messages").
+func (m *Manager) DedupBackends(p Profile, backends []Backend) []Backend {
+	checker, ok := p.(CompatChecker)
+	if !ok {
+		return backends
+	}
+	seen := make(map[string]bool)
+	var out []Backend
+	for _, b := range backends {
+		sig := compatKeySig(checker.RequiredCompat(b))
+		if !seen[sig] {
+			seen[sig] = true
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func compatKeySig(keys []string) string {
+	return strings.Join(keys, ",")
+}
+
 // ValidCombos returns all (profile, backend) combos where the profile binary
 // is present on PATH. If providers is non-nil, backends are filtered by
 // provider compatibility.
@@ -290,6 +379,8 @@ func (m *Manager) InstalledProfiles() []Profile {
 type StateFile struct {
 	LastProfileName string `json:"lastProfileName,omitempty"`
 	LastBackendType string `json:"lastBackendType,omitempty"`
+	LastProviderID  string `json:"lastProviderId,omitempty"`
+	LastModel       string `json:"lastModel,omitempty"`
 }
 
 // statePath returns the path to the launcher state JSON file.

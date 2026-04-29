@@ -773,6 +773,244 @@ func TestLauncher_ClaudeDesktop_SupportedBackends(t *testing.T) {
 	}
 }
 
+func TestLauncher_CompatibleProviders(t *testing.T) {
+	mgr := profiles.NewManager()
+	p := &profiles.ClaudeCodeProfile{}
+	providers := []profiles.ProviderInfo{
+		{
+			ID:   "anthropic",
+			Name: "Anthropic",
+			Compatibility: map[string]bool{
+				"anthropic_messages": true,
+			},
+		},
+		{
+			ID:   "bedrock",
+			Name: "AWS Bedrock",
+			Compatibility: map[string]bool{
+				"bedrock_model_invoke": true,
+			},
+		},
+		{
+			ID:   "openai-only",
+			Name: "OpenAI Only",
+			Compatibility: map[string]bool{
+				"openai_chat": true,
+			},
+		},
+	}
+
+	compatible := mgr.CompatibleProviders(p, providers)
+	if len(compatible) != 2 {
+		t.Fatalf("expected 2 compatible providers, got %d", len(compatible))
+	}
+
+	gotIDs := make(map[string]bool)
+	for _, prov := range compatible {
+		gotIDs[prov.ID] = true
+	}
+	if !gotIDs["anthropic"] || !gotIDs["bedrock"] {
+		t.Errorf("expected anthropic and bedrock, got IDs: %v", compatible)
+	}
+}
+
+func TestLauncher_CompatibleProviders_NoCompatChecker(t *testing.T) {
+	// Create a profile that does not implement CompatChecker.
+	mgr := profiles.NewManager()
+	p := &noCompatProfile{}
+	providers := []profiles.ProviderInfo{
+		{ID: "a", Name: "A", Compatibility: map[string]bool{"x": true}},
+		{ID: "b", Name: "B", Compatibility: map[string]bool{"y": true}},
+	}
+
+	compatible := mgr.CompatibleProviders(p, providers)
+	if len(compatible) != 2 {
+		t.Errorf("expected all providers returned for non-CompatChecker profile, got %d", len(compatible))
+	}
+}
+
+func TestLauncher_CompatibleProviders_NoMatch(t *testing.T) {
+	mgr := profiles.NewManager()
+	p := &profiles.ClaudeCodeProfile{}
+	providers := []profiles.ProviderInfo{
+		{
+			ID:   "openai-only",
+			Name: "OpenAI Only",
+			Compatibility: map[string]bool{
+				"openai_chat": true,
+			},
+		},
+	}
+
+	compatible := mgr.CompatibleProviders(p, providers)
+	if len(compatible) != 0 {
+		t.Errorf("expected 0 compatible providers, got %d", len(compatible))
+	}
+}
+
+func TestLauncher_BackendsForProvider(t *testing.T) {
+	mgr := profiles.NewManager()
+	p := &profiles.ClaudeCodeProfile{}
+	provider := profiles.ProviderInfo{
+		ID:   "multi",
+		Name: "Multi",
+		Compatibility: map[string]bool{
+			"anthropic_messages":   true,
+			"bedrock_model_invoke": true,
+		},
+	}
+
+	backends := mgr.BackendsForProvider(p, provider)
+	// anthropic_messages matches both Anthropic and ZAI backends;
+	// bedrock_model_invoke matches Bedrock.
+	if len(backends) != 3 {
+		t.Fatalf("expected 3 backends, got %d", len(backends))
+	}
+
+	gotTypes := make(map[profiles.BackendType]bool)
+	for _, b := range backends {
+		gotTypes[b.Type] = true
+	}
+	if !gotTypes[profiles.BackendAnthropic] || !gotTypes[profiles.BackendBedrock] || !gotTypes[profiles.BackendZAI] {
+		t.Errorf("expected anthropic, zai, and bedrock, got: %v", backends)
+	}
+}
+
+func TestLauncher_BackendsForProvider_SingleBackend(t *testing.T) {
+	mgr := profiles.NewManager()
+	p := &profiles.ClaudeCodeProfile{}
+	provider := profiles.ProviderInfo{
+		ID:   "bedrock-only",
+		Name: "Bedrock Only",
+		Compatibility: map[string]bool{
+			"bedrock_model_invoke": true,
+		},
+	}
+
+	backends := mgr.BackendsForProvider(p, provider)
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend, got %d", len(backends))
+	}
+	if backends[0].Type != profiles.BackendBedrock {
+		t.Errorf("backend type = %q, want %q", backends[0].Type, profiles.BackendBedrock)
+	}
+}
+
+func TestLauncher_BackendsForProvider_NoCompatChecker(t *testing.T) {
+	mgr := profiles.NewManager()
+	p := &noCompatProfile{}
+	provider := profiles.ProviderInfo{
+		ID:   "any",
+		Name: "Any",
+		Compatibility: map[string]bool{},
+	}
+
+	backends := mgr.BackendsForProvider(p, provider)
+	if len(backends) != len(p.SupportedBackends()) {
+		t.Errorf("expected all backends for non-CompatChecker profile, got %d want %d",
+			len(backends), len(p.SupportedBackends()))
+	}
+}
+
+func TestLauncher_DedupBackends(t *testing.T) {
+	mgr := profiles.NewManager()
+	p := &profiles.ClaudeCodeProfile{}
+	provider := profiles.ProviderInfo{
+		ID:   "multi",
+		Name: "Multi",
+		Compatibility: map[string]bool{
+			"anthropic_messages":   true,
+			"bedrock_model_invoke": true,
+		},
+	}
+
+	backends := mgr.BackendsForProvider(p, provider)
+	// Before dedup: Anthropic + ZAI (both anthropic_messages) + Bedrock = 3
+	if len(backends) != 3 {
+		t.Fatalf("expected 3 backends before dedup, got %d", len(backends))
+	}
+
+	deduped := mgr.DedupBackends(p, backends)
+	// After dedup: Anthropic (first of the anthropic_messages group) + Bedrock = 2
+	if len(deduped) != 2 {
+		t.Fatalf("expected 2 backends after dedup, got %d", len(deduped))
+	}
+
+	gotTypes := make(map[profiles.BackendType]bool)
+	for _, b := range deduped {
+		gotTypes[b.Type] = true
+	}
+	if !gotTypes[profiles.BackendAnthropic] || !gotTypes[profiles.BackendBedrock] {
+		t.Errorf("expected Anthropic and Bedrock after dedup, got: %v", deduped)
+	}
+	// ZAI should have been deduped away (same compat key as Anthropic).
+	if gotTypes[profiles.BackendZAI] {
+		t.Error("ZAI should have been deduplicated since it shares anthropic_messages with Anthropic")
+	}
+}
+
+func TestLauncher_DedupBackends_NoCompatChecker(t *testing.T) {
+	mgr := profiles.NewManager()
+	p := &noCompatProfile{}
+	backends := p.SupportedBackends()
+
+	deduped := mgr.DedupBackends(p, backends)
+	if len(deduped) != len(backends) {
+		t.Errorf("expected no dedup for non-CompatChecker profile, got %d want %d",
+			len(deduped), len(backends))
+	}
+}
+
+func TestLauncher_ClaudeCode_ApplyModel(t *testing.T) {
+	p := &profiles.ClaudeCodeProfile{}
+	env := map[string]string{"ANTHROPIC_BASE_URL": "http://ai"}
+	p.ApplyModel("claude-sonnet-4-20250514", env)
+	if env["ANTHROPIC_MODEL"] != "claude-sonnet-4-20250514" {
+		t.Errorf("ANTHROPIC_MODEL = %q, want %q", env["ANTHROPIC_MODEL"], "claude-sonnet-4-20250514")
+	}
+}
+
+func TestLauncher_StateFile_LastProviderID_RoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg == "" {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	}
+
+	want := profiles.StateFile{
+		LastProfileName: "Claude Code",
+		LastBackendType: string(profiles.BackendAnthropic),
+		LastProviderID:  "anthropic-via-aperture",
+	}
+	if err := profiles.SaveState(want); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	got, err := profiles.LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+
+	if got.LastProviderID != want.LastProviderID {
+		t.Errorf("LastProviderID = %q, want %q", got.LastProviderID, want.LastProviderID)
+	}
+}
+
+// noCompatProfile is a test Profile that does not implement CompatChecker.
+type noCompatProfile struct{}
+
+func (noCompatProfile) Name() string            { return "no-compat" }
+func (noCompatProfile) BinaryName() string      { return "no-compat-binary" }
+func (noCompatProfile) SupportedBackends() []profiles.Backend {
+	return []profiles.Backend{
+		{Type: profiles.BackendAnthropic, DisplayName: "Anthropic"},
+		{Type: profiles.BackendOpenAI, DisplayName: "OpenAI"},
+	}
+}
+func (noCompatProfile) Env(string, profiles.Backend) (map[string]string, error) {
+	return nil, nil
+}
+
 func TestLauncher_AllProfiles_ImplementPathHinter(t *testing.T) {
 	mgr := profiles.NewManager()
 	for _, p := range mgr.AllProfiles() {

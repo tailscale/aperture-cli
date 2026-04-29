@@ -20,8 +20,10 @@ type step int
 
 const (
 	stepPreflight        step = iota // checking /api/providers
-	stepSelectAgent                  // choose profile
-	stepSelectBackend                // choose provider
+	stepSelectProfile                // choose profile
+	stepSelectProvider               // choose provider for the selected profile
+	stepSelectBackend                // choose backend (only when genuinely different compat keys)
+	stepSelectModel                  // choose default model from provider's model list
 	stepSettings                     // top-level settings menu
 	stepEndpoints                    // manage aperture endpoints
 	stepAddLocation                  // type a new endpoint URL
@@ -65,12 +67,23 @@ type model struct {
 	allProfiles       []profiles.Profile
 	installedProfiles []profiles.Profile
 
-	step          step
-	agentCursor   int
-	backendItems  []profiles.Backend
-	backendCursor int
+	step           step
+	profileCursor  int
+	backendItems   []profiles.Backend
+	backendCursor  int
 
-	chosenProfile profiles.Profile
+	chosenProfile  profiles.Profile
+	chosenProvider profiles.ProviderInfo
+	chosenBackend  profiles.Backend
+
+	// provider selection step
+	providerItems  []profiles.ProviderInfo
+	providerCursor int
+
+	// model selection step
+	modelItems  []string
+	modelCursor int
+	selectedModel string
 
 	// preflight state
 	preflightChecking bool
@@ -206,12 +219,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastCombo = nil
 			}
 		}
-		// If exactly one combo exists, jump straight to exec.
-		combos := m.manager.ValidCombos(m.providers)
-		if len(combos) == 1 {
-			return m, func() tea.Msg { return autoSelectMsg{combo: combos[0]} }
+		// Auto-select only when there's a single unambiguous path through
+		// profile → provider → backend.
+		if autoCombo, ok := m.tryAutoSelect(); ok {
+			return m, func() tea.Msg { return autoSelectMsg{combo: autoCombo} }
 		}
-		m.step = stepSelectAgent
+		m.step = stepSelectProfile
 		return m, tea.ClearScreen
 
 	case autoSelectMsg:
@@ -220,8 +233,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case installDoneMsg:
 		// Re-check installed CLIs after the install command finishes.
 		m.installedProfiles = m.manager.InstalledProfiles()
-		m.step = stepSelectAgent
-		m.agentCursor = 0
+		m.step = stepSelectProfile
+		m.profileCursor = 0
 		return m, tea.ClearScreen
 
 	case uninstallDoneMsg:
@@ -256,11 +269,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-run preflight after agent exits.
 		m.step = stepPreflight
 		m.preflightChecking = true
-		m.agentCursor = 0
+		m.profileCursor = 0
 		return m, runPreflight(m.apertureHost)
 
 	case launchDoneMsg:
-		// Desktop app launched (returns immediately). Go back to the agent
+		// Desktop app launched (returns immediately). Go back to the profile
 		// selection screen without re-running preflight to avoid an
 		// auto-select loop.
 		if msg.err != nil {
@@ -268,8 +281,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.step = stepError
 			return m, nil
 		}
-		m.step = stepSelectAgent
-		m.agentCursor = 0
+		m.step = stepSelectProfile
+		m.profileCursor = 0
 		return m, tea.ClearScreen
 
 	case tea.KeyMsg:
@@ -282,11 +295,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case stepError:
 			return m, tea.Quit
 
-		case stepSelectAgent:
-			return m.updateSelectAgent(msg)
+		case stepSelectProfile:
+			return m.updateSelectProfile(msg)
+
+		case stepSelectProvider:
+			return m.updateSelectProvider(msg)
 
 		case stepSelectBackend:
 			return m.updateSelectBackend(msg)
+
+		case stepSelectModel:
+			return m.updateSelectModel(msg)
 
 		case stepSettings:
 			return m.updateSettings(msg)
@@ -314,11 +333,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c", "q":
 				return m, tea.Quit
 			case "esc":
-				m.step = stepSelectBackend
+				m.step = stepSelectProvider
 			}
 		}
 	}
 	return m, nil
+}
+
+// tryAutoSelect returns a Combo and true when there is exactly one installed
+// profile, one compatible provider, and one deduped backend for that provider,
+// and either the provider has 0-1 models or the profile doesn't support model
+// selection. This is the only case where we skip the menu entirely.
+func (m model) tryAutoSelect() (profiles.Combo, bool) {
+	if len(m.installedProfiles) != 1 {
+		return profiles.Combo{}, false
+	}
+	p := m.installedProfiles[0]
+	providers := m.manager.CompatibleProviders(p, m.providers)
+	if len(providers) != 1 {
+		return profiles.Combo{}, false
+	}
+	backends := m.manager.BackendsForProvider(p, providers[0])
+	backends = m.manager.DedupBackends(p, backends)
+	if len(backends) != 1 {
+		return profiles.Combo{}, false
+	}
+	// If the profile supports model selection and the provider has multiple
+	// models, don't auto-select — the user needs to pick a model.
+	if _, ok := p.(profiles.ModelSelector); ok && len(providers[0].Models) > 1 {
+		return profiles.Combo{}, false
+	}
+	return profiles.Combo{Profile: p, Backend: backends[0]}, true
 }
 
 // isInstalled reports whether a profile's binary is currently on PATH,
@@ -343,19 +388,8 @@ func (m model) uninstalledProfiles() []profiles.Profile {
 	return result
 }
 
-func (m model) updateSelectAgent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// rows: (last-used if exists) + installed profiles + (Install agents if uninstalled exist) + Settings
-	hasLast := m.lastCombo != nil
+func (m model) updateSelectProfile(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	profileCount := len(m.installedProfiles)
-	hasUninstalled := len(m.uninstalledProfiles()) > 0
-	// +1 for the Settings row
-	totalRows := profileCount + 1
-	if hasLast {
-		totalRows++
-	}
-	if hasUninstalled {
-		totalRows++
-	}
 
 	switch msg.String() {
 	case "ctrl+c", "q":
@@ -367,107 +401,162 @@ func (m model) updateSelectAgent(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "i":
-		if hasUninstalled {
+		if len(m.uninstalledProfiles()) > 0 {
 			m.step = stepInstallAgents
 			m.installAgentsCursor = 0
 			return m, nil
 		}
 
 	case "up", "k":
-		if m.agentCursor > 0 {
-			m.agentCursor--
+		if m.profileCursor > 0 {
+			m.profileCursor--
 		}
 
 	case "down", "j":
-		if m.agentCursor < totalRows-1 {
-			m.agentCursor++
+		if m.profileCursor < profileCount-1 {
+			m.profileCursor++
 		}
 
 	case "enter":
-		return m.confirmAgentSelection()
+		return m.confirmProfileSelection()
 
 	default:
 		n, err := strconv.Atoi(msg.String())
 		if err == nil {
-			if hasLast && n == 0 {
+			// [0] re-launches last-used combo.
+			if n == 0 && m.lastCombo != nil {
 				combo := *m.lastCombo
 				return m, m.execCombo(combo)
 			}
+			// [1..N] selects a profile directly.
 			idx := n - 1
 			if idx >= 0 && idx < profileCount {
-				m.agentCursor = idx
-				if hasLast {
-					m.agentCursor = n
-				}
-				return m.confirmAgentSelection()
+				m.profileCursor = idx
+				return m.confirmProfileSelection()
 			}
 		}
 	}
 	return m, nil
 }
 
-// confirmAgentSelection resolves which row was picked and transitions.
-func (m model) confirmAgentSelection() (model, tea.Cmd) {
-	hasLast := m.lastCombo != nil
-	hasUninstalled := len(m.uninstalledProfiles()) > 0
+// confirmProfileSelection resolves the chosen profile and transitions to
+// provider selection or auto-launches if only one provider is compatible.
+func (m model) confirmProfileSelection() (model, tea.Cmd) {
+	if m.profileCursor < 0 || m.profileCursor >= len(m.installedProfiles) {
+		return m, nil
+	}
+	chosen := m.installedProfiles[m.profileCursor]
+	m.chosenProfile = chosen
+	m.selectedModel = ""
 
-	if hasLast && m.agentCursor == 0 {
-		combo := *m.lastCombo
-		return m, m.execCombo(combo)
+	m.providerItems = m.manager.CompatibleProviders(chosen, m.providers)
+	if len(m.providerItems) == 0 {
+		m.err = fmt.Sprintf("No compatible providers for %s.", chosen.Name())
+		m.step = stepCheckError
+		return m, nil
+	}
+	if len(m.providerItems) == 1 {
+		m.chosenProvider = m.providerItems[0]
+		return m.resolveProviderAndExec()
+	}
+	m.providerCursor = 0
+	m.step = stepSelectProvider
+	return m, nil
+}
+
+func (m model) updateSelectProvider(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "esc":
+		m.step = stepSelectProfile
+		return m, tea.ClearScreen
+	case "up", "k":
+		if m.providerCursor > 0 {
+			m.providerCursor--
+		}
+	case "down", "j":
+		if m.providerCursor < len(m.providerItems)-1 {
+			m.providerCursor++
+		}
+	case "enter":
+		return m.confirmProviderSelection()
+	default:
+		n, err := strconv.Atoi(msg.String())
+		if err == nil {
+			idx := n - 1
+			if idx >= 0 && idx < len(m.providerItems) {
+				m.providerCursor = idx
+				return m.confirmProviderSelection()
+			}
+		}
+	}
+	return m, nil
+}
+
+// confirmProviderSelection resolves the chosen provider and either auto-launches
+// (single backend) or shows the backend submenu.
+func (m model) confirmProviderSelection() (model, tea.Cmd) {
+	if m.providerCursor < 0 || m.providerCursor >= len(m.providerItems) {
+		return m, nil
+	}
+	m.chosenProvider = m.providerItems[m.providerCursor]
+	return m.resolveProviderAndExec()
+}
+
+// resolveProviderAndExec checks how many backends the chosen provider supports
+// for the chosen profile, then either auto-launches, shows a model picker, or
+// shows the backend submenu.
+func (m model) resolveProviderAndExec() (model, tea.Cmd) {
+	backends := m.manager.BackendsForProvider(m.chosenProfile, m.chosenProvider)
+	if len(backends) == 0 {
+		m.err = fmt.Sprintf("No compatible backends for %s with %s.",
+			m.chosenProfile.Name(), m.chosenProvider.DisplayName())
+		m.step = stepCheckError
+		return m, nil
 	}
 
-	profileIdx := m.agentCursor
-	if hasLast {
-		profileIdx = m.agentCursor - 1
+	// Deduplicate backends that share the same compat key signature
+	// (e.g. Anthropic and ZAI both use "anthropic_messages").
+	backends = m.manager.DedupBackends(m.chosenProfile, backends)
+
+	if len(backends) == 1 {
+		return m.proceedWithBackend(backends[0])
+	}
+	// Multiple genuinely-different backends (e.g. Anthropic vs Bedrock).
+	m.backendItems = backends
+	m.backendCursor = 0
+	m.step = stepSelectBackend
+	return m, nil
+}
+
+// proceedWithBackend resolves the model selection for a single backend and
+// either auto-launches or shows the model picker.
+func (m model) proceedWithBackend(b profiles.Backend) (model, tea.Cmd) {
+	_, wantsModel := m.chosenProfile.(profiles.ModelSelector)
+
+	if wantsModel && len(m.chosenProvider.Models) > 1 {
+		m.chosenBackend = b
+		m.modelItems = fqnModels(m.chosenProvider)
+		m.modelCursor = 0
+		m.step = stepSelectModel
+		return m, nil
 	}
 
-	// Installed profile selected.
-	if profileIdx >= 0 && profileIdx < len(m.installedProfiles) {
-		chosen := m.installedProfiles[profileIdx]
-		m.chosenProfile = chosen
+	// Auto-select the single model if available.
+	if len(m.chosenProvider.Models) == 1 {
+		m.selectedModel = m.chosenProvider.ID + "/" + m.chosenProvider.Models[0]
+	}
 
-		m.backendItems = m.manager.FilteredBackends(chosen, m.providers)
-		if len(m.backendItems) == 0 {
-			m.err = fmt.Sprintf("No compatible providers for %s.", chosen.Name())
+	if checker, ok := m.chosenProfile.(profiles.Checker); ok {
+		if err := checker.Check(b); err != nil {
+			m.err = err.Error()
 			m.step = stepCheckError
 			return m, nil
 		}
-		if len(m.backendItems) == 1 {
-			b := m.backendItems[0]
-			if checker, ok := chosen.(profiles.Checker); ok {
-				if err := checker.Check(b); err != nil {
-					m.err = err.Error()
-					m.step = stepCheckError
-					return m, nil
-				}
-			}
-			combo := profiles.Combo{Profile: chosen, Backend: b}
-			return m, m.execCombo(combo)
-		}
-		m.backendCursor = 0
-		m.step = stepSelectBackend
-		return m, nil
 	}
-
-	// "Install agents" row (right after installed profiles).
-	nextIdx := len(m.installedProfiles)
-	if hasUninstalled && profileIdx == nextIdx {
-		m.step = stepInstallAgents
-		m.installAgentsCursor = 0
-		return m, nil
-	}
-	if hasUninstalled {
-		nextIdx++
-	}
-
-	// Settings row.
-	if profileIdx == nextIdx {
-		m.step = stepSettings
-		m.settingsCursor = 0
-		return m, nil
-	}
-
-	return m, nil
+	combo := profiles.Combo{Profile: m.chosenProfile, Backend: b}
+	return m, m.execCombo(combo)
 }
 
 func (m model) updateInstall(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -475,7 +564,7 @@ func (m model) updateInstall(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "esc", "n", "enter":
-		m.step = stepSelectAgent
+		m.step = stepSelectProfile
 		return m, tea.ClearScreen
 	case "y":
 		return m, m.runInstall()
@@ -491,7 +580,7 @@ func (m model) updateInstallAgents(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "esc":
-		m.step = stepSelectAgent
+		m.step = stepSelectProfile
 		return m, tea.ClearScreen
 	case "up", "k":
 		if m.installAgentsCursor > 0 {
@@ -613,7 +702,7 @@ func (m model) updateSelectBackend(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "esc":
-		m.step = stepSelectAgent
+		m.step = stepSelectProvider
 		return m, tea.ClearScreen
 
 	case "up", "k":
@@ -641,6 +730,54 @@ func (m model) updateSelectBackend(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) updateSelectModel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "esc":
+		m.step = stepSelectProvider
+		return m, tea.ClearScreen
+	case "up", "k":
+		if m.modelCursor > 0 {
+			m.modelCursor--
+		}
+	case "down", "j":
+		if m.modelCursor < len(m.modelItems)-1 {
+			m.modelCursor++
+		}
+	case "enter":
+		return m.confirmModelSelection()
+	default:
+		n, err := strconv.Atoi(msg.String())
+		if err == nil {
+			idx := n - 1
+			if idx >= 0 && idx < len(m.modelItems) {
+				m.modelCursor = idx
+				return m.confirmModelSelection()
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m model) confirmModelSelection() (model, tea.Cmd) {
+	if m.modelCursor < 0 || m.modelCursor >= len(m.modelItems) {
+		return m, nil
+	}
+	m.selectedModel = m.modelItems[m.modelCursor]
+
+	b := m.chosenBackend
+	if checker, ok := m.chosenProfile.(profiles.Checker); ok {
+		if err := checker.Check(b); err != nil {
+			m.err = err.Error()
+			m.step = stepCheckError
+			return m, nil
+		}
+	}
+	combo := profiles.Combo{Profile: m.chosenProfile, Backend: b}
+	return m, m.execCombo(combo)
+}
+
 // settingsRows returns the rows for the top-level settings menu.
 // Row layout: "Aperture Endpoints" + "Uninstall" + "YOLO mode".
 func (m model) settingsRows() []string {
@@ -663,7 +800,7 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc", "q":
-		m.step = stepSelectAgent
+		m.step = stepSelectProfile
 		return m, tea.ClearScreen
 
 	case "up", "k":
@@ -834,6 +971,15 @@ func (m model) updateAddLocation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // upsertLocation ensures loc is in settings.Endpoints without duplicates.
 // If it already exists it stays in place; otherwise it is appended.
+// fqnModels returns fully qualified model names in the form "provider_id/model_id".
+func fqnModels(p profiles.ProviderInfo) []string {
+	out := make([]string, len(p.Models))
+	for i, m := range p.Models {
+		out[i] = p.ID + "/" + m
+	}
+	return out
+}
+
 func upsertLocation(s profiles.Settings, loc string) profiles.Settings {
 	for _, ep := range s.Endpoints {
 		if ep.URL == loc {
@@ -849,6 +995,18 @@ func (m model) checkAndExecSelectedBackend() (model, tea.Cmd) {
 		return m, nil
 	}
 	b := m.backendItems[m.backendCursor]
+
+	// If the profile supports model selection and the provider has multiple
+	// models, show the model picker instead of launching immediately.
+	_, wantsModel := m.chosenProfile.(profiles.ModelSelector)
+	if wantsModel && len(m.chosenProvider.Models) > 1 {
+		m.chosenBackend = b
+		m.modelItems = fqnModels(m.chosenProvider)
+		m.modelCursor = 0
+		m.step = stepSelectModel
+		return m, nil
+	}
+
 	if checker, ok := m.chosenProfile.(profiles.Checker); ok {
 		if err := checker.Check(b); err != nil {
 			m.err = err.Error()
@@ -867,6 +1025,8 @@ func (m model) execCombo(combo profiles.Combo) tea.Cmd {
 		_ = profiles.SaveState(profiles.StateFile{
 			LastProfileName: combo.Profile.Name(),
 			LastBackendType: string(combo.Backend.Type),
+			LastProviderID:  m.chosenProvider.ID,
+			LastModel:       m.selectedModel,
 		})
 		host := m.apertureHost
 		return func() tea.Msg {
@@ -880,8 +1040,14 @@ func (m model) execCombo(combo profiles.Combo) tea.Cmd {
 	}
 
 	if ps, ok := combo.Profile.(profiles.ProviderEnvSetter); ok {
-		for k, v := range ps.ProviderEnv(combo.Backend, m.providers) {
+		for k, v := range ps.ProviderEnv(combo.Backend, []profiles.ProviderInfo{m.chosenProvider}) {
 			env[k] = v
+		}
+	}
+
+	if m.selectedModel != "" {
+		if ms, ok := combo.Profile.(profiles.ModelSelector); ok {
+			ms.ApplyModel(m.selectedModel, env)
 		}
 	}
 
@@ -893,6 +1059,8 @@ func (m model) execCombo(combo profiles.Combo) tea.Cmd {
 	_ = profiles.SaveState(profiles.StateFile{
 		LastProfileName: combo.Profile.Name(),
 		LastBackendType: string(combo.Backend.Type),
+		LastProviderID:  m.chosenProvider.ID,
+		LastModel:       m.selectedModel,
 	})
 
 	envPairs := os.Environ()
@@ -966,7 +1134,7 @@ func (m model) View() string {
 		sb.WriteString(errorStyle.Render("Error: " + m.err))
 		sb.WriteString("\n\nPress any key to exit.\n")
 
-	case stepSelectAgent:
+	case stepSelectProfile:
 		sb.WriteString(dotGreen + " Connected to " + m.apertureHost)
 		if len(m.providers) > 0 {
 			sb.WriteString(fmt.Sprintf(" (%d providers)", len(m.providers)))
@@ -975,34 +1143,10 @@ func (m model) View() string {
 		sb.WriteString(titleStyle.Render("Which editor do you want to use?"))
 		sb.WriteString("\n")
 
-		hasLast := m.lastCombo != nil
-		hasUninstalled := len(m.uninstalledProfiles()) > 0
-
-		if hasLast {
-			label := fmt.Sprintf("  [0] Last Used: %s - %s",
-				m.lastCombo.Profile.Name(), m.lastCombo.Backend.DisplayName)
-			if m.agentCursor == 0 {
-				sb.WriteString(selectedStyle.Render(label))
-			} else {
-				sb.WriteString(label)
-			}
-			sb.WriteString("\n")
-		}
-
 		for i, p := range m.installedProfiles {
 			n := i + 1
-			cursor := i
-			if hasLast {
-				cursor = i + 1
-			}
-			backends := m.manager.FilteredBackends(p, m.providers)
-			var label string
-			if len(backends) == 1 {
-				label = fmt.Sprintf("  [%d] %s - %s", n, p.Name(), backends[0].DisplayName)
-			} else {
-				label = fmt.Sprintf("  [%d] %s", n, p.Name())
-			}
-			if m.agentCursor == cursor {
+			label := fmt.Sprintf("  [%d] %s", n, p.Name())
+			if m.profileCursor == i {
 				sb.WriteString(selectedStyle.Render(label))
 			} else {
 				sb.WriteString(label)
@@ -1012,39 +1156,44 @@ func (m model) View() string {
 
 		sb.WriteString("\n")
 
-		// "Install agents" row — only if uninstalled profiles exist
-		nextCursor := len(m.installedProfiles)
-		if hasLast {
-			nextCursor++
+		// Last-used shortcut (non-selectable hint).
+		if m.lastCombo != nil {
+			sb.WriteString(dimStyle.Render(fmt.Sprintf("  [0] Re-launch last: %s - %s",
+				m.lastCombo.Profile.Name(), m.lastCombo.Backend.DisplayName)))
+			sb.WriteString("\n")
 		}
-		if hasUninstalled {
-			installLabel := "  [i] Install agents"
-			if m.agentCursor == nextCursor {
-				sb.WriteString(selectedStyle.Render(installLabel))
+
+		// Keyboard shortcut hints.
+		hints := []string{"[s] Settings"}
+		if len(m.uninstalledProfiles()) > 0 {
+			hints = append(hints, "[i] Install agents")
+		}
+		hints = append(hints, "[q] Quit")
+		sb.WriteString(dimStyle.Render("  " + strings.Join(hints, "  ")))
+		sb.WriteString("\n")
+
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render("Selection: "))
+
+	case stepSelectProvider:
+		sb.WriteString(titleStyle.Render(fmt.Sprintf("Choose a provider for %s:", m.chosenProfile.Name())))
+		sb.WriteString("\n")
+
+		for i, prov := range m.providerItems {
+			label := fmt.Sprintf("  [%d] %s", i+1, prov.DisplayName())
+			if prov.Description != "" {
+				label += "  " + dimStyle.Render(prov.Description)
+			}
+			if m.providerCursor == i {
+				sb.WriteString(selectedStyle.Render(label))
 			} else {
-				sb.WriteString(installLabel)
+				sb.WriteString(label)
 			}
 			sb.WriteString("\n")
-			nextCursor++
 		}
 
-		// Settings row
-		settingsLabel := "  [s] Settings"
-		if m.agentCursor == nextCursor {
-			sb.WriteString(selectedStyle.Render(settingsLabel))
-		} else {
-			sb.WriteString(settingsLabel)
-		}
 		sb.WriteString("\n")
-		sb.WriteString("  [q] Quit")
-		sb.WriteString("\n")
-
-		sb.WriteString("\n")
-		if hasLast {
-			sb.WriteString(dimStyle.Render("Selection (default: 0): "))
-		} else {
-			sb.WriteString(dimStyle.Render("Selection: "))
-		}
+		sb.WriteString(dimStyle.Render("Selection: "))
 
 	case stepInstallAgents:
 		sb.WriteString(titleStyle.Render("Install agents"))
@@ -1067,12 +1216,31 @@ func (m model) View() string {
 		sb.WriteString(dimStyle.Render("Enter to select · Esc to go back\n"))
 
 	case stepSelectBackend:
-		sb.WriteString(titleStyle.Render("Choose a Provider:"))
+		sb.WriteString(titleStyle.Render(fmt.Sprintf("Choose a backend for %s via %s:",
+			m.chosenProfile.Name(), m.chosenProvider.DisplayName())))
 		sb.WriteString("\n")
 
 		for i, b := range m.backendItems {
 			label := fmt.Sprintf("  [%d] %s", i+1, b.DisplayName)
 			if m.backendCursor == i {
+				sb.WriteString(selectedStyle.Render(label))
+			} else {
+				sb.WriteString(label)
+			}
+			sb.WriteString("\n")
+		}
+
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render("Selection: "))
+
+	case stepSelectModel:
+		sb.WriteString(titleStyle.Render(fmt.Sprintf("Choose a default model for %s via %s:",
+			m.chosenProfile.Name(), m.chosenProvider.DisplayName())))
+		sb.WriteString("\n")
+
+		for i, model := range m.modelItems {
+			label := fmt.Sprintf("  [%d] %s", i+1, model)
+			if m.modelCursor == i {
 				sb.WriteString(selectedStyle.Render(label))
 			} else {
 				sb.WriteString(label)
