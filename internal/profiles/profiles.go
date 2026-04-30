@@ -42,6 +42,14 @@ type ConfigWriter interface {
 	WriteConfig(apertureHost string, b Backend) (envKey, configPath string, cleanup func(), err error)
 }
 
+// ProviderConfigWriter is implemented by profiles that generate a config file
+// tailored to a specific provider (its ID, name, model list, and the HTTP
+// protocol implied by its compatibility map). When a profile implements this
+// interface, the TUI prefers it over ConfigWriter.
+type ProviderConfigWriter interface {
+	WriteProviderConfig(apertureHost string, b Backend, p ProviderInfo) (envKey, configPath string, cleanup func(), err error)
+}
+
 // YoloProfile is implemented by profiles that support a "skip permissions"
 // flag. The returned args are appended to the command when YOLO mode is on.
 type YoloProfile interface {

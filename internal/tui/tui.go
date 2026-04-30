@@ -1176,7 +1176,16 @@ func (m model) execCombo(combo profiles.Combo) tea.Cmd {
 
 	var configCleanup func()
 	var configEnvKey, configPath string
-	if cw, ok := combo.Profile.(profiles.ConfigWriter); ok {
+	if cw, ok := combo.Profile.(profiles.ProviderConfigWriter); ok {
+		var err error
+		configEnvKey, configPath, configCleanup, err = cw.WriteProviderConfig(m.apertureHost, combo.Backend, m.chosenProvider)
+		if err != nil {
+			return tea.Quit
+		}
+		if configEnvKey != "" && configPath != "" {
+			envPairs = append(envPairs, configEnvKey+"="+configPath)
+		}
+	} else if cw, ok := combo.Profile.(profiles.ConfigWriter); ok {
 		var err error
 		configEnvKey, configPath, configCleanup, err = cw.WriteConfig(m.apertureHost, combo.Backend)
 		if err != nil {

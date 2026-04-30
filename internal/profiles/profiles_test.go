@@ -157,152 +157,183 @@ func TestLauncher_StateFile_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestLauncher_OpenCode_Env_Anthropic(t *testing.T) {
+func TestLauncher_OpenCode_SupportedBackends_Single(t *testing.T) {
 	p := &profiles.OpenCodeProfile{}
-	env, err := p.Env(testHost, profiles.Backend{Type: profiles.BackendAnthropic})
-	if err != nil {
-		t.Fatalf("Env returned error: %v", err)
-	}
-	if got := env["ANTHROPIC_BASE_URL"]; got != testHost+"/v1" {
-		t.Errorf("ANTHROPIC_BASE_URL = %q, want %q", got, testHost+"/v1")
+	if got := p.SupportedBackends(); len(got) != 1 {
+		t.Errorf("SupportedBackends len = %d, want 1", len(got))
 	}
 }
 
-func TestLauncher_OpenCode_Env_Bedrock(t *testing.T) {
+func TestLauncher_OpenCode_ProviderEnv(t *testing.T) {
 	p := &profiles.OpenCodeProfile{}
-	env, err := p.Env(testHost, profiles.Backend{Type: profiles.BackendBedrock})
-	if err != nil {
-		t.Fatalf("Env returned error: %v", err)
+	b := profiles.Backend{Type: profiles.BackendOpenAI}
+
+	bedrock := profiles.ProviderInfo{
+		ID: "bedrock", Compatibility: map[string]bool{"bedrock_converse": true},
 	}
-	if got := env["AWS_ACCESS_KEY_ID"]; got != "not-needed" {
-		t.Errorf("AWS_ACCESS_KEY_ID = %q, want %q", got, "not-needed")
+	env := p.ProviderEnv(b, []profiles.ProviderInfo{bedrock})
+	if env["AWS_ACCESS_KEY_ID"] != "not-needed" || env["AWS_REGION"] != "us-east-1" {
+		t.Errorf("bedrock ProviderEnv = %v", env)
 	}
-	if got := env["AWS_REGION"]; got != "us-east-1" {
-		t.Errorf("AWS_REGION = %q, want %q", got, "us-east-1")
+
+	vertex := profiles.ProviderInfo{
+		ID: "vertex", Compatibility: map[string]bool{"google_generate_content": true},
+	}
+	if env := p.ProviderEnv(b, []profiles.ProviderInfo{vertex}); len(env) != 0 {
+		t.Errorf("vertex ProviderEnv = %v, want empty (express mode)", env)
+	}
+
+	anthropic := profiles.ProviderInfo{
+		ID: "anthropic", Compatibility: map[string]bool{"anthropic_messages": true},
+	}
+	if env := p.ProviderEnv(b, []profiles.ProviderInfo{anthropic}); len(env) != 0 {
+		t.Errorf("anthropic ProviderEnv = %v, want empty", env)
 	}
 }
 
-func TestLauncher_OpenCode_Env_Vertex(t *testing.T) {
-	p := &profiles.OpenCodeProfile{}
-	env, err := p.Env(testHost, profiles.Backend{Type: profiles.BackendVertex})
-	if err != nil {
-		t.Fatalf("Env returned error: %v", err)
-	}
-	if got := env["GOOGLE_CLOUD_PROJECT"]; got != "_aperture_auto_vertex_project_id_" {
-		t.Errorf("GOOGLE_CLOUD_PROJECT = %q, want %q", got, "_aperture_auto_vertex_project_id_")
-	}
-	if got := env["GOOGLE_CLOUD_LOCATION"]; got != "_aperture_auto_vertex_region_" {
-		t.Errorf("GOOGLE_CLOUD_LOCATION = %q, want %q", got, "_aperture_auto_vertex_region_")
-	}
-}
-
-func TestLauncher_OpenCode_Env_OpenAI(t *testing.T) {
-	p := &profiles.OpenCodeProfile{}
-	env, err := p.Env(testHost, profiles.Backend{Type: profiles.BackendOpenAI})
-	if err != nil {
-		t.Fatalf("Env returned error: %v", err)
-	}
-	if got := env["OPENAI_BASE_URL"]; got != testHost+"/v1" {
-		t.Errorf("OPENAI_BASE_URL = %q, want %q", got, testHost+"/v1")
-	}
-}
-
-func TestLauncher_OpenCode_WriteConfig(t *testing.T) {
+func TestLauncher_OpenCode_WriteProviderConfig(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	p := &profiles.OpenCodeProfile{}
 
-	cw, ok := profiles.Profile(p).(profiles.ConfigWriter)
+	cw, ok := profiles.Profile(p).(profiles.ProviderConfigWriter)
 	if !ok {
-		t.Fatal("OpenCodeProfile does not implement ConfigWriter")
+		t.Fatal("OpenCodeProfile does not implement ProviderConfigWriter")
 	}
 
 	tests := []struct {
 		name        string
-		backend     profiles.Backend
-		wantKey     string
+		provider    profiles.ProviderInfo
+		wantNPM     string
 		wantOptions map[string]string
 	}{
 		{
-			name:    "anthropic",
-			backend: profiles.Backend{Type: profiles.BackendAnthropic},
-			wantKey: "anthropic",
+			name: "anthropic_messages",
+			provider: profiles.ProviderInfo{
+				ID: "anthropic", Name: "Anthropic",
+				Models:        []string{"claude-sonnet-4-5", "claude-haiku-4-5"},
+				Compatibility: map[string]bool{"anthropic_messages": true},
+			},
+			wantNPM: "@ai-sdk/anthropic",
 			wantOptions: map[string]string{
-				"apiKey":  "{env:ANTHROPIC_AUTH_TOKEN}",
-				"baseURL": "{env:ANTHROPIC_BASE_URL}",
+				"baseURL": testHost + "/v1",
+				"apiKey":  "not-required",
 			},
 		},
 		{
-			name:    "bedrock",
-			backend: profiles.Backend{Type: profiles.BackendBedrock},
-			wantKey: "amazon-bedrock",
+			name: "bedrock_converse",
+			provider: profiles.ProviderInfo{
+				ID: "bedrock", Name: "AWS Bedrock",
+				Models:        []string{"us.anthropic.claude-opus-4-7"},
+				Compatibility: map[string]bool{"bedrock_converse": true},
+			},
+			wantNPM: "@ai-sdk/amazon-bedrock",
 			wantOptions: map[string]string{
 				"region":   "us-east-1",
 				"endpoint": testHost + "/bedrock",
 			},
 		},
 		{
-			name:    "vertex",
-			backend: profiles.Backend{Type: profiles.BackendVertex},
-			wantKey: "google-vertex",
+			name: "google_generate_content",
+			provider: profiles.ProviderInfo{
+				ID: "vertex", Name: "Vertex",
+				Models: []string{"gemini-2.5-pro"},
+				Compatibility: map[string]bool{
+					"google_generate_content": true,
+					"google_raw_predict":      true,
+				},
+			},
+			wantNPM: "@ai-sdk/google-vertex",
 			wantOptions: map[string]string{
-				"project":  "_aperture_auto_vertex_project_id_",
-				"location": "_aperture_auto_vertex_region_",
-				"baseURL":  testHost + "/v1",
+				"apiKey":  "not-required",
+				"baseURL": testHost + "/v1/projects/_aperture_auto_vertex_project_id_/locations/_aperture_auto_vertex_region_/publishers/google",
 			},
 		},
 		{
-			name:    "openai",
-			backend: profiles.Backend{Type: profiles.BackendOpenAI},
-			wantKey: "openai",
+			name: "openai_responses",
+			provider: profiles.ProviderInfo{
+				ID: "openai", Name: "OpenAI",
+				Models: []string{"gpt-5"},
+				Compatibility: map[string]bool{
+					"openai_chat":      true,
+					"openai_responses": true,
+				},
+			},
+			wantNPM: "@ai-sdk/openai",
 			wantOptions: map[string]string{
-				"apiKey":  "{env:OPENAI_API_KEY}",
-				"baseURL": "{env:OPENAI_BASE_URL}",
+				"baseURL": testHost + "/v1",
+				"apiKey":  "not-required",
+			},
+		},
+		{
+			name: "openai_chat_only",
+			provider: profiles.ProviderInfo{
+				ID: "openrouter", Name: "OpenRouter",
+				Models:        []string{"qwen/qwen3-235b-a22b-2507"},
+				Compatibility: map[string]bool{"openai_chat": true},
+			},
+			wantNPM: "@ai-sdk/openai-compatible",
+			wantOptions: map[string]string{
+				"baseURL": testHost + "/v1",
+				"apiKey":  "not-required",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, configPath, cleanup, err := cw.WriteConfig(testHost, tt.backend)
+			envKey, configPath, cleanup, err := cw.WriteProviderConfig(testHost, profiles.Backend{Type: profiles.BackendOpenAI}, tt.provider)
 			if err != nil {
-				t.Fatalf("WriteConfig returned error: %v", err)
+				t.Fatalf("WriteProviderConfig returned error: %v", err)
+			}
+			if envKey != "OPENCODE_CONFIG" {
+				t.Errorf("envKey = %q, want OPENCODE_CONFIG", envKey)
 			}
 
-			// File must exist
 			data, err := os.ReadFile(configPath)
 			if err != nil {
 				t.Fatalf("config file not readable: %v", err)
 			}
 
-			// Must be valid JSON with expected structure
-			var raw map[string]json.RawMessage
-			if err := json.Unmarshal(data, &raw); err != nil {
+			var cfg struct {
+				Provider map[string]struct {
+					NPM     string                       `json:"npm"`
+					Name    string                       `json:"name"`
+					Options map[string]string            `json:"options"`
+					Models  map[string]map[string]string `json:"models"`
+				} `json:"provider"`
+			}
+			if err := json.Unmarshal(data, &cfg); err != nil {
 				t.Fatalf("config file is not valid JSON: %v", err)
 			}
-			providerRaw, ok := raw["provider"]
+
+			prov, ok := cfg.Provider[tt.provider.ID]
 			if !ok {
-				t.Fatal("config missing 'provider' key")
+				t.Fatalf("provider %q not found in config", tt.provider.ID)
 			}
-			var providers map[string]struct {
-				Options map[string]string `json:"options"`
+			if prov.NPM != tt.wantNPM {
+				t.Errorf("npm = %q, want %q", prov.NPM, tt.wantNPM)
 			}
-			if err := json.Unmarshal(providerRaw, &providers); err != nil {
-				t.Fatalf("provider not valid JSON: %v", err)
-			}
-			prov, ok := providers[tt.wantKey]
-			if !ok {
-				t.Fatalf("provider %q not found in config", tt.wantKey)
+			wantName := "Aperture (" + tt.provider.ID + ")"
+			if prov.Name != wantName {
+				t.Errorf("name = %q, want %q", prov.Name, wantName)
 			}
 			for k, want := range tt.wantOptions {
 				if got := prov.Options[k]; got != want {
 					t.Errorf("options[%q] = %q, want %q", k, got, want)
 				}
 			}
+			if len(prov.Models) != len(tt.provider.Models) {
+				t.Errorf("models len = %d, want %d", len(prov.Models), len(tt.provider.Models))
+			}
+			for _, m := range tt.provider.Models {
+				if _, ok := prov.Models[m]; !ok {
+					t.Errorf("model %q missing from config", m)
+				}
+			}
 
-			// cleanup removes the file
 			cleanup()
 			if _, err := os.Stat(configPath); !os.IsNotExist(err) {
 				t.Errorf("config file still exists after cleanup")
@@ -477,33 +508,23 @@ func TestLauncher_FilteredBackends_NilProviders(t *testing.T) {
 	}
 }
 
-func TestLauncher_RequiredCompat_OpenCodeBedrock(t *testing.T) {
+func TestLauncher_RequiredCompat_OpenCode(t *testing.T) {
 	p := &profiles.OpenCodeProfile{}
-	keys := p.RequiredCompat(profiles.Backend{Type: profiles.BackendBedrock})
+	keys := p.RequiredCompat(profiles.Backend{})
 	if len(keys) == 0 {
-		t.Fatal("expected at least one compat key for OpenCode+Bedrock")
+		t.Fatal("expected at least one compat key for OpenCode")
 	}
 
-	// Verify that a provider with bedrock_converse satisfies the requirement.
+	// Verify that providers with any of the supported protocols appear as
+	// compatible for OpenCode.
 	mgr := profiles.NewManager()
-	providers := []profiles.ProviderInfo{
-		{
-			ID:   "bedrock-provider",
-			Name: "Bedrock",
-			Compatibility: map[string]bool{
-				"bedrock_converse": true,
-			},
-		},
-	}
-	backends := mgr.FilteredBackends(p, providers)
-	found := false
-	for _, b := range backends {
-		if b.Type == profiles.BackendBedrock {
-			found = true
+	for _, compat := range []string{"anthropic_messages", "bedrock_converse", "google_generate_content", "openai_chat"} {
+		providers := []profiles.ProviderInfo{
+			{ID: "p", Compatibility: map[string]bool{compat: true}},
 		}
-	}
-	if !found {
-		t.Error("expected Bedrock backend to be available with bedrock_converse provider")
+		if got := mgr.CompatibleProviders(p, providers); len(got) != 1 {
+			t.Errorf("provider with %q not compatible with OpenCode", compat)
+		}
 	}
 }
 
