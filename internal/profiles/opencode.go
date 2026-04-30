@@ -59,12 +59,14 @@ func (o *OpenCodeProfile) SupportedBackends() []Backend {
 // translate into an OpenCode config.
 func (o *OpenCodeProfile) RequiredCompat(Backend) []string {
 	return []string{
+		"openai_responses",
 		"anthropic_messages",
-		"bedrock_converse",
+		"openai_chat",
 		"google_generate_content",
 		"google_raw_predict",
-		"openai_responses",
-		"openai_chat",
+		"bedrock_model_invoke",
+		"bedrock_converse",
+		"gemini_generate_content",
 	}
 }
 
@@ -80,7 +82,7 @@ func (o *OpenCodeProfile) ProviderEnv(_ Backend, providers []ProviderInfo) map[s
 		return nil
 	}
 	p := providers[0]
-	if p.Compatibility["bedrock_converse"] {
+	if p.Compatibility["bedrock_model_invoke"] || p.Compatibility["bedrock_converse"] {
 		return map[string]string{
 			"AWS_ACCESS_KEY_ID":     "not-needed",
 			"AWS_SECRET_ACCESS_KEY": "not-needed",
@@ -100,26 +102,36 @@ type opencodeProvider struct {
 	Name    string                        `json:"name,omitempty"`
 	Options map[string]string             `json:"options,omitempty"`
 	Models  map[string]opencodeModelEntry `json:"models,omitempty"`
+	// Whitelist limits the active model list to exactly these IDs. Without
+	// it, OpenCode merges its built-in models.dev database entries on top of
+	// our config (e.g. for provider IDs like "openai" or "anthropic").
+	Whitelist []string `json:"whitelist,omitempty"`
 }
 
 type opencodeModelEntry struct {
+	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
 }
 
 // pickOpenCodeSDK chooses the AI SDK npm package and baseline options for a
-// provider based on its compatibility map. Priority is ordered so that
-// protocols with richer native support win over OpenAI-compatible fallback.
+// provider based on its compatibility map. Order matters: when a provider
+// supports multiple protocols, the first match wins.
 func pickOpenCodeSDK(compat map[string]bool, apertureHost string) (npm string, options map[string]string) {
 	switch {
+	case compat["openai_responses"]:
+		return "@ai-sdk/openai", map[string]string{
+			"baseURL": apertureHost + "/v1",
+			"apiKey":  "not-required",
+		}
 	case compat["anthropic_messages"]:
 		return "@ai-sdk/anthropic", map[string]string{
 			"baseURL": apertureHost + "/v1",
 			"apiKey":  "not-required",
 		}
-	case compat["bedrock_converse"]:
-		return "@ai-sdk/amazon-bedrock", map[string]string{
-			"region":   "us-east-1",
-			"endpoint": apertureHost + "/bedrock",
+	case compat["openai_chat"]:
+		return "@ai-sdk/openai-compatible", map[string]string{
+			"baseURL": apertureHost + "/v1",
+			"apiKey":  "not-required",
 		}
 	case compat["google_generate_content"] || compat["google_raw_predict"]:
 		// Setting apiKey triggers the Vertex SDK's "express mode" which skips
@@ -130,14 +142,14 @@ func pickOpenCodeSDK(compat map[string]bool, apertureHost string) (npm string, o
 			"apiKey":  "not-required",
 			"baseURL": apertureHost + "/v1/projects/_aperture_auto_vertex_project_id_/locations/_aperture_auto_vertex_region_/publishers/google",
 		}
-	case compat["openai_responses"]:
-		return "@ai-sdk/openai", map[string]string{
-			"baseURL": apertureHost + "/v1",
-			"apiKey":  "not-required",
+	case compat["bedrock_model_invoke"] || compat["bedrock_converse"]:
+		return "@ai-sdk/amazon-bedrock", map[string]string{
+			"region":   "us-east-1",
+			"endpoint": apertureHost + "/bedrock",
 		}
-	case compat["openai_chat"]:
-		return "@ai-sdk/openai-compatible", map[string]string{
-			"baseURL": apertureHost + "/v1",
+	case compat["gemini_generate_content"]:
+		return "@ai-sdk/google", map[string]string{
+			"baseURL": apertureHost + "/v1beta",
 			"apiKey":  "not-required",
 		}
 	}
@@ -148,18 +160,22 @@ func (o *OpenCodeProfile) WriteProviderConfig(apertureHost string, _ Backend, p 
 	npm, options := pickOpenCodeSDK(p.Compatibility, apertureHost)
 
 	models := make(map[string]opencodeModelEntry, len(p.Models))
+	whitelist := make([]string, 0, len(p.Models))
 	for _, m := range p.Models {
-		models[m] = opencodeModelEntry{Name: m}
+		fqn := p.ID + "/" + m
+		models[fqn] = opencodeModelEntry{ID: m, Name: fqn}
+		whitelist = append(whitelist, fqn)
 	}
 
 	cfg := opencodeConfig{
 		Schema: "https://opencode.ai/config.json",
 		Provider: map[string]opencodeProvider{
 			p.ID: {
-				NPM:     npm,
-				Name:    "Aperture (" + p.ID + ")",
-				Options: options,
-				Models:  models,
+				NPM:       npm,
+				Name:      "Aperture (" + p.ID + ")",
+				Options:   options,
+				Models:    models,
+				Whitelist: whitelist,
 			},
 		},
 	}

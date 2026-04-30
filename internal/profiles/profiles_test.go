@@ -299,10 +299,11 @@ func TestLauncher_OpenCode_WriteProviderConfig(t *testing.T) {
 
 			var cfg struct {
 				Provider map[string]struct {
-					NPM     string                       `json:"npm"`
-					Name    string                       `json:"name"`
-					Options map[string]string            `json:"options"`
-					Models  map[string]map[string]string `json:"models"`
+					NPM       string                       `json:"npm"`
+					Name      string                       `json:"name"`
+					Options   map[string]string            `json:"options"`
+					Models    map[string]map[string]string `json:"models"`
+					Whitelist []string                     `json:"whitelist"`
 				} `json:"provider"`
 			}
 			if err := json.Unmarshal(data, &cfg); err != nil {
@@ -329,8 +330,26 @@ func TestLauncher_OpenCode_WriteProviderConfig(t *testing.T) {
 				t.Errorf("models len = %d, want %d", len(prov.Models), len(tt.provider.Models))
 			}
 			for _, m := range tt.provider.Models {
-				if _, ok := prov.Models[m]; !ok {
-					t.Errorf("model %q missing from config", m)
+				fqn := tt.provider.ID + "/" + m
+				entry, ok := prov.Models[fqn]
+				if !ok {
+					t.Errorf("model %q missing from config", fqn)
+					continue
+				}
+				if entry["id"] != m {
+					t.Errorf("model %q id = %q, want %q", fqn, entry["id"], m)
+				}
+				if entry["name"] != fqn {
+					t.Errorf("model %q name = %q, want %q", fqn, entry["name"], fqn)
+				}
+			}
+			if len(prov.Whitelist) != len(tt.provider.Models) {
+				t.Errorf("whitelist len = %d, want %d", len(prov.Whitelist), len(tt.provider.Models))
+			}
+			for i, m := range tt.provider.Models {
+				fqn := tt.provider.ID + "/" + m
+				if i < len(prov.Whitelist) && prov.Whitelist[i] != fqn {
+					t.Errorf("whitelist[%d] = %q, want %q", i, prov.Whitelist[i], fqn)
 				}
 			}
 
