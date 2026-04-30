@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/profiles"
@@ -16,7 +20,7 @@ var (
 	flagVersion = flag.Bool("version", false, "print version and exit")
 	flagDebug   = flag.Bool("debug", false, "print env vars set before launching agent")
 
-	buildVersion = "v0.0.0-dev"
+	buildVersion = "B0-dev"
 	buildCommit  = "unknown"
 	buildDate    = "unknown"
 )
@@ -27,8 +31,12 @@ func init() {
 		return
 	}
 
-	if buildVersion == "v0.0.0-dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		buildVersion = info.Main.Version
+	if buildVersion == "B0-dev" {
+		if height := gitCommitHeight(); height != "" {
+			buildVersion = "B" + height
+		} else if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			buildVersion = info.Main.Version
+		}
 	}
 
 	// Only fill in VCS info when ldflags haven't already set these values.
@@ -56,6 +64,41 @@ func init() {
 	}
 }
 
+func gitCommitHeight() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
+	for dir := filepath.Dir(file); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return gitCommitHeightInDir(dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+	}
+}
+
+func gitCommitHeightInDir(dir string) string {
+	cmd := exec.Command("git", "rev-list", "--count", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	height := strings.TrimSpace(string(out))
+	if height == "" {
+		return ""
+	}
+	for _, r := range height {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return height
+}
+
 func main() {
 	flag.Parse()
 
@@ -77,7 +120,7 @@ func main() {
 		host = settings.Endpoints[0].URL
 	}
 
-	p := tea.NewProgram(tui.NewModel(host, settings, state, *flagDebug))
+	p := tea.NewProgram(tui.NewModel(host, settings, state, buildVersion, *flagDebug))
 	if _, err := p.Run(); err != nil {
 		slog.Error("launcher error", "err", err)
 		os.Exit(1)

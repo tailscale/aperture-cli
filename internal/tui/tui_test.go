@@ -105,3 +105,19 @@ func TestRefreshLastSelectionRejectsMissingModel(t *testing.T) {
 		t.Fatalf("lastSelection = %#v, want nil", m.lastSelection)
 	}
 }
+
+func TestSelectProfileViewShowsBuildVersion(t *testing.T) {
+	m := model{
+		apertureHost:  "http://ai",
+		buildVersion:  "B123",
+		manager:       profiles.NewManager(),
+		providers:     []profiles.ProviderInfo{{ID: "provider-one"}},
+		profileCursor: 0,
+		step:          stepSelectProfile,
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Aperture B123") {
+		t.Fatalf("View() missing build version:\n%s", view)
+	}
+}

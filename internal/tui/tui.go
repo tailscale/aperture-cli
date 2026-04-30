@@ -114,12 +114,13 @@ type model struct {
 	// add-location step
 	addLocationInput string
 
-	debug bool
-	err   string
+	buildVersion string
+	debug        bool
+	err          string
 }
 
 // NewModel constructs the TUI model. It satisfies tea.Model.
-func NewModel(apertureHost string, settings profiles.Settings, state profiles.StateFile, debug bool) tea.Model {
+func NewModel(apertureHost string, settings profiles.Settings, state profiles.StateFile, buildVersion string, debug bool) tea.Model {
 	mgr := profiles.NewManager()
 
 	m := model{
@@ -129,6 +130,7 @@ func NewModel(apertureHost string, settings profiles.Settings, state profiles.St
 		manager:           mgr,
 		allProfiles:       mgr.AllProfiles(),
 		installedProfiles: mgr.InstalledProfiles(),
+		buildVersion:      buildVersion,
 		debug:             debug,
 		step:              stepPreflight,
 		preflightChecking: true,
@@ -1293,6 +1295,12 @@ func (m model) View() string {
 
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Selection: "))
+
+		if m.buildVersion != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(dimStyle.Render("Aperture " + m.buildVersion))
+			sb.WriteString("\n")
+		}
 
 	case stepSelectProvider:
 		sb.WriteString(titleStyle.Render(fmt.Sprintf("Choose a provider for %s:", m.chosenProfile.Name())))
