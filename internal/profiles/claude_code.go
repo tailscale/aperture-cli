@@ -117,6 +117,12 @@ func (c *ClaudeCodeProfile) ProviderEnv(b Backend, providers []ProviderInfo) map
 }
 
 func (c *ClaudeCodeProfile) ApplyModel(model string, env map[string]string) {
+	// model arrives as the FQN "providerID/modelID". For Bedrock the model is
+	// embedded in the request URL path, so a stray prefix breaks routing
+	// (e.g. /bedrock/model/bedrock/<id>/invoke-with-response-stream).
+	if i := strings.Index(model, "/"); i >= 0 {
+		model = model[i+1:]
+	}
 	env["ANTHROPIC_MODEL"] = model
 }
 
