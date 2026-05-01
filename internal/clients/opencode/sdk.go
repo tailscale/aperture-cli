@@ -1,96 +1,12 @@
-package profiles
+package opencode
 
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/tailscale/aperture-cli/internal/config"
 )
-
-// OpenCodeProfile implements Profile for the `opencode` CLI tool.
-type OpenCodeProfile struct {
-}
-
-func (o *OpenCodeProfile) Name() string { return "OpenCode" }
-
-func (o *OpenCodeProfile) BinaryName() string { return "opencode" }
-
-func (o *OpenCodeProfile) CommonPaths() []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	return []string{
-		filepath.Join(home, ".opencode", "bin", "opencode"),
-		filepath.Join(home, ".local", "bin", "opencode"),
-	}
-}
-
-func (o *OpenCodeProfile) InstallHint() string {
-	return "curl -fsSL https://opencode.ai/install | bash"
-}
-
-func (o *OpenCodeProfile) UninstallHint() string {
-	return "opencode uninstall --force\nrm -rf ~/.opencode/bin"
-}
-
-func (o *OpenCodeProfile) Uninstall() func() error {
-	return func() error {
-		if err := exec.Command("opencode", "uninstall", "--force").Run(); err != nil {
-			return err
-		}
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		return os.RemoveAll(filepath.Join(home, ".opencode", "bin"))
-	}
-}
-
-// openCodeBackend is the single abstract backend OpenCode advertises. The
-// real routing is decided per-provider from its compatibility map.
-var openCodeBackend = Backend{Type: BackendOpenAI, DisplayName: "OpenCode"}
-
-func (o *OpenCodeProfile) SupportedBackends() []Backend {
-	return []Backend{openCodeBackend}
-}
-
-// RequiredCompat accepts any provider that speaks one of the protocols we can
-// translate into an OpenCode config.
-func (o *OpenCodeProfile) RequiredCompat(Backend) []string {
-	return []string{
-		"openai_responses",
-		"anthropic_messages",
-		"openai_chat",
-		"google_generate_content",
-		"google_raw_predict",
-		"bedrock_model_invoke",
-		"bedrock_converse",
-		"gemini_generate_content",
-	}
-}
-
-// Env returns backend-agnostic env vars. Provider-specific env vars (AWS,
-// Google Vertex magic strings) are set via ProviderEnv.
-func (o *OpenCodeProfile) Env(string, Backend) (map[string]string, error) {
-	return map[string]string{}, nil
-}
-
-// ProviderEnv sets env vars that depend on the chosen provider's protocol.
-func (o *OpenCodeProfile) ProviderEnv(_ Backend, providers []ProviderInfo) map[string]string {
-	if len(providers) == 0 {
-		return nil
-	}
-	p := providers[0]
-	if p.Compatibility["bedrock_model_invoke"] || p.Compatibility["bedrock_converse"] {
-		return map[string]string{
-			"AWS_ACCESS_KEY_ID":     "not-needed",
-			"AWS_SECRET_ACCESS_KEY": "not-needed",
-			"AWS_REGION":            "us-east-1",
-		}
-	}
-	return nil
-}
 
 type opencodeConfig struct {
 	Schema   string                      `json:"$schema,omitempty"`
@@ -113,10 +29,10 @@ type opencodeModelEntry struct {
 	Name string `json:"name,omitempty"`
 }
 
-// pickOpenCodeSDK chooses the AI SDK npm package and baseline options for a
-// provider based on its compatibility map. Order matters: when a provider
-// supports multiple protocols, the first match wins.
-func pickOpenCodeSDK(compat map[string]bool, apertureHost string) (npm string, options map[string]string) {
+// pickSDK chooses the AI SDK npm package and baseline options for a provider
+// based on its compatibility map. Order matters: when a provider supports
+// multiple protocols, the first match wins.
+func pickSDK(compat map[string]bool, apertureHost string) (npm string, options map[string]string) {
 	switch {
 	case compat["openai_responses"]:
 		return "@ai-sdk/openai", map[string]string{
@@ -156,8 +72,12 @@ func pickOpenCodeSDK(compat map[string]bool, apertureHost string) (npm string, o
 	return "", nil
 }
 
-func (o *OpenCodeProfile) WriteProviderConfig(apertureHost string, _ Backend, p ProviderInfo) (string, string, func(), error) {
-	npm, options := pickOpenCodeSDK(p.Compatibility, apertureHost)
+// writeProviderConfig writes the per-launch OpenCode config under
+// ~/.opencode/tmp_aperture_config.json and returns the path plus a cleanup
+// function that removes the file. The config defines one provider (the
+// chosen one) mapped to the SDK picked from its compatibility map.
+func writeProviderConfig(apertureHost string, p config.ProviderInfo) (string, func(), error) {
+	npm, options := pickSDK(p.Compatibility, apertureHost)
 
 	models := make(map[string]opencodeModelEntry, len(p.Models))
 	whitelist := make([]string, 0, len(p.Models))
@@ -182,20 +102,20 @@ func (o *OpenCodeProfile) WriteProviderConfig(apertureHost string, _ Backend, p 
 
 	data, err := json.Marshal(cfg)
 	if err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
 	configDir := filepath.Join(home, ".opencode")
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
 	path := filepath.Join(configDir, "tmp_aperture_config.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", "", nil, err
+		return "", nil, err
 	}
-	return "OPENCODE_CONFIG", path, func() { os.Remove(path) }, nil
+	return path, func() { os.Remove(path) }, nil
 }

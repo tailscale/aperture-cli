@@ -5,119 +5,179 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/tailscale/aperture-cli/internal/profiles"
+	"github.com/tailscale/aperture-cli/internal/clients"
+	"github.com/tailscale/aperture-cli/internal/config"
+	"github.com/tailscale/aperture-cli/internal/menu"
 )
 
-type quickTestProfile struct{}
+// fakeClient is a minimal clients.Client for TUI tests.
+type fakeClient struct {
+	name        string
+	installed   bool
+	replayCmd   tea.Cmd
+	quickLabel  string
+	menuActions *menu.Menu // returned as Next from top-level action
+}
 
-func (quickTestProfile) Name() string       { return "Test Agent" }
-func (quickTestProfile) BinaryName() string { return "test-agent" }
-func (quickTestProfile) SupportedBackends() []profiles.Backend {
-	return []profiles.Backend{
-		{Type: profiles.BackendAnthropic, DisplayName: "Anthropic"},
+func (c *fakeClient) Name() string          { return c.name }
+func (c *fakeClient) BinaryName() string    { return "fake" }
+func (c *fakeClient) CommonPaths() []string { return nil }
+func (c *fakeClient) IsInstalled() bool     { return c.installed }
+func (c *fakeClient) Install(*config.Global) clients.InstallPlan {
+	return clients.InstallPlan{Hint: "install " + c.name}
+}
+func (c *fakeClient) Uninstall() clients.UninstallPlan {
+	return clients.UninstallPlan{Hint: "uninstall " + c.name}
+}
+func (c *fakeClient) Menu(*config.Global) menu.MenuItem {
+	return menu.MenuItem{
+		Label:  c.name,
+		Action: func() menu.Result { return menu.Result{Next: c.menuActions} },
 	}
 }
-func (quickTestProfile) Env(string, profiles.Backend) (map[string]string, error) {
-	return map[string]string{}, nil
-}
-func (quickTestProfile) RequiredCompat(profiles.Backend) []string {
-	return []string{"anthropic_messages"}
-}
-func (quickTestProfile) ApplyModel(model string, env map[string]string) {
-	env["MODEL"] = model
+func (c *fakeClient) Replay(*config.Global) tea.Cmd       { return c.replayCmd }
+func (c *fakeClient) QuickSelectLabel(*config.Global) string { return c.quickLabel }
+
+// withFakeClients swaps the TUI's client registry for the duration of the test.
+func withFakeClients(t *testing.T, cs []clients.Client) {
+	t.Helper()
+	orig := registeredClients
+	registeredClients = func(*config.Global) []clients.Client { return cs }
+	t.Cleanup(func() { registeredClients = orig })
 }
 
-func TestRefreshLastSelectionResolvesProviderAndModel(t *testing.T) {
-	p := quickTestProfile{}
-	m := model{
-		apertureHost:      "http://ai",
-		state:             profiles.StateFile{LastProfileName: p.Name(), LastBackendType: string(profiles.BackendAnthropic), LastProviderID: "provider-one", LastModel: "provider-one/model-b"},
-		manager:           profiles.NewManager(),
-		installedProfiles: []profiles.Profile{p},
-		providers: []profiles.ProviderInfo{
-			{
-				ID:            "provider-one",
-				Name:          "Provider One",
-				Models:        []string{"model-a", "model-b"},
-				Compatibility: map[string]bool{"anthropic_messages": true},
-			},
+func TestRootMenu_ShowsInstalledClients(t *testing.T) {
+	withFakeClients(t, []clients.Client{
+		&fakeClient{name: "A", installed: true},
+		&fakeClient{name: "B", installed: false},
+		&fakeClient{name: "C", installed: true},
+	})
+
+	m := &model{g: &config.Global{}}
+	root := m.rootMenu()
+	// Installed clients + hidden shortcut items (settings + install-agents).
+	// Visible count: A, C (2). Plus a hidden Settings and hidden Install agents.
+	visible := 0
+	for _, it := range root.Items {
+		if !it.Hidden {
+			visible++
+		}
+	}
+	if visible != 2 {
+		t.Errorf("visible items = %d, want 2", visible)
+	}
+}
+
+func TestRootMenu_QuickSelectPrepended(t *testing.T) {
+	replayed := false
+	fc := &fakeClient{
+		name:       "A",
+		installed:  true,
+		replayCmd:  func() tea.Msg { replayed = true; return menu.ExecDoneMsg{} },
+		quickLabel: "A via Whatever",
+	}
+	withFakeClients(t, []clients.Client{fc})
+
+	m := &model{g: &config.Global{
+		LastLaunch: config.LaunchState{LastClientName: "A"},
+	}}
+	root := m.rootMenu()
+
+	// First visible item should be the quick-select row with Digit=0.
+	var first menu.MenuItem
+	for _, it := range root.Items {
+		if !it.Hidden {
+			first = it
+			break
+		}
+	}
+	if first.Digit != menu.DigitZero {
+		t.Errorf("first visible Digit = %d, want DigitZero", first.Digit)
+	}
+	if !strings.Contains(first.Label, "Quick select") {
+		t.Errorf("first visible Label = %q", first.Label)
+	}
+
+	// Invoking the action should run the replay cmd.
+	res := first.Action()
+	if res.Cmd == nil {
+		t.Fatal("quick select action returned nil Cmd")
+	}
+	_ = res.Cmd() // run it
+	if !replayed {
+		t.Error("replay cmd was not invoked")
+	}
+}
+
+func TestRootMenu_NoQuickSelectWhenReplayNil(t *testing.T) {
+	fc := &fakeClient{name: "A", installed: true, replayCmd: nil}
+	withFakeClients(t, []clients.Client{fc})
+
+	m := &model{g: &config.Global{
+		LastLaunch: config.LaunchState{LastClientName: "A"},
+	}}
+	root := m.rootMenu()
+	for _, it := range root.Items {
+		if !it.Hidden && strings.Contains(it.Label, "Quick select") {
+			t.Errorf("unexpected quick-select row: %+v", it)
+		}
+	}
+}
+
+func TestMenuEngine_PushPop(t *testing.T) {
+	sub := &menu.Menu{
+		Title: "Sub",
+		Items: []menu.MenuItem{
+			{Label: "ok", Action: func() menu.Result { return menu.Result{Pop: true} }},
 		},
-		step: stepSelectProfile,
+	}
+	fc := &fakeClient{name: "A", installed: true, menuActions: sub}
+	withFakeClients(t, []clients.Client{fc})
+
+	m := &model{g: &config.Global{}, step: stepMenu}
+	m.resetStack(m.rootMenu())
+
+	// Select the visible "A" item (first non-hidden).
+	var idx int
+	for i, it := range m.top().Items {
+		if !it.Hidden {
+			idx = i
+			break
+		}
+	}
+	mm, _ := m.activate(idx)
+	m = mm.(*model)
+	if m.top().Title != "Sub" {
+		t.Fatalf("top after push = %q, want Sub", m.top().Title)
 	}
 
-	m.refreshLastSelection()
-
-	if m.lastSelection == nil {
-		t.Fatal("lastSelection is nil")
-	}
-	if got := m.lastSelection.provider.ID; got != "provider-one" {
-		t.Fatalf("provider ID = %q, want %q", got, "provider-one")
-	}
-	if got := m.lastSelection.selectedModel; got != "provider-one/model-b" {
-		t.Fatalf("selected model = %q, want %q", got, "provider-one/model-b")
-	}
-
-	view := m.View()
-	if !strings.Contains(view, "[0] Quick select: Test Agent via Provider One - Anthropic - provider-one/model-b") {
-		t.Fatalf("View() missing quick select row:\n%s", view)
-	}
-	if strings.Index(view, "[0] Quick select") > strings.Index(view, "[1] Test Agent") {
-		t.Fatalf("quick select row should appear before profile options:\n%s", view)
-	}
-
-	m.resetProfileCursor()
-	if m.profileCursor != -1 {
-		t.Fatalf("profileCursor = %d, want -1 for quick select", m.profileCursor)
-	}
-
-	updated, _ := m.updateSelectProfile(tea.KeyMsg{Type: tea.KeyDown})
-	m = updated.(model)
-	if m.profileCursor != 0 {
-		t.Fatalf("profileCursor after down = %d, want 0", m.profileCursor)
-	}
-
-	updated, _ = m.updateSelectProfile(tea.KeyMsg{Type: tea.KeyUp})
-	m = updated.(model)
-	if m.profileCursor != -1 {
-		t.Fatalf("profileCursor after up = %d, want -1", m.profileCursor)
+	// Activate the Pop item.
+	mm, _ = m.activate(0)
+	m = mm.(*model)
+	if m.top().Title != rootTitle {
+		t.Fatalf("top after pop = %q, want %q", m.top().Title, rootTitle)
 	}
 }
 
-func TestRefreshLastSelectionRejectsMissingModel(t *testing.T) {
-	p := quickTestProfile{}
-	m := model{
-		state:             profiles.StateFile{LastProfileName: p.Name(), LastBackendType: string(profiles.BackendAnthropic), LastProviderID: "provider-one", LastModel: "provider-one/missing"},
-		manager:           profiles.NewManager(),
-		installedProfiles: []profiles.Profile{p},
-		providers: []profiles.ProviderInfo{
-			{
-				ID:            "provider-one",
-				Name:          "Provider One",
-				Models:        []string{"model-a", "model-b"},
-				Compatibility: map[string]bool{"anthropic_messages": true},
-			},
-		},
+func TestSettingsMenu_ToggleYolo(t *testing.T) {
+	withFakeClients(t, nil)
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+
+	g := &config.Global{}
+	m := &model{g: g, step: stepMenu}
+	m.resetStack(m.settingsMenu())
+
+	// YOLO is the 3rd item.
+	res := m.top().Items[2].Action()
+	if !g.Settings.YoloMode {
+		t.Error("YoloMode = false after toggle")
 	}
-
-	m.refreshLastSelection()
-
-	if m.lastSelection != nil {
-		t.Fatalf("lastSelection = %#v, want nil", m.lastSelection)
+	if res.Replace == nil {
+		t.Fatal("toggle should replace menu in place")
 	}
-}
-
-func TestSelectProfileViewShowsBuildVersion(t *testing.T) {
-	m := model{
-		apertureHost:  "http://ai",
-		buildVersion:  "B123",
-		manager:       profiles.NewManager(),
-		providers:     []profiles.ProviderInfo{{ID: "provider-one"}},
-		profileCursor: 0,
-		step:          stepSelectProfile,
-	}
-
-	view := m.View()
-	if !strings.Contains(view, "Aperture B123") {
-		t.Fatalf("View() missing build version:\n%s", view)
+	if !strings.Contains(res.Replace.Items[2].Label, "YOLO mode: on") {
+		t.Errorf("new label = %q", res.Replace.Items[2].Label)
 	}
 }

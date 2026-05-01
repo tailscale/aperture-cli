@@ -12,8 +12,15 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/profiles"
 	"github.com/tailscale/aperture-cli/internal/tui"
+
+	// Side-effect imports register each client with internal/clients.
+	_ "github.com/tailscale/aperture-cli/internal/clients/claudecode"
+	_ "github.com/tailscale/aperture-cli/internal/clients/codex"
+	_ "github.com/tailscale/aperture-cli/internal/clients/gemini"
+	_ "github.com/tailscale/aperture-cli/internal/clients/opencode"
 )
 
 var (
@@ -111,16 +118,17 @@ func main() {
 		os.Exit(0)
 	}
 
-	settings, _ := profiles.LoadSettings()
-	state, _ := profiles.LoadState()
-
-	// Use the first saved endpoint as the active host; fall back to the default.
-	host := "http://ai"
-	if len(settings.Endpoints) > 0 {
-		host = settings.Endpoints[0].URL
+	g, err := config.Load()
+	if err != nil {
+		slog.Error("loading launcher config", "err", err)
+		os.Exit(1)
 	}
+	g.Debug = *flagDebug
 
-	p := tea.NewProgram(tui.NewModel(host, settings, state, buildVersion, *flagDebug))
+	// Register Claude Desktop on supported platforms (darwin, windows).
+	profiles.RegisterIfSupported()
+
+	p := tea.NewProgram(tui.NewModel(g, buildVersion))
 	if _, err := p.Run(); err != nil {
 		slog.Error("launcher error", "err", err)
 		os.Exit(1)
