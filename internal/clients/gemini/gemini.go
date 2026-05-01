@@ -5,8 +5,11 @@
 package gemini
 
 import (
+	"fmt"
+	"net/url"
 	"os/exec"
 	"slices"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/clients"
@@ -135,6 +138,14 @@ func (c *Client) backendStep(g *config.Global, p config.ProviderInfo) menu.Resul
 }
 
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend) menu.Result {
+	// Gemini CLI 0.40+ refuses custom base URLs that aren't https:// with a
+	// fully-qualified domain name (it allows http only for literal
+	// localhost / 127.0.0.1). Aperture's default "http://ai" short hostname
+	// won't work — block the launch with a clear message rather than let
+	// Gemini fail with an authentication error after start.
+	if err := validateHost(g.ApertureHost); err != nil {
+		return errorResult(err.Error())
+	}
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
 		bin = binaryName
@@ -143,16 +154,23 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend) menu
 	if err != nil {
 		return errorResult("Failed to write Gemini config: " + err.Error())
 	}
+
+	host := strings.TrimRight(g.ApertureHost, "/")
+
 	env := map[string]string{
 		"GEMINI_CLI_HOME": geminiHome,
 	}
 	switch b.id {
 	case "vertex":
-		env["GOOGLE_VERTEX_BASE_URL"] = g.ApertureHost
+		env["GOOGLE_VERTEX_BASE_URL"] = host
 		env["GOOGLE_API_KEY"] = "not-needed"
 	case "gemini":
 		env["GEMINI_API_KEY"] = "not-needed"
-		env["GEMINI_BASE_URL"] = g.ApertureHost
+		// Gemini CLI 0.40+ reads GOOGLE_GEMINI_BASE_URL; older versions
+		// honored GEMINI_BASE_URL. Set both so we route correctly across
+		// the upgrade.
+		env["GEMINI_BASE_URL"] = host
+		env["GOOGLE_GEMINI_BASE_URL"] = host
 	}
 
 	var args []string
@@ -229,6 +247,45 @@ func backendsFor(p config.ProviderInfo) []backend {
 		}
 	}
 	return out
+}
+
+// validateHost rejects aperture endpoints that Gemini CLI 0.40+ will refuse.
+// The CLI's validator requires the base URL to be https:// and have a
+// fully-qualified host (it treats a bare label like "ai" as unusable except
+// when it is literal localhost / 127.0.0.1).
+func validateHost(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf(
+			"Gemini CLI needs a valid Aperture endpoint URL.\n\n"+
+				"Current: %q\n\n"+
+				"Set an HTTPS endpoint with a fully-qualified domain name "+
+				"(e.g. https://ai.example.com) in Settings → Aperture Endpoints.",
+			raw,
+		)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf(
+			"Gemini CLI requires an HTTPS Aperture endpoint.\n\n"+
+				"Current: %q\n\n"+
+				"Set an https:// endpoint (e.g. https://ai.example.com) in "+
+				"Settings → Aperture Endpoints.",
+			raw,
+		)
+	}
+	host := u.Hostname()
+	if !strings.Contains(host, ".") {
+		return fmt.Errorf(
+			"Gemini CLI requires a fully-qualified domain name for its "+
+				"Aperture endpoint.\n\n"+
+				"Current: %q\n\n"+
+				"Short hostnames like %q are rejected by Gemini CLI. Use the "+
+				"full FQDN (e.g. https://ai.example.com) in Settings → "+
+				"Aperture Endpoints.",
+			raw, host,
+		)
+	}
+	return nil
 }
 
 func errorResult(msg string) menu.Result {

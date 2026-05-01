@@ -146,9 +146,11 @@ func (m *model) endpointsMenu() *menu.Menu {
 			},
 		})
 	}
+	// Hidden: "a" prompts for a new endpoint. Surfaced via the footer hint.
 	items = append(items, menu.MenuItem{
-		Label:    "Add endpoint",
+		Label:    "add",
 		Shortcut: "a",
+		Hidden:   true,
 		Action: func() menu.Result {
 			m.promptForInput("Add Endpoint:", "", func(v string) tea.Cmd {
 				_ = m.g.UpsertEndpoint(v)

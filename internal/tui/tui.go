@@ -276,8 +276,10 @@ func (m *model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Single-char shortcut (explicit Shortcut wins over auto-assigned
 		// tokens so e.g. "d" on the endpoints menu always deletes).
+		// Hidden items are allowed: the root menu registers Settings and
+		// Install-agents as hidden Shortcut-only rows.
 		for i, it := range top.Items {
-			if it.Hidden || it.Disabled {
+			if it.Disabled {
 				continue
 			}
 			if it.Shortcut != "" && it.Shortcut == s {
@@ -304,7 +306,13 @@ func (m *model) activate(idx int) (tea.Model, tea.Cmd) {
 	if item.Disabled || item.Action == nil {
 		return m, nil
 	}
-	m.setCursor(idx)
+	// Only move the cursor onto visible rows. Hidden shortcut handlers
+	// (e.g. endpoints menu's "d" delete) read m.cursor() to know which
+	// visible row to act on — moving the cursor onto the hidden handler
+	// itself would strand it off-screen and break subsequent actions.
+	if !item.Hidden {
+		m.setCursor(idx)
+	}
 	res := item.Action()
 	return m.applyResult(res)
 }

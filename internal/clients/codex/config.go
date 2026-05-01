@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-
-	"github.com/tailscale/aperture-cli/internal/config"
 )
 
 // writeConfig creates (or refreshes) the persistent CODEX_HOME directory
@@ -16,9 +14,17 @@ import (
 // auth.json is pre-populated so Codex's first-run login prompt is skipped.
 // config.toml pins the model provider to "aperture" pointing at the current
 // aperture gateway.
+//
+// The path is the legacy "<config>/aperture/codex-home" used before the
+// clients refactor, preserved so any per-home state Codex has stored under
+// it continues to resolve.
 func writeConfig(apertureHost string) (string, error) {
-	codexHome, err := config.ClientConfigDir("codex")
+	cfgDir, err := os.UserConfigDir()
 	if err != nil {
+		return "", err
+	}
+	codexHome := filepath.Join(cfgDir, "aperture", "codex-home")
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
 		return "", err
 	}
 
