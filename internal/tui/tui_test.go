@@ -159,6 +159,53 @@ func TestMenuEngine_PushPop(t *testing.T) {
 	}
 }
 
+func TestAssignTokens_RollsIntoLetters(t *testing.T) {
+	var items []menu.MenuItem
+	for i := 0; i < 15; i++ {
+		items = append(items, menu.MenuItem{Label: "m", Action: func() menu.Result { return menu.Result{} }})
+	}
+	got := assignTokens(items)
+	want := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("token[%d] = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+func TestAssignTokens_SkipsReservedShortcuts(t *testing.T) {
+	items := []menu.MenuItem{
+		{Label: "normal", Action: func() menu.Result { return menu.Result{} }},
+		{Label: "normal", Action: func() menu.Result { return menu.Result{} }},
+		{Label: "hidden", Shortcut: "d", Hidden: true, Action: func() menu.Result { return menu.Result{} }},
+	}
+	got := assignTokens(items)
+	// Hidden item gets no token.
+	if got[2] != "" {
+		t.Errorf("hidden token = %q, want empty", got[2])
+	}
+	// Auto tokens must not include "d".
+	for i := 0; i < 2; i++ {
+		if got[i] == "d" {
+			t.Errorf("auto token[%d] = %q, should skip reserved 'd'", i, got[i])
+		}
+	}
+}
+
+func TestAssignTokens_DigitZeroPinned(t *testing.T) {
+	items := []menu.MenuItem{
+		{Label: "quick", Digit: menu.DigitZero, Action: func() menu.Result { return menu.Result{} }},
+		{Label: "a", Action: func() menu.Result { return menu.Result{} }},
+	}
+	got := assignTokens(items)
+	if got[0] != "0" {
+		t.Errorf("pinned token = %q, want 0", got[0])
+	}
+	if got[1] != "1" {
+		t.Errorf("first auto = %q, want 1", got[1])
+	}
+}
+
 func TestSettingsMenu_ToggleYolo(t *testing.T) {
 	withFakeClients(t, nil)
 	tmp := t.TempDir()

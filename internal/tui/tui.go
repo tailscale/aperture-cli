@@ -59,6 +59,10 @@ type model struct {
 
 	step step
 
+	// Terminal dimensions, refreshed on tea.WindowSizeMsg. Zero until the
+	// first message arrives.
+	width, height int
+
 	// Menu stack. The top (last element) is what's rendered and receives key
 	// input during stepMenu.
 	stack []*menu.Menu
@@ -119,6 +123,11 @@ func runPreflight(host string) tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case preflightResult:
 		if msg.err != nil {
 			m.preflightErr = msg.err.Error()
@@ -224,16 +233,36 @@ func (m *model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case "up", "k":
-		if cursor > 0 {
-			m.setCursor(cursor - 1)
-			m.skipHiddenUp()
+		visible, _, _ := m.menuLayout(top)
+		if p := visiblePos(visible, cursor); p > 0 {
+			m.setCursor(visible[p-1])
 		}
 		return m, nil
 
 	case "down", "j":
-		if cursor < len(top.Items)-1 {
-			m.setCursor(cursor + 1)
-			m.skipHiddenDown()
+		visible, _, _ := m.menuLayout(top)
+		if p := visiblePos(visible, cursor); p >= 0 && p < len(visible)-1 {
+			m.setCursor(visible[p+1])
+		}
+		return m, nil
+
+	case "left", "h":
+		visible, twoCols, half := m.menuLayout(top)
+		if !twoCols {
+			return m, nil
+		}
+		if p := visiblePos(visible, cursor); p >= half {
+			m.setCursor(visible[p-half])
+		}
+		return m, nil
+
+	case "right", "l":
+		visible, twoCols, half := m.menuLayout(top)
+		if !twoCols {
+			return m, nil
+		}
+		if p := visiblePos(visible, cursor); p >= 0 && p < half && p+half < len(visible) {
+			m.setCursor(visible[p+half])
 		}
 		return m, nil
 
@@ -242,39 +271,24 @@ func (m *model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	default:
 		s := msg.String()
-		// Digit shortcut: activate item with matching Digit. Auto-numbered
-		// items count in visible order, skipping any item with an explicit
-		// Digit assignment.
-		if len(s) == 1 && s[0] >= '0' && s[0] <= '9' {
-			auto := 1
-			for i, it := range top.Items {
-				if it.Hidden || it.Disabled {
-					continue
-				}
-				var d int
-				switch it.Digit {
-				case 0:
-					d = auto
-					auto++
-				case menu.DigitZero:
-					d = 0
-				default:
-					d = it.Digit
-				}
-				if s[0]-'0' == byte(d) {
-					return m.activate(i)
-				}
+		if len(s) != 1 {
+			return m, nil
+		}
+		// Single-char shortcut (explicit Shortcut wins over auto-assigned
+		// tokens so e.g. "d" on the endpoints menu always deletes).
+		for i, it := range top.Items {
+			if it.Hidden || it.Disabled {
+				continue
+			}
+			if it.Shortcut != "" && it.Shortcut == s {
+				return m.activate(i)
 			}
 		}
-		// Single-char shortcut.
-		if len(s) == 1 {
-			for i, it := range top.Items {
-				if it.Hidden || it.Disabled {
-					continue
-				}
-				if it.Shortcut != "" && it.Shortcut == s {
-					return m.activate(i)
-				}
+		// Auto-assigned or explicit-Digit token.
+		tokens := assignTokens(top.Items)
+		for i, tok := range tokens {
+			if tok != "" && tok == s {
+				return m.activate(i)
 			}
 		}
 	}
@@ -398,36 +412,57 @@ func (m *model) viewMenu() string {
 		sb.WriteString("\n")
 	}
 	cursor := m.cursor()
-	auto := 1
-	for i, it := range top.Items {
-		if it.Hidden {
-			continue
+	tokens := assignTokens(top.Items)
+	visible, twoCols, half := m.menuLayout(top)
+
+	plains := make(map[int]string, len(visible))
+	styleds := make(map[int]string, len(visible))
+	maxW := 0
+	for _, i := range visible {
+		it := top.Items[i]
+		tok := tokens[i]
+		if tok == "" {
+			tok = " "
 		}
-		var d int
-		isZero := false
-		switch it.Digit {
-		case 0:
-			d = auto
-			auto++
-		case menu.DigitZero:
-			d = 0
-			isZero = true
-		default:
-			d = it.Digit
-		}
-		label := fmt.Sprintf("  [%d] %s", d, it.Label)
+		plain := fmt.Sprintf("  [%s] %s", tok, it.Label)
 		if it.Description != "" {
-			label += "  " + dimStyle.Render(it.Description)
+			plain += "  " + it.Description
+		}
+		styled := fmt.Sprintf("  [%s] %s", tok, it.Label)
+		if it.Description != "" {
+			styled += "  " + dimStyle.Render(it.Description)
 		}
 		if it.Disabled {
-			label = dimStyle.Render(label)
+			styled = dimStyle.Render(styled)
 		} else if i == cursor {
-			label = selectedStyle.Render(label)
+			styled = selectedStyle.Render(styled)
 		}
-		sb.WriteString(label)
-		sb.WriteString("\n")
-		if isZero {
+		plains[i] = plain
+		styleds[i] = styled
+		if w := len(plain); w > maxW {
+			maxW = w
+		}
+	}
+
+	if twoCols {
+		colWidth := maxW + 4
+		for r := 0; r < half; r++ {
+			li := visible[r]
+			sb.WriteString(styleds[li])
+			sb.WriteString(strings.Repeat(" ", colWidth-len(plains[li])))
+			if r+half < len(visible) {
+				ri := visible[r+half]
+				sb.WriteString(styleds[ri])
+			}
 			sb.WriteString("\n")
+		}
+	} else {
+		for _, i := range visible {
+			sb.WriteString(styleds[i])
+			sb.WriteString("\n")
+			if top.Items[i].Digit == menu.DigitZero {
+				sb.WriteString("\n")
+			}
 		}
 	}
 	sb.WriteString("\n")
@@ -441,6 +476,118 @@ func (m *model) viewMenu() string {
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+// menuLayout decides the visible order and column layout for a menu.
+// visible is the list of Items indices that render (hidden rows skipped);
+// twoCols is true when the wide-terminal / long-list two-column layout is
+// active; half is len(visible) rounded up / 2 (the row count in each
+// column). twoCols=false means half is unused.
+func (m *model) menuLayout(top *menu.Menu) (visible []int, twoCols bool, half int) {
+	visible = make([]int, 0, len(top.Items))
+	hasZero := false
+	for i, it := range top.Items {
+		if it.Hidden {
+			continue
+		}
+		if it.Digit == menu.DigitZero {
+			hasZero = true
+		}
+		visible = append(visible, i)
+	}
+	if m.width < 80 || len(visible) < 10 || hasZero {
+		return visible, false, 0
+	}
+	tokens := assignTokens(top.Items)
+	maxW := 0
+	for _, i := range visible {
+		it := top.Items[i]
+		tok := tokens[i]
+		if tok == "" {
+			tok = " "
+		}
+		w := len("  [] ") + len(tok) + len(it.Label)
+		if it.Description != "" {
+			w += 2 + len(it.Description)
+		}
+		if w > maxW {
+			maxW = w
+		}
+	}
+	if maxW*2+4 > m.width {
+		return visible, false, 0
+	}
+	return visible, true, (len(visible) + 1) / 2
+}
+
+// visiblePos returns i's position within visible, or -1 if i isn't there.
+func visiblePos(visible []int, i int) int {
+	for p, v := range visible {
+		if v == i {
+			return p
+		}
+	}
+	return -1
+}
+
+// autoTokens is the pool of single-character keys auto-assigned to menu
+// items in visible order: 1-9, then a-z, then A-Z. "0" is reserved for the
+// DigitZero pin; items that set an explicit Shortcut keep that key out of
+// the pool.
+var autoTokens = func() []string {
+	var out []string
+	for c := '1'; c <= '9'; c++ {
+		out = append(out, string(c))
+	}
+	for c := 'a'; c <= 'z'; c++ {
+		out = append(out, string(c))
+	}
+	for c := 'A'; c <= 'Z'; c++ {
+		out = append(out, string(c))
+	}
+	return out
+}()
+
+// assignTokens returns one token per Items slot. Hidden or disabled items
+// and items without an Action get an empty string. Items with DigitZero get
+// "0"; items with Digit>0 get that digit (legacy explicit assignments).
+// Everything else is auto-numbered from the autoTokens pool, skipping any
+// token already claimed by an item's Shortcut or explicit Digit.
+func assignTokens(items []menu.MenuItem) []string {
+	tokens := make([]string, len(items))
+	reserved := map[string]bool{}
+	for _, it := range items {
+		if it.Shortcut != "" {
+			reserved[it.Shortcut] = true
+		}
+		if it.Digit > 0 {
+			reserved[fmt.Sprintf("%d", it.Digit)] = true
+		}
+	}
+	pool := make([]string, 0, len(autoTokens))
+	for _, t := range autoTokens {
+		if !reserved[t] {
+			pool = append(pool, t)
+		}
+	}
+	next := 0
+	for i, it := range items {
+		if it.Hidden || it.Disabled || it.Action == nil {
+			continue
+		}
+		switch {
+		case it.Digit == menu.DigitZero:
+			tokens[i] = "0"
+		case it.Digit > 0:
+			tokens[i] = fmt.Sprintf("%d", it.Digit)
+		default:
+			if next < len(pool) {
+				tokens[i] = pool[next]
+				next++
+			}
+		}
+	}
+	return tokens
 }
 
 // menuHeader returns the one-line status banner shown above certain menus:
@@ -505,31 +652,6 @@ func (m *model) popToRoot() {
 func (m *model) resetStack(root *menu.Menu) {
 	m.stack = []*menu.Menu{root}
 	m.cursors = []int{0}
-}
-
-// skipHiddenUp advances the cursor backward past hidden items.
-func (m *model) skipHiddenUp() {
-	top := m.top()
-	if top == nil {
-		return
-	}
-	c := m.cursor()
-	for c > 0 && top.Items[c].Hidden {
-		c--
-	}
-	m.setCursor(c)
-}
-
-func (m *model) skipHiddenDown() {
-	top := m.top()
-	if top == nil {
-		return
-	}
-	c := m.cursor()
-	for c < len(top.Items)-1 && top.Items[c].Hidden {
-		c++
-	}
-	m.setCursor(c)
 }
 
 // --- Input step helpers ---
