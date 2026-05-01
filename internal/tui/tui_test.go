@@ -35,7 +35,7 @@ func (c *fakeClient) Menu(*config.Global) menu.MenuItem {
 		Action: func() menu.Result { return menu.Result{Next: c.menuActions} },
 	}
 }
-func (c *fakeClient) Replay(*config.Global) tea.Cmd       { return c.replayCmd }
+func (c *fakeClient) Replay(*config.Global) tea.Cmd          { return c.replayCmd }
 func (c *fakeClient) QuickSelectLabel(*config.Global) string { return c.quickLabel }
 
 // withFakeClients swaps the TUI's client registry for the duration of the test.

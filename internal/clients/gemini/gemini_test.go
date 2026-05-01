@@ -55,13 +55,13 @@ func TestValidateHost(t *testing.T) {
 	}{
 		{"https://ai.example.com", false},
 		{"https://aperture.corp.ts.net/", false},
-		{"https://ai:8080", true},            // bare label
-		{"http://ai.example.com", true},       // not https
-		{"http://ai", true},                   // bare label + not https
-		{"https://ai", true},                  // bare label
-		{"ai.example.com", true},              // missing scheme
-		{"https://", true},                    // missing host
-		{"not a url", true},                   // unparseable
+		{"https://ai:8080", true},       // bare label
+		{"http://ai.example.com", true}, // not https
+		{"http://ai", true},             // bare label + not https
+		{"https://ai", true},            // bare label
+		{"ai.example.com", true},        // missing scheme
+		{"https://", true},              // missing host
+		{"not a url", true},             // unparseable
 	}
 	for _, c := range cases {
 		err := validateHost(c.host)

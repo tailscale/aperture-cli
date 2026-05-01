@@ -34,10 +34,10 @@ func TestFqnModels(t *testing.T) {
 
 func TestStripProviderPrefix(t *testing.T) {
 	cases := map[string]string{
-		"openai/gpt-5":           "gpt-5",
-		"vertex/gemini-2.5-pro":  "gemini-2.5-pro",
-		"bare-model":             "bare-model",
-		"provider/nested/model":  "nested/model",
+		"openai/gpt-5":          "gpt-5",
+		"vertex/gemini-2.5-pro": "gemini-2.5-pro",
+		"bare-model":            "bare-model",
+		"provider/nested/model": "nested/model",
 	}
 	for in, want := range cases {
 		if got := stripProviderPrefix(in); got != want {
