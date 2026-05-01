@@ -333,11 +333,11 @@ func (m model) tryAutoSelect() (resolvedSelection, bool) {
 	}
 	// If the profile supports model selection and the provider has multiple
 	// models, don't auto-select — the user needs to pick a model.
-	if _, ok := p.(profiles.ModelSelector); ok && len(providers[0].Models) > 1 {
+	if wantsModelSelection(p, backends[0]) && len(providers[0].Models) > 1 {
 		return resolvedSelection{}, false
 	}
 	selectedModel := ""
-	if len(providers[0].Models) == 1 {
+	if wantsModelSelection(p, backends[0]) && len(providers[0].Models) == 1 {
 		selectedModel = providers[0].ID + "/" + providers[0].Models[0]
 	}
 	return resolvedSelection{
@@ -528,7 +528,7 @@ func (m model) resolveProviderAndExec() (model, tea.Cmd) {
 // proceedWithBackend resolves the model selection for a single backend and
 // either auto-launches or shows the model picker.
 func (m model) proceedWithBackend(b profiles.Backend) (model, tea.Cmd) {
-	_, wantsModel := m.chosenProfile.(profiles.ModelSelector)
+	wantsModel := wantsModelSelection(m.chosenProfile, b)
 
 	if wantsModel && len(m.chosenProvider.Models) > 1 {
 		m.chosenBackend = b
@@ -539,7 +539,7 @@ func (m model) proceedWithBackend(b profiles.Backend) (model, tea.Cmd) {
 	}
 
 	// Auto-select the single model if available.
-	if len(m.chosenProvider.Models) == 1 {
+	if wantsModel && len(m.chosenProvider.Models) == 1 {
 		m.selectedModel = m.chosenProvider.ID + "/" + m.chosenProvider.Models[0]
 	}
 
@@ -975,6 +975,19 @@ func fqnModels(p profiles.ProviderInfo) []string {
 	return out
 }
 
+// wantsModelSelection reports whether the TUI should show the model picker
+// for the given (profile, backend). A profile must implement ModelSelector
+// to opt in, and may further opt out per-backend via BackendModelSelector.
+func wantsModelSelection(p profiles.Profile, b profiles.Backend) bool {
+	if _, ok := p.(profiles.ModelSelector); !ok {
+		return false
+	}
+	if g, ok := p.(profiles.BackendModelSelector); ok {
+		return g.WantsModelSelection(b)
+	}
+	return true
+}
+
 func containsString(items []string, item string) bool {
 	for _, v := range items {
 		if v == item {
@@ -1015,7 +1028,7 @@ func (m *model) refreshLastSelection() {
 		return
 	}
 
-	selectedModel, ok := m.resolveLastModel(selectedProfile, provider)
+	selectedModel, ok := m.resolveLastModel(selectedProfile, selectedBackend, provider)
 	if !ok {
 		return
 	}
@@ -1059,8 +1072,8 @@ func (m model) resolveLastProvider(p profiles.Profile, b profiles.Backend) (prof
 	return profiles.ProviderInfo{}, false
 }
 
-func (m model) resolveLastModel(p profiles.Profile, provider profiles.ProviderInfo) (string, bool) {
-	if _, ok := p.(profiles.ModelSelector); !ok {
+func (m model) resolveLastModel(p profiles.Profile, b profiles.Backend, provider profiles.ProviderInfo) (string, bool) {
+	if !wantsModelSelection(p, b) {
 		return "", true
 	}
 
@@ -1098,7 +1111,7 @@ func (m model) checkAndExecSelectedBackend() (model, tea.Cmd) {
 
 	// If the profile supports model selection and the provider has multiple
 	// models, show the model picker instead of launching immediately.
-	_, wantsModel := m.chosenProfile.(profiles.ModelSelector)
+	wantsModel := wantsModelSelection(m.chosenProfile, b)
 	if wantsModel && len(m.chosenProvider.Models) > 1 {
 		m.chosenBackend = b
 		m.modelItems = fqnModels(m.chosenProvider)

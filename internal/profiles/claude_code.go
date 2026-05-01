@@ -126,6 +126,13 @@ func (c *ClaudeCodeProfile) ApplyModel(model string, env map[string]string) {
 	env["ANTHROPIC_MODEL"] = model
 }
 
+// WantsModelSelection skips the model picker for Bedrock, where Claude Code
+// resolves models from ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL set by
+// ProviderEnv and the user can switch with /model at runtime.
+func (c *ClaudeCodeProfile) WantsModelSelection(b Backend) bool {
+	return b.Type != BackendBedrock
+}
+
 // managedEnvVars returns every environment variable name that the launcher
 // may set when launching Claude Code, across all backends.
 var managedEnvVars = []string{

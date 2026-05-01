@@ -92,6 +92,14 @@ type ModelSelector interface {
 	ApplyModel(model string, env map[string]string)
 }
 
+// BackendModelSelector lets a ModelSelector profile opt out of the model
+// picker for specific backends (e.g. when the backend determines the model
+// from per-tier env vars set in ProviderEnv). When unimplemented, the TUI
+// shows the picker for any backend if the profile implements ModelSelector.
+type BackendModelSelector interface {
+	WantsModelSelection(b Backend) bool
+}
+
 // ModelArgSelector is implemented by profiles that need a user-chosen
 // default model passed as command-line arguments.
 type ModelArgSelector interface {
