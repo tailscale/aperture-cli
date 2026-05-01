@@ -1,4 +1,8 @@
-package profiles
+// Package config holds the launcher's app-level persistent state: the list
+// of Aperture endpoints the user has configured, the active endpoint, the
+// YOLO-mode flag, and the record of the last-used client launch. Clients
+// also reach through this package for isolated per-client JSON storage.
+package config
 
 import (
 	"encoding/json"
@@ -6,7 +10,9 @@ import (
 	"path/filepath"
 )
 
-const defaultLocation = "http://ai"
+// DefaultLocation is the fallback Aperture endpoint URL used when the user
+// has no saved settings.
+const DefaultLocation = "http://ai"
 
 // Endpoint holds the URL and per-endpoint configuration for an Aperture proxy.
 type Endpoint struct {
@@ -19,9 +25,9 @@ type Settings struct {
 	// The first entry is used as the active endpoint on startup.
 	Endpoints []Endpoint `json:"endpoints,omitempty"`
 
-	// YoloMode appends each profile's skip-permissions args (e.g.
-	// --dangerously-skip-permissions for claude, -yolo for gemini) when
-	// launching an agent.
+	// YoloMode appends each client's skip-permissions args (e.g.
+	// --dangerously-skip-permissions for Claude Code, --yolo for Gemini)
+	// when launching an agent.
 	YoloMode bool `json:"yoloMode,omitempty"`
 }
 
@@ -50,7 +56,7 @@ func LoadSettings() (Settings, error) {
 		return defaultSettings(), nil
 	}
 	if len(s.Endpoints) == 0 {
-		s.Endpoints = []Endpoint{{URL: defaultLocation}}
+		s.Endpoints = []Endpoint{{URL: DefaultLocation}}
 	}
 	return s, nil
 }
@@ -73,6 +79,6 @@ func SaveSettings(s Settings) error {
 
 func defaultSettings() Settings {
 	return Settings{
-		Endpoints: []Endpoint{{URL: defaultLocation}},
+		Endpoints: []Endpoint{{URL: DefaultLocation}},
 	}
 }
