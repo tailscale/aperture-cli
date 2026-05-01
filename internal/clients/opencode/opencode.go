@@ -2,15 +2,14 @@
 // OpenCode has a single abstract routing flavor: the real protocol (OpenAI
 // Responses, OpenAI Chat, Anthropic Messages, Bedrock, Vertex, Gemini) is
 // decided at launch time from the chosen provider's compatibility map. The
-// Menu flow therefore skips the backend step and goes straight from
-// provider selection to model selection.
+// Menu flow goes straight from provider selection to launch; model
+// selection happens inside OpenCode itself.
 package opencode
 
 import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/clients"
@@ -98,14 +97,14 @@ func (c *Client) providerStep(g *config.Global) menu.Result {
 		return errorResult("No providers support an OpenCode protocol.")
 	}
 	if len(provs) == 1 {
-		return c.modelStep(g, provs[0])
+		return c.launch(g, provs[0])
 	}
 	items := make([]menu.MenuItem, 0, len(provs))
 	for _, p := range provs {
 		items = append(items, menu.MenuItem{
 			Label:       p.DisplayName(),
 			Description: p.Description,
-			Action:      func() menu.Result { return c.modelStep(g, p) },
+			Action:      func() menu.Result { return c.launch(g, p) },
 		})
 	}
 	return menu.Result{Next: &menu.Menu{
@@ -114,29 +113,7 @@ func (c *Client) providerStep(g *config.Global) menu.Result {
 	}}
 }
 
-func (c *Client) modelStep(g *config.Global, p config.ProviderInfo) menu.Result {
-	models := fqnModels(p)
-	if len(models) <= 1 {
-		var m string
-		if len(models) == 1 {
-			m = models[0]
-		}
-		return c.launch(g, p, m)
-	}
-	items := make([]menu.MenuItem, 0, len(models))
-	for _, m := range models {
-		items = append(items, menu.MenuItem{
-			Label:  m,
-			Action: func() menu.Result { return c.launch(g, p, m) },
-		})
-	}
-	return menu.Result{Next: &menu.Menu{
-		Title: "Choose a default model for " + name + " via " + p.DisplayName() + ":",
-		Items: items,
-	}}
-}
-
-func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) menu.Result {
+func (c *Client) launch(g *config.Global, p config.ProviderInfo) menu.Result {
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
 		bin = binaryName
@@ -156,13 +133,13 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 		env["AWS_REGION"] = "us-east-1"
 	}
 
-	// OpenCode has no documented yolo flag today; keep Args empty. Model is
-	// conveyed via the provider config written above, not a CLI arg.
+	// OpenCode has no documented yolo flag today; keep Args empty. The
+	// provider config written above conveys available models; the user
+	// picks one inside OpenCode itself.
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName:  name,
 		LastBackendType: "openai", // historical; OpenCode's abstract backend
 		LastProviderID:  p.ID,
-		LastModel:       model,
 	})
 
 	cmd := clients.Launch(clients.LaunchSpec{
@@ -186,22 +163,14 @@ func (c *Client) Replay(g *config.Global) tea.Cmd {
 	if !providerMatches(prov) {
 		return nil
 	}
-	model := g.LastLaunch.LastModel
-	if model != "" && !slices.Contains(fqnModels(prov), model) {
-		return nil
-	}
-	res := c.launch(g, prov, model)
+	res := c.launch(g, prov)
 	return res.Cmd
 }
 
 // QuickSelectLabel implements clients.Client.
 func (c *Client) QuickSelectLabel(g *config.Global) string {
 	prov, _ := g.Provider(g.LastLaunch.LastProviderID)
-	label := name + " via " + prov.DisplayName()
-	if g.LastLaunch.LastModel != "" {
-		label += " - " + g.LastLaunch.LastModel
-	}
-	return label
+	return name + " via " + prov.DisplayName()
 }
 
 func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
@@ -221,14 +190,6 @@ func providerMatches(p config.ProviderInfo) bool {
 		}
 	}
 	return false
-}
-
-func fqnModels(p config.ProviderInfo) []string {
-	out := make([]string, len(p.Models))
-	for i, m := range p.Models {
-		out[i] = p.ID + "/" + m
-	}
-	return out
 }
 
 func errorResult(msg string) menu.Result {
