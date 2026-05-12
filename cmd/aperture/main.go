@@ -130,11 +130,18 @@ func main() {
 	profiles.RegisterIfSupported()
 
 	portalManager := portals.NewManager(g.Debug)
-	defer portalManager.Close()
-
 	p := tea.NewProgram(tui.NewModel(g, buildVersion, portalManager))
+
+	var exitCode int
 	if _, err := p.Run(); err != nil {
 		slog.Error("launcher error", "err", err)
-		os.Exit(1)
+		exitCode = 1
+	}
+	if err := portalManager.Close(); err != nil {
+		slog.Error("shutting down portals", "err", err)
+		exitCode = 1
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
