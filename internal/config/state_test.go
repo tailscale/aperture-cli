@@ -75,9 +75,12 @@ func TestSettings_RoundTrip(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	want := config.Settings{
+		Portals: []config.Portal{
+			{ID: "portal-abcdef", Name: "Work"},
+		},
 		Endpoints: []config.Endpoint{
 			{URL: "http://ai"},
-			{URL: "http://aperture.example.com"},
+			{URL: "http://aperture.example.com", PortalID: "portal-abcdef"},
 		},
 		YoloMode: true,
 	}
@@ -91,6 +94,12 @@ func TestSettings_RoundTrip(t *testing.T) {
 	}
 	if len(got.Endpoints) != 2 || got.Endpoints[0].URL != "http://ai" {
 		t.Errorf("endpoints = %+v", got.Endpoints)
+	}
+	if len(got.Portals) != 1 || got.Portals[0].ID != "portal-abcdef" {
+		t.Errorf("portals = %+v", got.Portals)
+	}
+	if got.Endpoints[1].PortalID != "portal-abcdef" {
+		t.Errorf("portal endpoint = %+v", got.Endpoints[1])
 	}
 	if !got.YoloMode {
 		t.Error("YoloMode = false, want true")
@@ -122,6 +131,45 @@ func TestGlobal_SetApertureHost_RotatesToFront(t *testing.T) {
 	}
 	if len(g.Settings.Endpoints) != 3 {
 		t.Errorf("endpoints len = %d, want 3", len(g.Settings.Endpoints))
+	}
+}
+
+func TestGlobal_SetActiveEndpoint_DistinguishesPortal(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	g := &config.Global{
+		Settings: config.Settings{
+			Endpoints: []config.Endpoint{
+				{URL: "http://ai"},
+				{URL: "http://ai", PortalID: "portal-abcdef"},
+			},
+		},
+	}
+	if err := g.SetActiveEndpoint(config.Endpoint{URL: "http://ai", PortalID: "portal-abcdef"}); err != nil {
+		t.Fatal(err)
+	}
+	if g.Settings.Endpoints[0].PortalID != "portal-abcdef" {
+		t.Errorf("front endpoint = %+v, want portal endpoint", g.Settings.Endpoints[0])
+	}
+	if len(g.Settings.Endpoints) != 2 {
+		t.Errorf("endpoints len = %d, want 2", len(g.Settings.Endpoints))
+	}
+}
+
+func TestPortalStateDir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	got, err := config.PortalStateDir("portal-abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(tmp, ".config", "aperture", "portals", "abcdef")
+	if got != want {
+		t.Errorf("PortalStateDir = %q, want %q", got, want)
 	}
 }
 

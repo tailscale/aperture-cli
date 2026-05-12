@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/clients"
+	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
 )
 
@@ -106,6 +107,10 @@ func (m *model) settingsMenu() *menu.Menu {
 		Title: "Settings",
 		Items: []menu.MenuItem{
 			{
+				Label:  "Portals",
+				Action: func() menu.Result { return menu.Result{Next: m.portalsMenu()} },
+			},
+			{
 				Label:  "Aperture Endpoints",
 				Action: func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
 			},
@@ -125,43 +130,84 @@ func (m *model) settingsMenu() *menu.Menu {
 	}
 }
 
-// endpointsMenu lists configured endpoints with add/delete affordances.
-// Selecting an entry rotates it to the front and re-runs preflight.
-func (m *model) endpointsMenu() *menu.Menu {
-	items := make([]menu.MenuItem, 0, len(m.g.Settings.Endpoints)+3)
-	for i, ep := range m.g.Settings.Endpoints {
-		url := ep.URL
-		label := url
-		if i == 0 {
-			label = greenStyle.Render(url + " (active)")
-		}
+func (m *model) portalsMenu() *menu.Menu {
+	items := []menu.MenuItem{
+		{
+			Label:    "Portals connect Aperture through an embedded Tailscale node, so this host does not need tailscaled running.",
+			Disabled: true,
+		},
+	}
+	for _, p := range m.g.Settings.Portals {
+		p := p
 		items = append(items, menu.MenuItem{
-			Label: label,
-			Action: func() menu.Result {
-				if err := m.g.SetApertureHost(url); err != nil {
-					return errResult(err.Error())
-				}
-				m.step = stepPreflight
-				return menu.Result{Cmd: runPreflight(url)}
-			},
+			Label:       p.Name,
+			Description: p.ID,
+			Action:      func() menu.Result { return menu.Result{} },
 		})
 	}
-	// Hidden: "a" prompts for a new endpoint. Surfaced via the footer hint.
 	items = append(items, menu.MenuItem{
 		Label:    "add",
 		Shortcut: "a",
 		Hidden:   true,
 		Action: func() menu.Result {
-			m.promptForInput("Add Endpoint:", "", func(v string) tea.Cmd {
-				_ = m.g.UpsertEndpoint(v)
-				if len(m.stack) > 0 {
-					m.stack[len(m.stack)-1] = m.endpointsMenu()
-					m.cursors[len(m.cursors)-1] = 0
+			m.promptForInput("Add Portal:", "Name", func(v string) tea.Cmd {
+				if _, err := m.g.AddPortal(v); err != nil {
+					return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 				}
+				m.refreshPortalsMenu()
 				return nil
 			})
 			return menu.Result{}
 		},
+	})
+	items = append(items, menu.MenuItem{
+		Label:    "delete",
+		Shortcut: "d",
+		Hidden:   true,
+		Action: func() menu.Result {
+			idx := m.cursor() - 1
+			if idx < 0 || idx >= len(m.g.Settings.Portals) {
+				return menu.Result{}
+			}
+			if err := m.g.RemovePortal(m.g.Settings.Portals[idx].ID); err != nil {
+				return errResult(err.Error())
+			}
+			return menu.Result{Replace: m.portalsMenu()}
+		},
+	})
+	return &menu.Menu{
+		Title: "Portals",
+		Items: items,
+		Hint:  "d to remove · a to add · Esc to go back",
+	}
+}
+
+// endpointsMenu lists configured endpoints with add/delete affordances.
+// Selecting an entry rotates it to the front and re-runs preflight.
+func (m *model) endpointsMenu() *menu.Menu {
+	items := make([]menu.MenuItem, 0, len(m.g.Settings.Endpoints)+3)
+	for i, ep := range m.g.Settings.Endpoints {
+		ep := ep
+		label := m.endpointLabel(ep)
+		if i == 0 {
+			label = greenStyle.Render(label + " (active)")
+		}
+		items = append(items, menu.MenuItem{
+			Label: label,
+			Action: func() menu.Result {
+				if err := m.g.SetActiveEndpoint(ep); err != nil {
+					return errResult(err.Error())
+				}
+				return menu.Result{Cmd: m.activateEndpointCmd(ep)}
+			},
+		})
+	}
+	// Hidden: "a" opens the endpoint connection flow. Surfaced via the footer hint.
+	items = append(items, menu.MenuItem{
+		Label:    "add",
+		Shortcut: "a",
+		Hidden:   true,
+		Action:   func() menu.Result { return menu.Result{Next: m.addEndpointConnectionMenu()} },
 	})
 	// Hidden: "d" deletes the row under the cursor.
 	items = append(items, menu.MenuItem{
@@ -189,12 +235,86 @@ func (m *model) endpointsMenu() *menu.Menu {
 		Hint:  "Enter to select · d to remove · a to add · " + backHint,
 		OnBack: func() tea.Cmd {
 			if m.forcedToEndpoint {
-				return tea.Quit
+				return m.quitCmd()
 			}
 			m.popOne()
 			return tea.ClearScreen
 		},
 	}
+}
+
+func (m *model) addEndpointConnectionMenu() *menu.Menu {
+	return &menu.Menu{
+		Title: "Endpoint Connection",
+		Items: []menu.MenuItem{
+			{
+				Label: "Direct",
+				Action: func() menu.Result {
+					m.promptForInput("Add Direct Endpoint:", "URL", func(v string) tea.Cmd {
+						_ = m.g.UpsertEndpoint(config.Endpoint{URL: strings.TrimSpace(v)})
+						m.refreshEndpointsMenu()
+						return nil
+					})
+					return menu.Result{}
+				},
+			},
+			{
+				Label:  "Portal",
+				Action: func() menu.Result { return menu.Result{Next: m.endpointPortalMenu()} },
+			},
+		},
+		Hint: "Enter to select · Esc to go back",
+	}
+}
+
+func (m *model) endpointPortalMenu() *menu.Menu {
+	if len(m.g.Settings.Portals) == 0 {
+		return &menu.Menu{
+			Title: "Choose a portal",
+			Items: []menu.MenuItem{
+				{
+					Label:    "No portals configured.",
+					Disabled: true,
+				},
+				{
+					Label:  "Add Portal",
+					Action: func() menu.Result { return menu.Result{Next: m.portalsMenu()} },
+				},
+			},
+			Hint: "Enter to add a portal · Esc to go back",
+		}
+	}
+	items := make([]menu.MenuItem, 0, len(m.g.Settings.Portals))
+	for _, p := range m.g.Settings.Portals {
+		p := p
+		items = append(items, menu.MenuItem{
+			Label:       p.Name,
+			Description: p.ID,
+			Action: func() menu.Result {
+				m.promptForInput("Add Portal Endpoint:", "URL", func(v string) tea.Cmd {
+					_ = m.g.UpsertEndpoint(config.Endpoint{URL: strings.TrimSpace(v), PortalID: p.ID})
+					m.refreshEndpointsMenu()
+					return nil
+				})
+				return menu.Result{}
+			},
+		})
+	}
+	return &menu.Menu{
+		Title: "Choose a portal",
+		Items: items,
+		Hint:  "Enter to select · Esc to go back",
+	}
+}
+
+func (m *model) endpointLabel(ep config.Endpoint) string {
+	if ep.PortalID == "" {
+		return ep.URL + " (direct)"
+	}
+	if p, ok := m.g.Portal(ep.PortalID); ok {
+		return ep.URL + " via " + p.Name
+	}
+	return ep.URL + " via " + ep.PortalID
 }
 
 // installAgentsMenu lists uninstalled clients and confirms/runs each install.

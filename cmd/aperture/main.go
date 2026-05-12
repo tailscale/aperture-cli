@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/config"
+	"github.com/tailscale/aperture-cli/internal/portals"
 	"github.com/tailscale/aperture-cli/internal/profiles"
 	"github.com/tailscale/aperture-cli/internal/tui"
 
@@ -128,7 +129,10 @@ func main() {
 	// Register Claude Desktop on supported platforms (darwin, windows).
 	profiles.RegisterIfSupported()
 
-	p := tea.NewProgram(tui.NewModel(g, buildVersion))
+	portalManager := portals.NewManager(g.Debug)
+	defer portalManager.Close()
+
+	p := tea.NewProgram(tui.NewModel(g, buildVersion, portalManager))
 	if _, err := p.Run(); err != nil {
 		slog.Error("launcher error", "err", err)
 		os.Exit(1)

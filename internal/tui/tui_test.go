@@ -216,15 +216,44 @@ func TestSettingsMenu_ToggleYolo(t *testing.T) {
 	m := &model{g: g, step: stepMenu}
 	m.resetStack(m.settingsMenu())
 
-	// YOLO is the 3rd item.
-	res := m.top().Items[2].Action()
+	idx := -1
+	for i, it := range m.top().Items {
+		if strings.HasPrefix(it.Label, "YOLO mode:") {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("YOLO item not found")
+	}
+	res := m.top().Items[idx].Action()
 	if !g.Settings.YoloMode {
 		t.Error("YoloMode = false after toggle")
 	}
 	if res.Replace == nil {
 		t.Fatal("toggle should replace menu in place")
 	}
-	if !strings.Contains(res.Replace.Items[2].Label, "YOLO mode: on") {
-		t.Errorf("new label = %q", res.Replace.Items[2].Label)
+	if !strings.Contains(res.Replace.Items[idx].Label, "YOLO mode: on") {
+		t.Errorf("new label = %q", res.Replace.Items[idx].Label)
+	}
+}
+
+func TestSettingsMenu_PortalsFirst(t *testing.T) {
+	m := &model{g: &config.Global{}, step: stepMenu}
+	menu := m.settingsMenu()
+	if len(menu.Items) == 0 || menu.Items[0].Label != "Portals" {
+		t.Fatalf("first settings item = %+v, want Portals", menu.Items)
+	}
+}
+
+func TestEndpointLabel_ShowsPortal(t *testing.T) {
+	m := &model{g: &config.Global{
+		Settings: config.Settings{
+			Portals: []config.Portal{{ID: "portal-abcdef", Name: "Work"}},
+		},
+	}}
+	got := m.endpointLabel(config.Endpoint{URL: "http://ai", PortalID: "portal-abcdef"})
+	if got != "http://ai via Work" {
+		t.Errorf("endpointLabel = %q", got)
 	}
 }
