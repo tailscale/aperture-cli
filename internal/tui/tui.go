@@ -244,7 +244,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.preflightErr = msg.err.Error()
 			m.forcedToEndpoint = true
 			m.step = stepMenu
-			m.resetStack(m.endpointsMenu())
+			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
 		m.g.Providers = msg.providers
@@ -261,7 +261,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.forcedToEndpoint = true
 			m.g.ApertureHost = msg.endpoint.URL
 			m.step = stepMenu
-			m.resetStack(m.endpointsMenu())
+			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
 		m.g.ApertureHost = msg.host
@@ -579,6 +579,13 @@ func (m *model) viewMenu() string {
 		sb.WriteString(titleStyle.Render(top.Title))
 		sb.WriteString("\n")
 	}
+	if top.Preamble != "" {
+		for _, line := range strings.Split(top.Preamble, "\n") {
+			sb.WriteString(dimStyle.Render("  " + line))
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
 	cursor := m.cursor()
 	tokens := assignTokens(top.Items)
 	visible, twoCols, half := m.menuLayout(top)
@@ -769,9 +776,9 @@ func (m *model) menuHeader(top *menu.Menu) string {
 		}
 		return header + "\n\n"
 	}
-	if m.forcedToEndpoint && top.Title == endpointsTitle {
+	if m.forcedToEndpoint && (top.Title == endpointsTitle || top.Title == setupGuideTitle) {
 		header := dotRed + " Could not reach " + m.g.ApertureHost + "\n"
-		if m.preflightErr != "" {
+		if m.preflightErr != "" && top.Title != setupGuideTitle {
 			header += dimStyle.Render("  "+m.preflightErr) + "\n"
 		}
 		return header + "\n"

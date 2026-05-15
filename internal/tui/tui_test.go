@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -243,6 +244,125 @@ func TestSettingsMenu_PortalsFirst(t *testing.T) {
 	menu := m.settingsMenu()
 	if len(menu.Items) == 0 || menu.Items[0].Label != "Portals" {
 		t.Fatalf("first settings item = %+v, want Portals", menu.Items)
+	}
+}
+
+// withFakeTailscale overrides checkTailscale for the duration of a test.
+func withFakeTailscale(t *testing.T, status tailscaleStatus) {
+	t.Helper()
+	orig := checkTailscale
+	checkTailscale = func() tailscaleStatus { return status }
+	t.Cleanup(func() { checkTailscale = orig })
+}
+
+func TestSetupGuideMenu_TailscaleNotInstalled(t *testing.T) {
+	withFakeTailscale(t, tsNotInstalled)
+	m := &model{g: &config.Global{ApertureHost: "http://ai"}}
+	guide := m.setupGuideMenu()
+
+	if guide.Title != setupGuideTitle {
+		t.Errorf("title = %q, want %q", guide.Title, setupGuideTitle)
+	}
+	if !strings.Contains(guide.Preamble, "tailscale.com/download") {
+		t.Error("preamble missing Tailscale download URL")
+	}
+	actionCount := 0
+	for _, it := range guide.Items {
+		if it.Action != nil {
+			actionCount++
+		}
+	}
+	if actionCount != 3 {
+		t.Errorf("actionable items = %d, want 3", actionCount)
+	}
+}
+
+func TestSetupGuideMenu_TailscaleConnected(t *testing.T) {
+	withFakeTailscale(t, tsConnected)
+	m := &model{g: &config.Global{ApertureHost: "http://ai"}}
+	guide := m.setupGuideMenu()
+
+	if !strings.Contains(guide.Preamble, "aperture.tailscale.com") {
+		t.Error("preamble missing Aperture provisioning URL")
+	}
+	if !strings.Contains(guide.Preamble, "Tailscale is connected") {
+		t.Error("preamble missing 'Tailscale is connected' message")
+	}
+}
+
+func TestSetupGuideMenu_RetryAction(t *testing.T) {
+	withFakeTailscale(t, tsConnected)
+	m := &model{g: &config.Global{ApertureHost: "http://ai"}}
+	guide := m.setupGuideMenu()
+
+	for _, it := range guide.Items {
+		if it.Label == "Retry connection" {
+			res := it.Action()
+			if res.Cmd == nil {
+				t.Error("Retry action returned nil Cmd")
+			}
+			return
+		}
+	}
+	t.Error("Retry connection item not found")
+}
+
+func TestSetupGuideMenu_ConnectionOptionsAction(t *testing.T) {
+	withFakeTailscale(t, tsConnected)
+	m := &model{g: &config.Global{ApertureHost: "http://ai"}}
+	guide := m.setupGuideMenu()
+
+	for _, it := range guide.Items {
+		if it.Label == "Connection options" {
+			res := it.Action()
+			if res.Next == nil || res.Next.Title != endpointsTitle {
+				t.Errorf("Connection options should push endpoints menu, got %+v", res.Next)
+			}
+			return
+		}
+	}
+	t.Error("Connection options item not found")
+}
+
+func TestPreflightFailure_ShowsSetupGuide(t *testing.T) {
+	withFakeTailscale(t, tsNotInstalled)
+	withFakeClients(t, nil)
+	m := &model{
+		g:    &config.Global{ApertureHost: "http://ai"},
+		step: stepPreflight,
+	}
+	m.Update(preflightResult{err: fmt.Errorf("connection refused")})
+	if !m.forcedToEndpoint {
+		t.Error("forcedToEndpoint should be true")
+	}
+	if m.top() == nil || m.top().Title != setupGuideTitle {
+		title := ""
+		if m.top() != nil {
+			title = m.top().Title
+		}
+		t.Errorf("top menu title = %q, want %q", title, setupGuideTitle)
+	}
+}
+
+func TestEndpointActivationFailure_ShowsSetupGuide(t *testing.T) {
+	withFakeTailscale(t, tsConnected)
+	withFakeClients(t, nil)
+	m := &model{
+		g: &config.Global{ApertureHost: "http://ai"},
+	}
+	m.Update(endpointActivationResult{
+		endpoint: config.Endpoint{URL: "http://ai"},
+		err:      fmt.Errorf("timeout"),
+	})
+	if !m.forcedToEndpoint {
+		t.Error("forcedToEndpoint should be true")
+	}
+	if m.top() == nil || m.top().Title != setupGuideTitle {
+		title := ""
+		if m.top() != nil {
+			title = m.top().Title
+		}
+		t.Errorf("top menu title = %q, want %q", title, setupGuideTitle)
 	}
 }
 

@@ -49,8 +49,12 @@ type MenuItem struct {
 // Menu is a list of selectable items plus optional title and footer hint.
 type Menu struct {
 	Title string
-	Items []MenuItem
-	Hint  string
+	// Preamble is optional static text rendered (dimmed) between the title
+	// and the item list. Use it for informational paragraphs that are not
+	// selectable.
+	Preamble string
+	Items    []MenuItem
+	Hint     string
 	// OnBack, when non-nil, overrides the default "pop stack one level"
 	// behavior on Esc. Returning a nil tea.Cmd simply stays on this menu.
 	OnBack func() tea.Cmd

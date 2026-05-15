@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	rootTitle      = "Which editor do you want to use?"
-	endpointsTitle = "Aperture Endpoints"
+	rootTitle       = "Which editor do you want to use?"
+	endpointsTitle  = "Aperture Endpoints"
+	setupGuideTitle = "Getting Started"
 )
 
 // rootMenu is the top-level client picker. It shows installed clients in
@@ -224,22 +225,71 @@ func (m *model) endpointsMenu() *menu.Menu {
 		},
 	})
 
-	backHint := "Esc to go back"
-	if m.forcedToEndpoint {
-		backHint = "Esc to quit"
-	}
-
 	return &menu.Menu{
 		Title: endpointsTitle,
 		Items: items,
-		Hint:  "Enter to select · d to remove · a to add · " + backHint,
+		Hint:  "Enter to select · d to remove · a to add · Esc to go back",
 		OnBack: func() tea.Cmd {
-			if m.forcedToEndpoint {
-				return m.quitCmd()
+			if len(m.stack) <= 1 {
+				if m.forcedToEndpoint {
+					return m.quitCmd()
+				}
+				return nil
 			}
 			m.popOne()
 			return tea.ClearScreen
 		},
+	}
+}
+
+// setupGuideMenu is shown when the preflight check fails. It diagnoses
+// the user's Tailscale status and provides actionable guidance.
+func (m *model) setupGuideMenu() *menu.Menu {
+	ts := checkTailscale()
+
+	var preamble string
+	switch ts {
+	case tsNotInstalled:
+		preamble = "Aperture connects to your AI providers through Tailscale.\n\nTailscale is not installed.\nInstall it from: https://tailscale.com/download"
+	case tsNotRunning:
+		preamble = "Aperture connects to your AI providers through Tailscale.\n\nTailscale is installed but not running.\nStart Tailscale, then retry."
+	case tsNotConnected:
+		preamble = "Aperture connects to your AI providers through Tailscale.\n\nTailscale is not connected to a network.\nLog in with: tailscale up"
+	case tsConnected:
+		preamble = "Tailscale is connected.\n\nCould not reach Aperture at " + m.g.ApertureHost + ".\nEither:\n  - set up an Aperture instance at https://aperture.tailscale.com/\n  - or enter a different Aperture URL below"
+	}
+
+	return &menu.Menu{
+		Title:    setupGuideTitle,
+		Preamble: preamble,
+		Items: []menu.MenuItem{
+			{
+				Label: "Enter Aperture URL",
+				Action: func() menu.Result {
+					m.promptForInput("Aperture URL", "e.g. http://ai.example.com", func(v string) tea.Cmd {
+						v = strings.TrimSpace(v)
+						if !strings.Contains(v, "://") {
+							v = "http://" + v
+						}
+						_ = m.g.SetApertureHost(v)
+						return m.activateEndpointCmd(m.g.ActiveEndpoint())
+					})
+					return menu.Result{}
+				},
+			},
+			{
+				Label: "Retry connection",
+				Action: func() menu.Result {
+					return menu.Result{Cmd: m.activateEndpointCmd(m.g.ActiveEndpoint())}
+				},
+			},
+			{
+				Label:  "Connection options",
+				Action: func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
+			},
+		},
+		Hint:   "Enter to select · Esc to quit",
+		OnBack: func() tea.Cmd { return m.quitCmd() },
 	}
 }
 
