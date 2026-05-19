@@ -66,4 +66,3 @@ func TestStatusName(t *testing.T) {
 		}
 	}
 }
-
