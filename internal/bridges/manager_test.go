@@ -1,4 +1,4 @@
-package portals
+package bridges
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func (n *fakeNode) Close() error {
 }
 
 // activatedManager creates a Manager with a fake node wired to backend,
-// activates the portal once, and returns everything tests need.
+// activates the bridge once, and returns everything tests need.
 type activatedFixture struct {
 	manager  *Manager
 	node     *fakeNode
@@ -46,7 +46,7 @@ func activate(t *testing.T, backend *httptest.Server) activatedFixture {
 	t.Helper()
 	var f activatedFixture
 	f.manager = NewManager(false)
-	f.manager.newNode = func(_ config.Portal, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	f.manager.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		f.node = &fakeNode{backendAddr: backend.Listener.Addr().String()}
 		return f.node
 	}
@@ -54,7 +54,7 @@ func activate(t *testing.T, backend *httptest.Server) activatedFixture {
 	var err error
 	f.localURL, err = f.manager.Activate(
 		context.Background(),
-		config.Portal{ID: "portal-abcdef", Name: "Work"},
+		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture.tailnet",
 		func(line string) { f.logs = append(f.logs, line) },
 	)
@@ -155,7 +155,7 @@ func TestActivate(t *testing.T) {
 			},
 		},
 		{
-			name: "reuses existing portal without calling Up again",
+			name: "reuses existing bridge without calling Up again",
 			run: func(t *testing.T) {
 				backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 				defer backend.Close()
@@ -165,7 +165,7 @@ func TestActivate(t *testing.T) {
 
 				localURL2, err := f.manager.Activate(
 					context.Background(),
-					config.Portal{ID: "portal-abcdef", Name: "Work"},
+					config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 					"http://aperture.tailnet",
 					nil,
 				)

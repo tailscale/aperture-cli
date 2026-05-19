@@ -108,8 +108,8 @@ func (m *model) settingsMenu() *menu.Menu {
 		Title: "Settings",
 		Items: []menu.MenuItem{
 			{
-				Label:  "Portals",
-				Action: func() menu.Result { return menu.Result{Next: m.portalsMenu()} },
+				Label:  "Bridges",
+				Action: func() menu.Result { return menu.Result{Next: m.bridgesMenu()} },
 			},
 			{
 				Label:  "Aperture Endpoints",
@@ -131,14 +131,14 @@ func (m *model) settingsMenu() *menu.Menu {
 	}
 }
 
-func (m *model) portalsMenu() *menu.Menu {
+func (m *model) bridgesMenu() *menu.Menu {
 	items := []menu.MenuItem{
 		{
-			Label:    "Portals connect Aperture through an embedded Tailscale node, so this host does not need tailscaled running.",
+			Label:    "Bridges connect Aperture through an embedded Tailscale node, so this host does not need tailscaled running.",
 			Disabled: true,
 		},
 	}
-	for _, p := range m.g.Settings.Portals {
+	for _, p := range m.g.Settings.Bridges {
 		p := p
 		items = append(items, menu.MenuItem{
 			Label:       p.Name,
@@ -151,11 +151,11 @@ func (m *model) portalsMenu() *menu.Menu {
 		Shortcut: "a",
 		Hidden:   true,
 		Action: func() menu.Result {
-			m.promptForInput("Add Portal:", "Name", func(v string) tea.Cmd {
-				if _, err := m.g.AddPortal(v); err != nil {
+			m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+				if _, err := m.g.AddBridge(v); err != nil {
 					return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 				}
-				m.refreshPortalsMenu()
+				m.refreshBridgesMenu()
 				return nil
 			})
 			return menu.Result{}
@@ -167,17 +167,17 @@ func (m *model) portalsMenu() *menu.Menu {
 		Hidden:   true,
 		Action: func() menu.Result {
 			idx := m.cursor() - 1
-			if idx < 0 || idx >= len(m.g.Settings.Portals) {
+			if idx < 0 || idx >= len(m.g.Settings.Bridges) {
 				return menu.Result{}
 			}
-			if err := m.g.RemovePortal(m.g.Settings.Portals[idx].ID); err != nil {
+			if err := m.g.RemoveBridge(m.g.Settings.Bridges[idx].ID); err != nil {
 				return errResult(err.Error())
 			}
-			return menu.Result{Replace: m.portalsMenu()}
+			return menu.Result{Replace: m.bridgesMenu()}
 		},
 	})
 	return &menu.Menu{
-		Title: "Portals",
+		Title: "Bridges",
 		Items: items,
 		Hint:  "d to remove · a to add · Esc to go back",
 	}
@@ -309,40 +309,40 @@ func (m *model) addEndpointConnectionMenu() *menu.Menu {
 				},
 			},
 			{
-				Label:  "Portal",
-				Action: func() menu.Result { return menu.Result{Next: m.endpointPortalMenu()} },
+				Label:  "Bridge",
+				Action: func() menu.Result { return menu.Result{Next: m.endpointBridgeMenu()} },
 			},
 		},
 		Hint: "Enter to select · Esc to go back",
 	}
 }
 
-func (m *model) endpointPortalMenu() *menu.Menu {
-	if len(m.g.Settings.Portals) == 0 {
+func (m *model) endpointBridgeMenu() *menu.Menu {
+	if len(m.g.Settings.Bridges) == 0 {
 		return &menu.Menu{
-			Title: "Choose a portal",
+			Title: "Choose a bridge",
 			Items: []menu.MenuItem{
 				{
-					Label:    "No portals configured.",
+					Label:    "No bridges configured.",
 					Disabled: true,
 				},
 				{
-					Label:  "Add Portal",
-					Action: func() menu.Result { return menu.Result{Next: m.portalsMenu()} },
+					Label:  "Add Bridge",
+					Action: func() menu.Result { return menu.Result{Next: m.bridgesMenu()} },
 				},
 			},
-			Hint: "Enter to add a portal · Esc to go back",
+			Hint: "Enter to add a bridge · Esc to go back",
 		}
 	}
-	items := make([]menu.MenuItem, 0, len(m.g.Settings.Portals))
-	for _, p := range m.g.Settings.Portals {
+	items := make([]menu.MenuItem, 0, len(m.g.Settings.Bridges))
+	for _, p := range m.g.Settings.Bridges {
 		p := p
 		items = append(items, menu.MenuItem{
 			Label:       p.Name,
 			Description: p.ID,
 			Action: func() menu.Result {
-				m.promptForInput("Add Portal Endpoint:", "URL", func(v string) tea.Cmd {
-					_ = m.g.UpsertEndpoint(config.Endpoint{URL: strings.TrimSpace(v), PortalID: p.ID})
+				m.promptForInput("Add Bridge Endpoint:", "URL", func(v string) tea.Cmd {
+					_ = m.g.UpsertEndpoint(config.Endpoint{URL: strings.TrimSpace(v), BridgeID: p.ID})
 					m.refreshEndpointsMenu()
 					return nil
 				})
@@ -351,20 +351,20 @@ func (m *model) endpointPortalMenu() *menu.Menu {
 		})
 	}
 	return &menu.Menu{
-		Title: "Choose a portal",
+		Title: "Choose a bridge",
 		Items: items,
 		Hint:  "Enter to select · Esc to go back",
 	}
 }
 
 func (m *model) endpointLabel(ep config.Endpoint) string {
-	if ep.PortalID == "" {
+	if ep.BridgeID == "" {
 		return ep.URL + " (direct)"
 	}
-	if p, ok := m.g.Portal(ep.PortalID); ok {
+	if p, ok := m.g.Bridge(ep.BridgeID); ok {
 		return ep.URL + " via " + p.Name
 	}
-	return ep.URL + " via " + ep.PortalID
+	return ep.URL + " via " + ep.BridgeID
 }
 
 // installAgentsMenu lists uninstalled clients and confirms/runs each install.

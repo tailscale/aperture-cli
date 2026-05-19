@@ -239,11 +239,11 @@ func TestSettingsMenu_ToggleYolo(t *testing.T) {
 	}
 }
 
-func TestSettingsMenu_PortalsFirst(t *testing.T) {
+func TestSettingsMenu_BridgesFirst(t *testing.T) {
 	m := &model{g: &config.Global{}, step: stepMenu}
 	menu := m.settingsMenu()
-	if len(menu.Items) == 0 || menu.Items[0].Label != "Portals" {
-		t.Fatalf("first settings item = %+v, want Portals", menu.Items)
+	if len(menu.Items) == 0 || menu.Items[0].Label != "Bridges" {
+		t.Fatalf("first settings item = %+v, want Bridges", menu.Items)
 	}
 }
 
@@ -366,13 +366,13 @@ func TestEndpointActivationFailure_ShowsSetupGuide(t *testing.T) {
 	}
 }
 
-func TestEndpointLabel_ShowsPortal(t *testing.T) {
+func TestEndpointLabel_ShowsBridge(t *testing.T) {
 	m := &model{g: &config.Global{
 		Settings: config.Settings{
-			Portals: []config.Portal{{ID: "portal-abcdef", Name: "Work"}},
+			Bridges: []config.Bridge{{ID: "bridge-abcdef", Name: "Work"}},
 		},
 	}}
-	got := m.endpointLabel(config.Endpoint{URL: "http://ai", PortalID: "portal-abcdef"})
+	got := m.endpointLabel(config.Endpoint{URL: "http://ai", BridgeID: "bridge-abcdef"})
 	if got != "http://ai via Work" {
 		t.Errorf("endpointLabel = %q", got)
 	}

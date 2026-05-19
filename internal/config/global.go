@@ -59,7 +59,7 @@ func (g *Global) SetYolo(on bool) error {
 }
 
 // ActiveEndpoint returns the persisted endpoint currently selected by the
-// user. The runtime ApertureHost may differ for portal endpoints because it
+// user. The runtime ApertureHost may differ for bridge endpoints because it
 // points at the local reverse proxy.
 func (g *Global) ActiveEndpoint() Endpoint {
 	if len(g.Settings.Endpoints) == 0 {
@@ -70,7 +70,7 @@ func (g *Global) ActiveEndpoint() Endpoint {
 
 // SetActiveEndpoint rotates the endpoint to the front of the endpoint list
 // (adding it if missing), updates ApertureHost to the endpoint URL, and
-// persists. Portal activation later rewrites ApertureHost to localhost.
+// persists. Bridge activation later rewrites ApertureHost to localhost.
 func (g *Global) SetActiveEndpoint(ep Endpoint) error {
 	g.ApertureHost = ep.URL
 	eps := []Endpoint{ep}
@@ -118,49 +118,49 @@ func (g *Global) RemoveEndpoint(idx int) error {
 	return SaveSettings(g.Settings)
 }
 
-// AddPortal creates, saves, and returns a portal with a generated stable ID.
-func (g *Global) AddPortal(name string) (Portal, error) {
+// AddBridge creates, saves, and returns a bridge with a generated stable ID.
+func (g *Global) AddBridge(name string) (Bridge, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return Portal{}, fmt.Errorf("portal name is empty")
+		return Bridge{}, fmt.Errorf("bridge name is empty")
 	}
-	id, err := newPortalID(g.Settings.Portals)
+	id, err := newBridgeID(g.Settings.Bridges)
 	if err != nil {
-		return Portal{}, err
+		return Bridge{}, err
 	}
-	p := Portal{ID: id, Name: name}
-	g.Settings.Portals = append(g.Settings.Portals, p)
+	p := Bridge{ID: id, Name: name}
+	g.Settings.Bridges = append(g.Settings.Bridges, p)
 	if err := SaveSettings(g.Settings); err != nil {
-		return Portal{}, err
+		return Bridge{}, err
 	}
 	return p, nil
 }
 
-// RemovePortal deletes a portal if no endpoint still references it.
-func (g *Global) RemovePortal(id string) error {
+// RemoveBridge deletes a bridge if no endpoint still references it.
+func (g *Global) RemoveBridge(id string) error {
 	for _, ep := range g.Settings.Endpoints {
-		if ep.PortalID == id {
-			return fmt.Errorf("portal is used by endpoint %s", ep.URL)
+		if ep.BridgeID == id {
+			return fmt.Errorf("bridge is used by endpoint %s", ep.URL)
 		}
 	}
-	for i, p := range g.Settings.Portals {
+	for i, p := range g.Settings.Bridges {
 		if p.ID != id {
 			continue
 		}
-		g.Settings.Portals = append(g.Settings.Portals[:i], g.Settings.Portals[i+1:]...)
+		g.Settings.Bridges = append(g.Settings.Bridges[:i], g.Settings.Bridges[i+1:]...)
 		return SaveSettings(g.Settings)
 	}
 	return nil
 }
 
-// Portal returns the configured portal with id.
-func (g *Global) Portal(id string) (Portal, bool) {
-	for _, p := range g.Settings.Portals {
+// Bridge returns the configured bridge with id.
+func (g *Global) Bridge(id string) (Bridge, bool) {
+	for _, p := range g.Settings.Bridges {
 		if p.ID == id {
 			return p, true
 		}
 	}
-	return Portal{}, false
+	return Bridge{}, false
 }
 
 // RecordLaunch stores the launch record to disk and updates the in-memory copy.

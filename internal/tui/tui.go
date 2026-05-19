@@ -17,10 +17,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
-	"github.com/tailscale/aperture-cli/internal/portals"
 )
 
 type step int
@@ -47,11 +47,11 @@ var (
 // NewModel returns the TUI model. g holds the persisted launcher state
 // (settings, endpoints, last launch). buildVersion is shown at the bottom
 // of the client picker.
-func NewModel(g *config.Global, buildVersion string, portalManager *portals.Manager) tea.Model {
+func NewModel(g *config.Global, buildVersion string, bridgeManager *bridges.Manager) tea.Model {
 	return &model{
 		g:             g,
 		buildVersion:  buildVersion,
-		portalManager: portalManager,
+		bridgeManager: bridgeManager,
 		step:          stepPreflight,
 	}
 }
@@ -59,7 +59,7 @@ func NewModel(g *config.Global, buildVersion string, portalManager *portals.Mana
 type model struct {
 	g             *config.Global
 	buildVersion  string
-	portalManager *portals.Manager
+	bridgeManager *bridges.Manager
 
 	step step
 
@@ -86,9 +86,9 @@ type model struct {
 	preflightErr     string
 	forcedToEndpoint bool // true when preflight failure dropped user on endpoints menu
 	preflightLabel   string
-	portalLogCh      chan string
-	portalLogs       []string
-	portalCancel     context.CancelFunc
+	bridgeLogCh      chan string
+	bridgeLogs       []string
+	bridgeCancel     context.CancelFunc
 }
 
 func (m *model) Init() tea.Cmd {
@@ -109,8 +109,8 @@ type endpointActivationResult struct {
 	err       error
 }
 
-type portalLogMsg string
-type portalLogDoneMsg struct{}
+type bridgeLogMsg string
+type bridgeLogDoneMsg struct{}
 type quitMsg struct{ Err error }
 
 func runPreflight(host string) tea.Cmd {
@@ -145,14 +145,14 @@ func fetchProviders(host string) ([]config.ProviderInfo, error) {
 func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 	m.step = stepPreflight
 	m.preflightErr = ""
-	m.portalLogs = nil
-	m.portalLogCh = nil
-	if m.portalCancel != nil {
-		m.portalCancel()
-		m.portalCancel = nil
+	m.bridgeLogs = nil
+	m.bridgeLogCh = nil
+	if m.bridgeCancel != nil {
+		m.bridgeCancel()
+		m.bridgeCancel = nil
 	}
 
-	if ep.PortalID == "" {
+	if ep.BridgeID == "" {
 		m.preflightLabel = "Checking " + ep.URL + " ..."
 		return func() tea.Msg {
 			provs, err := fetchProviders(ep.URL)
@@ -160,36 +160,36 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 		}
 	}
 
-	portal, ok := m.g.Portal(ep.PortalID)
+	bridge, ok := m.g.Bridge(ep.BridgeID)
 	if !ok {
 		m.preflightLabel = "Checking " + ep.URL + " ..."
 		return func() tea.Msg {
 			return endpointActivationResult{
 				endpoint: ep,
 				host:     ep.URL,
-				err:      fmt.Errorf("portal %s is not configured", ep.PortalID),
+				err:      fmt.Errorf("bridge %s is not configured", ep.BridgeID),
 			}
 		}
 	}
-	if m.portalManager == nil {
+	if m.bridgeManager == nil {
 		return func() tea.Msg {
 			return endpointActivationResult{
 				endpoint: ep,
 				host:     ep.URL,
-				err:      fmt.Errorf("portal manager is not configured"),
+				err:      fmt.Errorf("bridge manager is not configured"),
 			}
 		}
 	}
 
 	ch := make(chan string, 32)
 	ctx, cancel := context.WithCancel(context.Background())
-	m.portalLogCh = ch
-	m.portalCancel = cancel
-	m.preflightLabel = "Connecting portal " + portal.Name + " to " + ep.URL + " ..."
+	m.bridgeLogCh = ch
+	m.bridgeCancel = cancel
+	m.preflightLabel = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
 	activate := func() tea.Msg {
 		defer cancel()
 		defer close(ch)
-		localURL, err := m.portalManager.Activate(ctx, portal, ep.URL, func(line string) {
+		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, func(line string) {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				return
@@ -205,30 +205,30 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 		provs, err := fetchProviders(localURL)
 		return endpointActivationResult{endpoint: ep, host: localURL, providers: provs, err: err}
 	}
-	return tea.Batch(activate, waitPortalLog(ch))
+	return tea.Batch(activate, waitBridgeLog(ch))
 }
 
-func waitPortalLog(ch <-chan string) tea.Cmd {
+func waitBridgeLog(ch <-chan string) tea.Cmd {
 	return func() tea.Msg {
 		line, ok := <-ch
 		if !ok {
-			return portalLogDoneMsg{}
+			return bridgeLogDoneMsg{}
 		}
-		return portalLogMsg(line)
+		return bridgeLogMsg(line)
 	}
 }
 
 func (m *model) quitCmd() tea.Cmd {
-	cancel := m.portalCancel
-	portalManager := m.portalManager
+	cancel := m.bridgeCancel
+	bridgeManager := m.bridgeManager
 	return func() tea.Msg {
 		if cancel != nil {
 			cancel()
 		}
-		if portalManager == nil {
+		if bridgeManager == nil {
 			return quitMsg{}
 		}
-		return quitMsg{Err: portalManager.Close()}
+		return quitMsg{Err: bridgeManager.Close()}
 	}
 }
 
@@ -255,7 +255,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case endpointActivationResult:
-		m.portalCancel = nil
+		m.bridgeCancel = nil
 		if msg.err != nil {
 			m.preflightErr = msg.err.Error()
 			m.forcedToEndpoint = true
@@ -272,23 +272,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetStack(m.rootMenu())
 		return m, tea.ClearScreen
 
-	case portalLogMsg:
-		m.portalLogs = append(m.portalLogs, string(msg))
-		if len(m.portalLogs) > 12 {
-			m.portalLogs = m.portalLogs[len(m.portalLogs)-12:]
+	case bridgeLogMsg:
+		m.bridgeLogs = append(m.bridgeLogs, string(msg))
+		if len(m.bridgeLogs) > 12 {
+			m.bridgeLogs = m.bridgeLogs[len(m.bridgeLogs)-12:]
 		}
-		if m.portalLogCh != nil {
-			return m, waitPortalLog(m.portalLogCh)
+		if m.bridgeLogCh != nil {
+			return m, waitBridgeLog(m.bridgeLogCh)
 		}
 		return m, nil
 
-	case portalLogDoneMsg:
-		m.portalLogCh = nil
+	case bridgeLogDoneMsg:
+		m.bridgeLogCh = nil
 		return m, nil
 
 	case quitMsg:
 		if msg.Err != nil {
-			m.errMsg = "Error shutting down portals: " + msg.Err.Error()
+			m.errMsg = "Error shutting down bridges: " + msg.Err.Error()
 			m.step = stepError
 			return m, nil
 		}
@@ -536,7 +536,7 @@ func (m *model) View() string {
 		}
 		var sb strings.Builder
 		sb.WriteString(dotYellow + " " + label + "\n")
-		for _, line := range m.portalLogs {
+		for _, line := range m.bridgeLogs {
 			sb.WriteString(dimStyle.Render("  " + line))
 			sb.WriteString("\n")
 		}
@@ -833,14 +833,14 @@ func (m *model) refreshEndpointsMenu() {
 	m.refreshMenuByTitle(endpointsTitle, m.endpointsMenu())
 }
 
-func (m *model) refreshPortalsMenu() {
+func (m *model) refreshBridgesMenu() {
 	for i := range m.stack {
-		if m.stack[i].Title == "Choose a portal" {
-			m.stack[i] = m.endpointPortalMenu()
+		if m.stack[i].Title == "Choose a bridge" {
+			m.stack[i] = m.endpointBridgeMenu()
 			m.cursors[i] = 0
 		}
 	}
-	m.refreshMenuByTitle("Portals", m.portalsMenu())
+	m.refreshMenuByTitle("Bridges", m.bridgesMenu())
 }
 
 func (m *model) refreshMenuByTitle(title string, next *menu.Menu) {

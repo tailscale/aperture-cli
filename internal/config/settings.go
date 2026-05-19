@@ -21,20 +21,20 @@ const DefaultLocation = "http://ai"
 // Endpoint holds the URL and per-endpoint configuration for an Aperture proxy.
 type Endpoint struct {
 	URL      string `json:"url"`
-	PortalID string `json:"portalId,omitempty"`
+	BridgeID string `json:"bridgeId,omitempty"`
 }
 
-// Portal is an embedded tsnet node used to reach Aperture without requiring
+// Bridge is an embedded tsnet node used to reach Aperture without requiring
 // Tailscale to run on the host.
-type Portal struct {
+type Bridge struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
 // Settings holds persistent launcher configuration managed by the user.
 type Settings struct {
-	// Portals is the set of embedded tsnet nodes the user has configured.
-	Portals []Portal `json:"portals,omitempty"`
+	// Bridges is the set of embedded tsnet nodes the user has configured.
+	Bridges []Bridge `json:"bridges,omitempty"`
 
 	// Endpoints is the ordered list of Aperture proxy endpoints.
 	// The first entry is used as the active endpoint on startup.
@@ -98,30 +98,30 @@ func defaultSettings() Settings {
 	}
 }
 
-// PortalStateDir returns the tsnet state directory for a portal ID.
-func PortalStateDir(id string) (string, error) {
+// BridgeStateDir returns the tsnet state directory for a bridge ID.
+func BridgeStateDir(id string) (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	suffix := strings.TrimPrefix(id, "portal-")
+	suffix := strings.TrimPrefix(id, "bridge-")
 	if suffix == "" {
-		return "", fmt.Errorf("portal ID is empty")
+		return "", fmt.Errorf("bridge ID is empty")
 	}
-	return filepath.Join(dir, "aperture", "portals", suffix), nil
+	return filepath.Join(dir, "aperture", "bridges", suffix), nil
 }
 
 func sameEndpoint(a, b Endpoint) bool {
-	return a.URL == b.URL && a.PortalID == b.PortalID
+	return a.URL == b.URL && a.BridgeID == b.BridgeID
 }
 
-func newPortalID(existing []Portal) (string, error) {
+func newBridgeID(existing []Bridge) (string, error) {
 	for range 10 {
 		var b [3]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			return "", err
 		}
-		id := "portal-" + hex.EncodeToString(b[:])
+		id := "bridge-" + hex.EncodeToString(b[:])
 		found := false
 		for _, p := range existing {
 			if p.ID == id {
@@ -133,5 +133,5 @@ func newPortalID(existing []Portal) (string, error) {
 			return id, nil
 		}
 	}
-	return "", fmt.Errorf("could not generate a unique portal ID")
+	return "", fmt.Errorf("could not generate a unique bridge ID")
 }

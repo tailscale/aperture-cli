@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/config"
-	"github.com/tailscale/aperture-cli/internal/portals"
 	"github.com/tailscale/aperture-cli/internal/profiles"
 	"github.com/tailscale/aperture-cli/internal/tui"
 
@@ -129,16 +129,16 @@ func main() {
 	// Register Claude Desktop on supported platforms (darwin, windows).
 	profiles.RegisterIfSupported()
 
-	portalManager := portals.NewManager(g.Debug)
-	p := tea.NewProgram(tui.NewModel(g, buildVersion, portalManager))
+	bridgeManager := bridges.NewManager(g.Debug)
+	p := tea.NewProgram(tui.NewModel(g, buildVersion, bridgeManager))
 
 	var exitCode int
 	if _, err := p.Run(); err != nil {
 		slog.Error("launcher error", "err", err)
 		exitCode = 1
 	}
-	if err := portalManager.Close(); err != nil {
-		slog.Error("shutting down portals", "err", err)
+	if err := bridgeManager.Close(); err != nil {
+		slog.Error("shutting down bridges", "err", err)
 		exitCode = 1
 	}
 	if exitCode != 0 {
