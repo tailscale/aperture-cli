@@ -42,7 +42,11 @@ func TestLaunchState_LegacyMigration(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	// Seed a launcher.json in the old shape that used lastProfileName.
-	dir := filepath.Join(tmp, ".config", "aperture")
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(cfgDir, "aperture")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -75,9 +79,12 @@ func TestSettings_RoundTrip(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	want := config.Settings{
+		Bridges: []config.Bridge{
+			{ID: "bridge-abcdef", Name: "Work"},
+		},
 		Endpoints: []config.Endpoint{
 			{URL: "http://ai"},
-			{URL: "http://aperture.example.com"},
+			{URL: "http://aperture.example.com", BridgeID: "bridge-abcdef"},
 		},
 		YoloMode: true,
 	}
@@ -91,6 +98,12 @@ func TestSettings_RoundTrip(t *testing.T) {
 	}
 	if len(got.Endpoints) != 2 || got.Endpoints[0].URL != "http://ai" {
 		t.Errorf("endpoints = %+v", got.Endpoints)
+	}
+	if len(got.Bridges) != 1 || got.Bridges[0].ID != "bridge-abcdef" {
+		t.Errorf("bridges = %+v", got.Bridges)
+	}
+	if got.Endpoints[1].BridgeID != "bridge-abcdef" {
+		t.Errorf("bridge endpoint = %+v", got.Endpoints[1])
 	}
 	if !got.YoloMode {
 		t.Error("YoloMode = false, want true")
@@ -122,6 +135,49 @@ func TestGlobal_SetApertureHost_RotatesToFront(t *testing.T) {
 	}
 	if len(g.Settings.Endpoints) != 3 {
 		t.Errorf("endpoints len = %d, want 3", len(g.Settings.Endpoints))
+	}
+}
+
+func TestGlobal_SetActiveEndpoint_DistinguishesBridge(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	g := &config.Global{
+		Settings: config.Settings{
+			Endpoints: []config.Endpoint{
+				{URL: "http://ai"},
+				{URL: "http://ai", BridgeID: "bridge-abcdef"},
+			},
+		},
+	}
+	if err := g.SetActiveEndpoint(config.Endpoint{URL: "http://ai", BridgeID: "bridge-abcdef"}); err != nil {
+		t.Fatal(err)
+	}
+	if g.Settings.Endpoints[0].BridgeID != "bridge-abcdef" {
+		t.Errorf("front endpoint = %+v, want bridge endpoint", g.Settings.Endpoints[0])
+	}
+	if len(g.Settings.Endpoints) != 2 {
+		t.Errorf("endpoints len = %d, want 2", len(g.Settings.Endpoints))
+	}
+}
+
+func TestBridgeStateDir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	got, err := config.BridgeStateDir("bridge-abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(cfgDir, "aperture", "bridges", "abcdef")
+	if got != want {
+		t.Errorf("BridgeStateDir = %q, want %q", got, want)
 	}
 }
 

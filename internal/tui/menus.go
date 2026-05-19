@@ -8,12 +8,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/clients"
+	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
 )
 
 const (
-	rootTitle      = "Which editor do you want to use?"
-	endpointsTitle = "Aperture Endpoints"
+	rootTitle       = "Which editor do you want to use?"
+	endpointsTitle  = "Aperture Endpoints"
+	setupGuideTitle = "Getting Started"
 )
 
 // rootMenu is the top-level client picker. It shows installed clients in
@@ -106,6 +108,10 @@ func (m *model) settingsMenu() *menu.Menu {
 		Title: "Settings",
 		Items: []menu.MenuItem{
 			{
+				Label:  "Bridges",
+				Action: func() menu.Result { return menu.Result{Next: m.bridgesMenu()} },
+			},
+			{
 				Label:  "Aperture Endpoints",
 				Action: func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
 			},
@@ -125,43 +131,84 @@ func (m *model) settingsMenu() *menu.Menu {
 	}
 }
 
-// endpointsMenu lists configured endpoints with add/delete affordances.
-// Selecting an entry rotates it to the front and re-runs preflight.
-func (m *model) endpointsMenu() *menu.Menu {
-	items := make([]menu.MenuItem, 0, len(m.g.Settings.Endpoints)+3)
-	for i, ep := range m.g.Settings.Endpoints {
-		url := ep.URL
-		label := url
-		if i == 0 {
-			label = greenStyle.Render(url + " (active)")
-		}
+func (m *model) bridgesMenu() *menu.Menu {
+	items := []menu.MenuItem{
+		{
+			Label:    "Bridges connect Aperture through an embedded Tailscale node, so this host does not need tailscaled running.",
+			Disabled: true,
+		},
+	}
+	for _, p := range m.g.Settings.Bridges {
+		p := p
 		items = append(items, menu.MenuItem{
-			Label: label,
-			Action: func() menu.Result {
-				if err := m.g.SetApertureHost(url); err != nil {
-					return errResult(err.Error())
-				}
-				m.step = stepPreflight
-				return menu.Result{Cmd: runPreflight(url)}
-			},
+			Label:       p.Name,
+			Description: p.ID,
+			Action:      func() menu.Result { return menu.Result{} },
 		})
 	}
-	// Hidden: "a" prompts for a new endpoint. Surfaced via the footer hint.
 	items = append(items, menu.MenuItem{
 		Label:    "add",
 		Shortcut: "a",
 		Hidden:   true,
 		Action: func() menu.Result {
-			m.promptForInput("Add Endpoint:", "", func(v string) tea.Cmd {
-				_ = m.g.UpsertEndpoint(v)
-				if len(m.stack) > 0 {
-					m.stack[len(m.stack)-1] = m.endpointsMenu()
-					m.cursors[len(m.cursors)-1] = 0
+			m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+				if _, err := m.g.AddBridge(v); err != nil {
+					return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 				}
+				m.refreshBridgesMenu()
 				return nil
 			})
 			return menu.Result{}
 		},
+	})
+	items = append(items, menu.MenuItem{
+		Label:    "delete",
+		Shortcut: "d",
+		Hidden:   true,
+		Action: func() menu.Result {
+			idx := m.cursor() - 1
+			if idx < 0 || idx >= len(m.g.Settings.Bridges) {
+				return menu.Result{}
+			}
+			if err := m.g.RemoveBridge(m.g.Settings.Bridges[idx].ID); err != nil {
+				return errResult(err.Error())
+			}
+			return menu.Result{Replace: m.bridgesMenu()}
+		},
+	})
+	return &menu.Menu{
+		Title: "Bridges",
+		Items: items,
+		Hint:  "d to remove · a to add · Esc to go back",
+	}
+}
+
+// endpointsMenu lists configured endpoints with add/delete affordances.
+// Selecting an entry rotates it to the front and re-runs preflight.
+func (m *model) endpointsMenu() *menu.Menu {
+	items := make([]menu.MenuItem, 0, len(m.g.Settings.Endpoints)+3)
+	for i, ep := range m.g.Settings.Endpoints {
+		ep := ep
+		label := m.endpointLabel(ep)
+		if i == 0 {
+			label = greenStyle.Render(label + " (active)")
+		}
+		items = append(items, menu.MenuItem{
+			Label: label,
+			Action: func() menu.Result {
+				if err := m.g.SetActiveEndpoint(ep); err != nil {
+					return errResult(err.Error())
+				}
+				return menu.Result{Cmd: m.activateEndpointCmd(ep)}
+			},
+		})
+	}
+	// Hidden: "a" opens the endpoint connection flow. Surfaced via the footer hint.
+	items = append(items, menu.MenuItem{
+		Label:    "add",
+		Shortcut: "a",
+		Hidden:   true,
+		Action:   func() menu.Result { return menu.Result{Next: m.addEndpointConnectionMenu()} },
 	})
 	// Hidden: "d" deletes the row under the cursor.
 	items = append(items, menu.MenuItem{
@@ -178,23 +225,146 @@ func (m *model) endpointsMenu() *menu.Menu {
 		},
 	})
 
-	backHint := "Esc to go back"
-	if m.forcedToEndpoint {
-		backHint = "Esc to quit"
-	}
-
 	return &menu.Menu{
 		Title: endpointsTitle,
 		Items: items,
-		Hint:  "Enter to select · d to remove · a to add · " + backHint,
+		Hint:  "Enter to select · d to remove · a to add · Esc to go back",
 		OnBack: func() tea.Cmd {
-			if m.forcedToEndpoint {
-				return tea.Quit
+			if len(m.stack) <= 1 {
+				if m.forcedToEndpoint {
+					return m.quitCmd()
+				}
+				return nil
 			}
 			m.popOne()
 			return tea.ClearScreen
 		},
 	}
+}
+
+// setupGuideMenu is shown when the preflight check fails. It diagnoses
+// the user's Tailscale status and provides actionable guidance.
+func (m *model) setupGuideMenu() *menu.Menu {
+	ts := checkTailscale()
+
+	var preamble string
+	switch ts {
+	case tsNotInstalled:
+		preamble = "Aperture connects to your AI providers through Tailscale.\n\nTailscale is not installed.\nInstall it from: https://tailscale.com/download"
+	case tsNotRunning:
+		preamble = "Aperture connects to your AI providers through Tailscale.\n\nTailscale is installed but not running.\nStart Tailscale, then retry."
+	case tsNotConnected:
+		preamble = "Aperture connects to your AI providers through Tailscale.\n\nTailscale is not connected to a network.\nLog in with: tailscale up"
+	case tsConnected:
+		preamble = "Tailscale is connected.\n\nCould not reach Aperture at " + m.g.ApertureHost + ".\nEither:\n  - set up an Aperture instance at https://aperture.tailscale.com/\n  - or enter a different Aperture URL below"
+	}
+
+	return &menu.Menu{
+		Title:    setupGuideTitle,
+		Preamble: preamble,
+		Items: []menu.MenuItem{
+			{
+				Label: "Enter Aperture URL",
+				Action: func() menu.Result {
+					m.promptForInput("Aperture URL", "e.g. http://ai.example.com", func(v string) tea.Cmd {
+						v = strings.TrimSpace(v)
+						if !strings.Contains(v, "://") {
+							v = "http://" + v
+						}
+						_ = m.g.SetApertureHost(v)
+						return m.activateEndpointCmd(m.g.ActiveEndpoint())
+					})
+					return menu.Result{}
+				},
+			},
+			{
+				Label: "Retry connection",
+				Action: func() menu.Result {
+					return menu.Result{Cmd: m.activateEndpointCmd(m.g.ActiveEndpoint())}
+				},
+			},
+			{
+				Label:  "Connection options",
+				Action: func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
+			},
+		},
+		Hint:   "Enter to select · Esc to quit",
+		OnBack: func() tea.Cmd { return m.quitCmd() },
+	}
+}
+
+func (m *model) addEndpointConnectionMenu() *menu.Menu {
+	return &menu.Menu{
+		Title: "Endpoint Connection",
+		Items: []menu.MenuItem{
+			{
+				Label: "Direct",
+				Action: func() menu.Result {
+					m.promptForInput("Add Direct Endpoint:", "URL", func(v string) tea.Cmd {
+						_ = m.g.UpsertEndpoint(config.Endpoint{URL: strings.TrimSpace(v)})
+						m.refreshEndpointsMenu()
+						return nil
+					})
+					return menu.Result{}
+				},
+			},
+			{
+				Label:  "Bridge",
+				Action: func() menu.Result { return menu.Result{Next: m.endpointBridgeMenu()} },
+			},
+		},
+		Hint: "Enter to select · Esc to go back",
+	}
+}
+
+func (m *model) endpointBridgeMenu() *menu.Menu {
+	if len(m.g.Settings.Bridges) == 0 {
+		return &menu.Menu{
+			Title: "Choose a bridge",
+			Items: []menu.MenuItem{
+				{
+					Label:    "No bridges configured.",
+					Disabled: true,
+				},
+				{
+					Label:  "Add Bridge",
+					Action: func() menu.Result { return menu.Result{Next: m.bridgesMenu()} },
+				},
+			},
+			Hint: "Enter to add a bridge · Esc to go back",
+		}
+	}
+	items := make([]menu.MenuItem, 0, len(m.g.Settings.Bridges))
+	for _, p := range m.g.Settings.Bridges {
+		p := p
+		items = append(items, menu.MenuItem{
+			Label:       p.Name,
+			Description: p.ID,
+			Action: func() menu.Result {
+				m.promptForInput("Add Bridge Endpoint:", "URL", func(v string) tea.Cmd {
+					_ = m.g.UpsertEndpoint(config.Endpoint{URL: strings.TrimSpace(v), BridgeID: p.ID})
+					m.refreshEndpointsMenu()
+					return nil
+				})
+				return menu.Result{}
+			},
+		})
+	}
+	return &menu.Menu{
+		Title: "Choose a bridge",
+		Items: items,
+		Hint:  "Enter to select · Esc to go back",
+	}
+}
+
+func (m *model) endpointLabel(ep config.Endpoint) string {
+	if ep.BridgeID == "" {
+		return ep.URL + " (direct)"
+	}
+	if p, ok := m.g.Bridge(ep.BridgeID); ok {
+		return ep.URL + " via " + p.Name
+	}
+	return ep.URL + " via " + ep.BridgeID
 }
 
 // installAgentsMenu lists uninstalled clients and confirms/runs each install.

@@ -7,6 +7,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
@@ -45,17 +47,19 @@ var (
 // NewModel returns the TUI model. g holds the persisted launcher state
 // (settings, endpoints, last launch). buildVersion is shown at the bottom
 // of the client picker.
-func NewModel(g *config.Global, buildVersion string) tea.Model {
+func NewModel(g *config.Global, buildVersion string, bridgeManager *bridges.Manager) tea.Model {
 	return &model{
-		g:            g,
-		buildVersion: buildVersion,
-		step:         stepPreflight,
+		g:             g,
+		buildVersion:  buildVersion,
+		bridgeManager: bridgeManager,
+		step:          stepPreflight,
 	}
 }
 
 type model struct {
-	g            *config.Global
-	buildVersion string
+	g             *config.Global
+	buildVersion  string
+	bridgeManager *bridges.Manager
 
 	step step
 
@@ -81,10 +85,14 @@ type model struct {
 	// Preflight state.
 	preflightErr     string
 	forcedToEndpoint bool // true when preflight failure dropped user on endpoints menu
+	preflightLabel   string
+	bridgeLogCh      chan string
+	bridgeLogs       []string
+	bridgeCancel     context.CancelFunc
 }
 
 func (m *model) Init() tea.Cmd {
-	return runPreflight(m.g.ApertureHost)
+	return m.activateEndpointCmd(m.g.ActiveEndpoint())
 }
 
 // preflightResult is emitted when the /api/providers check completes.
@@ -94,30 +102,133 @@ type preflightResult struct {
 	err       error
 }
 
+type endpointActivationResult struct {
+	endpoint  config.Endpoint
+	host      string
+	providers []config.ProviderInfo
+	err       error
+}
+
+type bridgeLogMsg string
+type bridgeLogDoneMsg struct{}
+type quitMsg struct{ Err error }
+
 func runPreflight(host string) tea.Cmd {
 	return func() tea.Msg {
-		client := &http.Client{Timeout: 10 * time.Second}
-		url := strings.TrimRight(host, "/") + "/api/providers"
-		resp, err := client.Get(url)
-		if err != nil {
-			return preflightResult{host: host, err: err}
+		provs, err := fetchProviders(host)
+		return preflightResult{host: host, providers: provs, err: err}
+	}
+}
+
+func fetchProviders(host string) ([]config.ProviderInfo, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	url := strings.TrimRight(host, "/") + "/api/providers"
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var provs []config.ProviderInfo
+	if err := json.Unmarshal(body, &provs); err != nil {
+		return nil, fmt.Errorf("could not parse providers response: %w", err)
+	}
+	return provs, nil
+}
+
+func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
+	m.step = stepPreflight
+	m.preflightErr = ""
+	m.bridgeLogs = nil
+	m.bridgeLogCh = nil
+	if m.bridgeCancel != nil {
+		m.bridgeCancel()
+		m.bridgeCancel = nil
+	}
+
+	if ep.BridgeID == "" {
+		m.preflightLabel = "Checking " + ep.URL + " ..."
+		return func() tea.Msg {
+			provs, err := fetchProviders(ep.URL)
+			return endpointActivationResult{endpoint: ep, host: ep.URL, providers: provs, err: err}
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return preflightResult{
-				host: host,
-				err:  fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url),
+	}
+
+	bridge, ok := m.g.Bridge(ep.BridgeID)
+	if !ok {
+		m.preflightLabel = "Checking " + ep.URL + " ..."
+		return func() tea.Msg {
+			return endpointActivationResult{
+				endpoint: ep,
+				host:     ep.URL,
+				err:      fmt.Errorf("bridge %s is not configured", ep.BridgeID),
 			}
 		}
-		body, err := io.ReadAll(resp.Body)
+	}
+	if m.bridgeManager == nil {
+		return func() tea.Msg {
+			return endpointActivationResult{
+				endpoint: ep,
+				host:     ep.URL,
+				err:      fmt.Errorf("bridge manager is not configured"),
+			}
+		}
+	}
+
+	ch := make(chan string, 32)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.bridgeLogCh = ch
+	m.bridgeCancel = cancel
+	m.preflightLabel = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
+	activate := func() tea.Msg {
+		defer cancel()
+		defer close(ch)
+		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, func(line string) {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				return
+			}
+			select {
+			case ch <- line:
+			default:
+			}
+		})
 		if err != nil {
-			return preflightResult{host: host, err: err}
+			return endpointActivationResult{endpoint: ep, host: ep.URL, err: err}
 		}
-		var provs []config.ProviderInfo
-		if err := json.Unmarshal(body, &provs); err != nil {
-			return preflightResult{host: host, err: fmt.Errorf("could not parse providers response: %w", err)}
+		provs, err := fetchProviders(localURL)
+		return endpointActivationResult{endpoint: ep, host: localURL, providers: provs, err: err}
+	}
+	return tea.Batch(activate, waitBridgeLog(ch))
+}
+
+func waitBridgeLog(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return bridgeLogDoneMsg{}
 		}
-		return preflightResult{host: host, providers: provs}
+		return bridgeLogMsg(line)
+	}
+}
+
+func (m *model) quitCmd() tea.Cmd {
+	cancel := m.bridgeCancel
+	bridgeManager := m.bridgeManager
+	return func() tea.Msg {
+		if cancel != nil {
+			cancel()
+		}
+		if bridgeManager == nil {
+			return quitMsg{}
+		}
+		return quitMsg{Err: bridgeManager.Close()}
 	}
 }
 
@@ -133,17 +244,55 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.preflightErr = msg.err.Error()
 			m.forcedToEndpoint = true
 			m.step = stepMenu
-			m.resetStack(m.endpointsMenu())
+			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
 		m.g.Providers = msg.providers
 		m.preflightErr = ""
 		m.forcedToEndpoint = false
-		// Ensure the active host is in the endpoint list and first.
-		_ = m.g.UpsertEndpoint(m.g.ApertureHost)
 		m.step = stepMenu
 		m.resetStack(m.rootMenu())
 		return m, tea.ClearScreen
+
+	case endpointActivationResult:
+		m.bridgeCancel = nil
+		if msg.err != nil {
+			m.preflightErr = msg.err.Error()
+			m.forcedToEndpoint = true
+			m.g.ApertureHost = msg.endpoint.URL
+			m.step = stepMenu
+			m.resetStack(m.setupGuideMenu())
+			return m, nil
+		}
+		m.g.ApertureHost = msg.host
+		m.g.Providers = msg.providers
+		m.preflightErr = ""
+		m.forcedToEndpoint = false
+		m.step = stepMenu
+		m.resetStack(m.rootMenu())
+		return m, tea.ClearScreen
+
+	case bridgeLogMsg:
+		m.bridgeLogs = append(m.bridgeLogs, string(msg))
+		if len(m.bridgeLogs) > 12 {
+			m.bridgeLogs = m.bridgeLogs[len(m.bridgeLogs)-12:]
+		}
+		if m.bridgeLogCh != nil {
+			return m, waitBridgeLog(m.bridgeLogCh)
+		}
+		return m, nil
+
+	case bridgeLogDoneMsg:
+		m.bridgeLogCh = nil
+		return m, nil
+
+	case quitMsg:
+		if msg.Err != nil {
+			m.errMsg = "Error shutting down bridges: " + msg.Err.Error()
+			m.step = stepError
+			return m, nil
+		}
+		return m, tea.Quit
 
 	case menu.ExecDoneMsg:
 		// A client's foreground launch has exited. Re-run preflight: the
@@ -151,6 +300,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// agent was running.
 		m.popToRoot()
 		m.step = stepPreflight
+		m.preflightLabel = "Checking " + m.g.ApertureHost + " ..."
 		return m, runPreflight(m.g.ApertureHost)
 
 	case menu.InstallDoneMsg:
@@ -179,13 +329,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.step {
 		case stepPreflight:
 			if msg.String() == "ctrl+c" {
-				return m, tea.Quit
+				return m, m.quitCmd()
 			}
 			return m, nil
 		case stepError:
 			switch msg.String() {
 			case "ctrl+c", "q":
-				return m, tea.Quit
+				return m, m.quitCmd()
 			default:
 				m.step = stepMenu
 				return m, nil
@@ -208,12 +358,12 @@ func (m *model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m, m.quitCmd()
 
 	case "q":
 		// "q" quits from the root only; on sub-menus it pops.
 		if len(m.stack) <= 1 {
-			return m, tea.Quit
+			return m, m.quitCmd()
 		}
 		m.popOne()
 		return m, tea.ClearScreen
@@ -320,7 +470,7 @@ func (m *model) activate(idx int) (tea.Model, tea.Cmd) {
 func (m *model) applyResult(res menu.Result) (tea.Model, tea.Cmd) {
 	switch {
 	case res.Quit:
-		return m, tea.Quit
+		return m, m.quitCmd()
 	case res.Pop:
 		m.popOne()
 		return m, tea.ClearScreen
@@ -346,7 +496,7 @@ func (m *model) applyResult(res menu.Result) (tea.Model, tea.Cmd) {
 func (m *model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m, m.quitCmd()
 	case "esc":
 		m.step = stepMenu
 		m.inputValue = ""
@@ -380,7 +530,17 @@ func (m *model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) View() string {
 	switch m.step {
 	case stepPreflight:
-		return dotYellow + " Checking " + m.g.ApertureHost + " …\n"
+		label := m.preflightLabel
+		if label == "" {
+			label = "Checking " + m.g.ApertureHost + " ..."
+		}
+		var sb strings.Builder
+		sb.WriteString(dotYellow + " " + label + "\n")
+		for _, line := range m.bridgeLogs {
+			sb.WriteString(dimStyle.Render("  " + line))
+			sb.WriteString("\n")
+		}
+		return sb.String()
 	case stepError:
 		var sb strings.Builder
 		sb.WriteString(errorStyle.Render("Cannot launch"))
@@ -417,6 +577,13 @@ func (m *model) viewMenu() string {
 	}
 	if top.Title != "" {
 		sb.WriteString(titleStyle.Render(top.Title))
+		sb.WriteString("\n")
+	}
+	if top.Preamble != "" {
+		for _, line := range strings.Split(top.Preamble, "\n") {
+			sb.WriteString(dimStyle.Render("  " + line))
+			sb.WriteString("\n")
+		}
 		sb.WriteString("\n")
 	}
 	cursor := m.cursor()
@@ -609,9 +776,9 @@ func (m *model) menuHeader(top *menu.Menu) string {
 		}
 		return header + "\n\n"
 	}
-	if m.forcedToEndpoint && top.Title == endpointsTitle {
+	if m.forcedToEndpoint && (top.Title == endpointsTitle || top.Title == setupGuideTitle) {
 		header := dotRed + " Could not reach " + m.g.ApertureHost + "\n"
-		if m.preflightErr != "" {
+		if m.preflightErr != "" && top.Title != setupGuideTitle {
 			header += dimStyle.Render("  "+m.preflightErr) + "\n"
 		}
 		return header + "\n"
@@ -660,6 +827,39 @@ func (m *model) popToRoot() {
 func (m *model) resetStack(root *menu.Menu) {
 	m.stack = []*menu.Menu{root}
 	m.cursors = []int{0}
+}
+
+func (m *model) refreshEndpointsMenu() {
+	m.refreshMenuByTitle(endpointsTitle, m.endpointsMenu())
+}
+
+func (m *model) refreshBridgesMenu() {
+	for i := range m.stack {
+		if m.stack[i].Title == "Choose a bridge" {
+			m.stack[i] = m.endpointBridgeMenu()
+			m.cursors[i] = 0
+		}
+	}
+	m.refreshMenuByTitle("Bridges", m.bridgesMenu())
+}
+
+func (m *model) refreshMenuByTitle(title string, next *menu.Menu) {
+	for i := len(m.stack) - 1; i >= 0; i-- {
+		if m.stack[i].Title != title {
+			continue
+		}
+		m.stack = m.stack[:i+1]
+		m.cursors = m.cursors[:i+1]
+		m.stack[i] = next
+		m.cursors[i] = 0
+		return
+	}
+	if len(m.stack) > 0 {
+		m.stack[len(m.stack)-1] = next
+		m.cursors[len(m.cursors)-1] = 0
+		return
+	}
+	m.resetStack(next)
 }
 
 // --- Input step helpers ---
