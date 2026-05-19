@@ -20,6 +20,7 @@ import (
 	// Side-effect imports register each client with internal/clients.
 	_ "github.com/tailscale/aperture-cli/internal/clients/claudecode"
 	_ "github.com/tailscale/aperture-cli/internal/clients/codex"
+	_ "github.com/tailscale/aperture-cli/internal/clients/copilot"
 	_ "github.com/tailscale/aperture-cli/internal/clients/gemini"
 	_ "github.com/tailscale/aperture-cli/internal/clients/opencode"
 )
