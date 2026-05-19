@@ -70,7 +70,7 @@ func NewManager(debug bool) *Manager {
 	m.newNode = func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 		s := &tsnet.Server{
 			Dir:      stateDir,
-			Hostname: bridge.ID,
+			Hostname: "aperture-cli-" + bridge.ID,
 			UserLogf: userLogf,
 		}
 		if debug {
@@ -86,6 +86,9 @@ func NewManager(debug bool) *Manager {
 func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL string, logf func(string)) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("bridge manager is not configured")
+	}
+	if err := validateBridgeID(bridge.ID); err != nil {
+		return "", err
 	}
 	if logf == nil {
 		logf = func(string) {}
@@ -179,6 +182,25 @@ func (m *Manager) Close() error {
 		delete(m.nodes, id)
 	}
 	return errors.Join(errs...)
+}
+
+// validateBridgeID rejects IDs that don't match the system-generated
+// "bridge-<hex>" format, so a hand-edited config can't inject arbitrary
+// content into the tailnet hostname.
+func validateBridgeID(id string) error {
+	suffix, ok := strings.CutPrefix(id, "bridge-")
+	if !ok || suffix == "" {
+		return fmt.Errorf("invalid bridge ID %q", id)
+	}
+	if len(suffix) > 64 {
+		return fmt.Errorf("invalid bridge ID %q", id)
+	}
+	for _, r := range suffix {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return fmt.Errorf("invalid bridge ID %q", id)
+		}
+	}
+	return nil
 }
 
 func parseTarget(raw string) (*url.URL, error) {
