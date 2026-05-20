@@ -45,6 +45,21 @@ aperture
 
 On first run, `aperture` will attempt to connect to `http://ai`. If it cannot reach that host, it will prompt you to configure an Aperture endpoint.
 
+### Bridge mode
+
+Bridge mode lets Aperture CLI reach an Aperture endpoint through an embedded Tailscale node. Only the Aperture CLI proxy appears on the tailnet; the rest of the machine does not need the full Tailscale client installed or connected to that tailnet.
+
+This is useful on machines where installing Tailscale is not practical, where Aperture needs to work alongside another VPN, or where you need to switch tailnets while continuing to use a single Aperture instance.
+
+To use bridge mode:
+
+1. Open `Settings`, then open `Bridges` and press `a` to add a bridge.
+2. Go back to `Settings`, then open `Aperture Endpoints` and press `a` to add an endpoint.
+3. Choose `Bridge`, select the bridge you created, then enter the Aperture URL.
+4. Select the bridged endpoint so it becomes active.
+5. Follow the Tailscale login prompt for the bridge.
+6. Launch an agent.
+
 ### Flags
 
 | Flag | Description |
