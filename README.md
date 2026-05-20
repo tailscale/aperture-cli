@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./Aperture-by-Tailscale_logo_rgb_wht.png" alt="Aperture" width="320">
+  <img src="./assets/aperture-logo.png" alt="Aperture" width="320">
 </p>
 
 <h1 align="center">aperture-cli</h1>
@@ -16,7 +16,7 @@
 
 A CLI launcher for coding agents preconfigured to work with [Aperture](https://aperture.tailscale.com). It manages installation, configuration and environment variables that make using multiple providers and models very easy.
 
-<video src="./ApertureCLI.mp4" controls width="100%"></video>
+<video src="./assets/aperture-cli-demo.mp4" controls width="100%"></video>
 
 ## Supported agents
 
