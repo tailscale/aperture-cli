@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/aperture-logo.png" alt="Aperture" width="320">
+  <img src="./assets/aperture-hero.png" alt="Aperture CLI">
 </p>
 
 <h1 align="center">aperture-cli</h1>
@@ -15,10 +15,6 @@
 > **This repository is alpha software.** It is under active development and may change significantly without notice.
 
 A CLI launcher for coding agents preconfigured to work with [Aperture](https://aperture.tailscale.com). It manages installation, configuration and environment variables that make using multiple providers and models very easy.
-
-<p align="center">
-  <a href="./assets/aperture-cli-demo.mp4">Watch the Aperture CLI demo</a>
-</p>
 
 ## Supported agents
 
