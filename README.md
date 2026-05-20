@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="./assets/aperture-hero.png" alt="Aperture CLI">
-</p>
-
 <h1 align="center">aperture-cli</h1>
 
 <p align="center">
@@ -9,6 +5,10 @@
   <a href="#installation">Installation</a> |
   <a href="#usage">Usage</a> |
   <a href="#development">Development</a>
+</p>
+
+<p align="center">
+  <img src="./assets/aperture-hero.png" alt="Aperture CLI">
 </p>
 
 > [!WARNING]
