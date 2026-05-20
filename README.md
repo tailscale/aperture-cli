@@ -1,9 +1,22 @@
-# aperture-cli
+<p align="center">
+  <img src="./Aperture-by-Tailscale_logo_rgb_wht.png" alt="Aperture" width="320">
+</p>
+
+<h1 align="center">aperture-cli</h1>
+
+<p align="center">
+  <a href="#supported-agents">Supported agents</a> |
+  <a href="#installation">Installation</a> |
+  <a href="#usage">Usage</a> |
+  <a href="#development">Development</a>
+</p>
 
 > [!WARNING]
-> **This repository is experimental.** It is under active development, may change significantly without notice.
+> **This repository is alpha software.** It is under active development and may change significantly without notice.
 
 A CLI launcher for coding agents preconfigured to work with [Aperture](https://aperture.tailscale.com). It manages installation, configuration and environment variables that make using multiple providers and models very easy.
+
+<video src="./ApertureCLI.mp4" controls width="100%"></video>
 
 ## Supported agents
 
@@ -11,6 +24,8 @@ A CLI launcher for coding agents preconfigured to work with [Aperture](https://a
 - [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 - [OpenCode](https://github.com/sst/opencode)
 - [Codex](https://github.com/openai/codex)
+- [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started)
+- [Claude Cowork](https://support.claude.com/en/articles/13345190-get-started-with-claude-cowork)
 
 ## Installation
 
