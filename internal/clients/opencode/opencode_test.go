@@ -66,6 +66,7 @@ func TestWriteProviderConfig(t *testing.T) {
 	tests := []struct {
 		name        string
 		provider    config.ProviderInfo
+		wantID      string
 		wantNPM     string
 		wantOptions map[string]string
 	}{
@@ -76,6 +77,7 @@ func TestWriteProviderConfig(t *testing.T) {
 				Models:        []string{"claude-sonnet-4-5", "claude-haiku-4-5"},
 				Compatibility: map[string]bool{"anthropic_messages": true},
 			},
+			wantID:  "anthropic",
 			wantNPM: "@ai-sdk/anthropic",
 			wantOptions: map[string]string{
 				"baseURL": testHost + "/v1",
@@ -89,6 +91,7 @@ func TestWriteProviderConfig(t *testing.T) {
 				Models:        []string{"us.anthropic.claude-opus-4-7"},
 				Compatibility: map[string]bool{"bedrock_converse": true},
 			},
+			wantID:  "amazon-bedrock",
 			wantNPM: "@ai-sdk/amazon-bedrock",
 			wantOptions: map[string]string{
 				"region":   "us-east-1",
@@ -105,6 +108,7 @@ func TestWriteProviderConfig(t *testing.T) {
 					"google_raw_predict":      true,
 				},
 			},
+			wantID:  "vertex",
 			wantNPM: "@ai-sdk/google-vertex",
 			wantOptions: map[string]string{
 				"apiKey":  "not-required",
@@ -121,6 +125,7 @@ func TestWriteProviderConfig(t *testing.T) {
 					"openai_responses": true,
 				},
 			},
+			wantID:  "openai",
 			wantNPM: "@ai-sdk/openai",
 			wantOptions: map[string]string{
 				"baseURL": testHost + "/v1",
@@ -134,6 +139,7 @@ func TestWriteProviderConfig(t *testing.T) {
 				Models:        []string{"qwen/qwen3-235b-a22b-2507"},
 				Compatibility: map[string]bool{"openai_chat": true},
 			},
+			wantID:  "openrouter",
 			wantNPM: "@ai-sdk/openai-compatible",
 			wantOptions: map[string]string{
 				"baseURL": testHost + "/v1",
@@ -165,9 +171,9 @@ func TestWriteProviderConfig(t *testing.T) {
 			if err := json.Unmarshal(data, &cfg); err != nil {
 				t.Fatalf("json: %v", err)
 			}
-			prov, ok := cfg.Provider[tt.provider.ID]
+			prov, ok := cfg.Provider[tt.wantID]
 			if !ok {
-				t.Fatalf("provider %q missing from config", tt.provider.ID)
+				t.Fatalf("provider %q missing from config", tt.wantID)
 			}
 			if prov.NPM != tt.wantNPM {
 				t.Errorf("npm = %q, want %q", prov.NPM, tt.wantNPM)
@@ -185,14 +191,14 @@ func TestWriteProviderConfig(t *testing.T) {
 				t.Errorf("models len = %d, want %d", len(prov.Models), len(tt.provider.Models))
 			}
 			for _, m := range tt.provider.Models {
-				fqn := tt.provider.ID + "/" + m
-				entry, ok := prov.Models[fqn]
+				name := configuredModelName(tt.wantID, tt.provider.ID, m)
+				entry, ok := prov.Models[name]
 				if !ok {
-					t.Errorf("model %q missing from config", fqn)
+					t.Errorf("model %q missing from config", name)
 					continue
 				}
 				if entry["id"] != m {
-					t.Errorf("model %q id = %q, want %q", fqn, entry["id"], m)
+					t.Errorf("model %q id = %q, want %q", name, entry["id"], m)
 				}
 			}
 
