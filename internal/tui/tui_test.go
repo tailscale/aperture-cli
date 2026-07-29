@@ -9,6 +9,7 @@ import (
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
+	"github.com/tailscale/aperture-cli/internal/updatecheck"
 )
 
 // fakeClient is a minimal clients.Client for TUI tests.
@@ -122,6 +123,47 @@ func TestRootMenu_NoQuickSelectWhenReplayNil(t *testing.T) {
 		if !it.Hidden && strings.Contains(it.Label, "Quick select") {
 			t.Errorf("unexpected quick-select row: %+v", it)
 		}
+	}
+}
+
+func TestUpdateNoticeShownOnRootMenu(t *testing.T) {
+	withFakeClients(t, []clients.Client{&fakeClient{name: "A", installed: true}})
+	m := &model{g: &config.Global{}, buildVersion: "v0.0.7", step: stepMenu}
+	m.resetStack(m.rootMenu())
+
+	m.Update(updateCheckResult{release: updatecheck.Release{
+		Version: "v0.0.8",
+		URL:     "https://github.com/tailscale/aperture-cli/releases/tag/v0.0.8",
+	}})
+
+	view := m.View()
+	if !strings.Contains(view, "Update available: v0.0.8") {
+		t.Fatalf("view missing update notice:\n%s", view)
+	}
+	if !strings.Contains(view, "releases/tag/v0.0.8") {
+		t.Fatalf("view missing release URL:\n%s", view)
+	}
+}
+
+func TestUpdateNoticeHiddenForCurrentOrDevelopmentBuild(t *testing.T) {
+	withFakeClients(t, []clients.Client{&fakeClient{name: "A", installed: true}})
+	tests := []struct {
+		name         string
+		buildVersion string
+	}{
+		{name: "current", buildVersion: "v0.0.8"},
+		{name: "development", buildVersion: "B42"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &model{g: &config.Global{}, buildVersion: tt.buildVersion, step: stepMenu}
+			m.resetStack(m.rootMenu())
+			m.Update(updateCheckResult{release: updatecheck.Release{Version: "v0.0.8"}})
+			if view := m.View(); strings.Contains(view, "Update available") {
+				t.Fatalf("unexpected update notice:\n%s", view)
+			}
+		})
 	}
 }
 
