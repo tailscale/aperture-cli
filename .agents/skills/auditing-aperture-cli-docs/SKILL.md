@@ -52,7 +52,7 @@ PY
 
 Then check the claims that carry no line number, which are the ones that actually break:
 
-- **Cross-document section references.** A doc naming a section of another doc (`its "Test it end to end" section`) must match a real heading. Extract quoted section names and grep the target's headings — `grep -n '^#\{1,3\} ' docs/adding-a-client.md`. This class has a live finding today; see Known drift.
+- **Cross-document section references.** A doc naming a section of another doc (say, a skill pointing at `its "Test it end to end" section` of the guide) must match a real heading. Extract quoted section names and grep the target's headings — `grep -n '^#\{1,3\} ' docs/adding-a-client.md`. That exact reference was a real finding, fixed at 51de975; see Known drift for how it read. Beware the self-reference: grepping the corpus for a dangling title will match this skill's own prose discussing it. Exclude the auditing skill from that grep, or expect the hit — anything auditing a corpus it belongs to has to account for itself.
 - **Counts and enumerations.** "The interface has nine methods" against `grep -cE '^\t[A-Z][A-Za-z]*\(' internal/clients/registry.go`. The README's `Supported agents` list against `ls -d internal/clients/*/` plus the desktop adapters in `internal/profiles` — the list is legitimately longer than the client count, because Claude Cowork is a profile, not a client.
 - **"Client X does this, client Y does not" claims.** These are the fastest-rotting sentences in the corpus, because a new client silently joins or breaks the pattern. Verify each side: `grep -rn "TrimRight" internal/clients/`.
 - **Named symbols, flags, paths, make targets.** Every backticked identifier should resolve: `grep -rn "func validateHost" internal/clients/`, flags against `grep -n 'flag\.' cmd/aperture/main.go`, `make <target>` against the `Makefile`, and version claims against `go.mod`.
@@ -121,12 +121,12 @@ rm -f internal/clients/*/zz_audit_e2e_test.go && rm -rf "$E2E_DIR"
 gofmt -l . && go vet ./... && make test
 ```
 
-## Known drift, as of this skill's last verification
+## Known drift: found at 51de975, both since fixed
 
-Confirm rather than inherit these — a fix may have landed. Both were verified present at Tier 1:
+Both were verified present at Tier 1 when this skill was written, and both were fixed in the commits immediately after. They are recorded here as the worked examples of what this skill is looking for, not as open findings — confirm rather than inherit either direction, since the corpus keeps moving.
 
-1. `.agents/skills/adding-aperture-cli-client/SKILL.md:76` sends the reader to a **"Test it end to end" section of `docs/adding-a-client.md` that does not exist**. The guide's closest heading is Step 11, "Register the client, test it, and update the README". The section was written and then reverted, and the reverted guide is what got committed. An audit that misses this is not working — use it as the smoke test for this skill.
-2. `README.md` has **no pointer to `docs/` or `.agents/skills/`**. Its nav lists only Supported agents, Installation, Usage, Development, so a 62KB contributor guide and two skills are undiscoverable from the front door.
+1. **The dangling cross-reference.** `.agents/skills/adding-aperture-cli-client/SKILL.md:76` sent the reader to a "Test it end to end" section of `docs/adding-a-client.md` that did not exist. The section was written and then reverted, and the reverted guide is what got committed, so no blob in any commit carried the title — it was unrecoverable, not misplaced. The guide's closest heading is Step 11, "Register the client, test it, and update the README", which covers the CI gates and the interactive walk-through but not the headless per-protocol request, so the pointer was wrong in scope as well as in name. It now names Step 11 and its actual scope. **This remains the smoke test for this skill:** an audit that would not have caught it is not working. Re-derive it from the commit rather than trusting this entry.
+2. **The undiscoverable contributor docs.** `README.md` had no pointer to `docs/` or `.agents/skills/` anywhere. Its nav listed only Supported agents, Installation, Usage, and Development, leaving a 62KB contributor guide and three skills unreachable from the front door. It now carries a `Contributing` section naming both, wired into the nav row.
 
 ## Fix policy: read-only by default
 

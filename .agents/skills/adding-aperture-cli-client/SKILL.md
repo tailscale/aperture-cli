@@ -42,7 +42,7 @@ This skill is the orientation layer: the traps below are the ones that cost real
 
 **`Install.Run` and `Uninstall.Run` take different shapes.** `Install.Run` passes one string to `/bin/sh -c`, so pipes work. `Uninstall.Run` has no shell, so you must split the command into separate arguments yourself. Passing the whole command as one argument compiles and then fails at runtime with `fork/exec ...: no such file or directory`. No build or test step catches this.
 
-**Trim the trailing slash before appending a path.** Use `strings.TrimRight(g.ApertureHost, "/")`. Users do configure `http://ai/`, and preflight tolerates it, so untrimmed concatenation yields `http://ai//v1`. `copilot` and `gemini` trim; `codex` and `opencode` do not and are inconsistent — follow the ones that trim.
+**Trim the trailing slash before appending a path.** Use `strings.TrimRight(g.ApertureHost, "/")`. Users do configure `http://ai/`, and preflight tolerates it, so untrimmed concatenation yields `http://ai//v1`. `copilot`, `gemini`, and `pi` trim; `codex` and `opencode` do not and are inconsistent — follow the ones that trim.
 
 **Strip the provider prefix out of model names.** The launcher displays models as `provider_id/model_id`; harnesses want the bare ID. Leaving the prefix on breaks path-based routing and produces a puzzling 404 rather than a clear error.
 
@@ -73,7 +73,7 @@ make test
 make build
 ```
 
-**Green gates do not mean the client routes.** Unit tests check the strings the client builds, not whether the harness accepts them, so a client can pass everything above and fail on its first real request. Follow **testing-an-aperture-cli-client** for the rest: a headless live request per protocol, a tool-calling check, and the interactive TUI steps only a human can do. `docs/adding-a-client.md` covers the same ground in its "Test it end to end" section.
+**Green gates do not mean the client routes.** Unit tests check the strings the client builds, not whether the harness accepts them, so a client can pass everything above and fail on its first real request. Follow **testing-an-aperture-cli-client** for the rest: a headless live request per protocol, a tool-calling check, and the interactive TUI steps only a human can do. `docs/adding-a-client.md` Step 11 covers the CI gates and the interactive walk-through.
 
 Finally, add the harness to the `Supported agents` list in `README.md`, and lead the commit message with the touched path: `internal/clients: add <Name> client`.
 
