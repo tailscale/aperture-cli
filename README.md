@@ -4,7 +4,8 @@
   <a href="#supported-agents">Supported agents</a> |
   <a href="#installation">Installation</a> |
   <a href="#usage">Usage</a> |
-  <a href="#development">Development</a>
+  <a href="#development">Development</a> |
+  <a href="#contributing">Contributing</a>
 </p>
 
 <p align="center">
@@ -76,3 +77,9 @@ make test    # run tests
 make install # install to $GOPATH/bin
 make clean   # remove built binary
 ```
+
+## Contributing
+
+To add a new coding agent, see [docs/adding-a-client.md](./docs/adding-a-client.md).
+
+Agent-facing skills for this repo live in [.agents/skills/](./.agents/skills/).
