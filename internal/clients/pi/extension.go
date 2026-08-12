@@ -3,7 +3,6 @@ package pi
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -152,9 +151,25 @@ func writeProviderExtension(apertureHost string, p config.ProviderInfo, b backen
 	if err != nil {
 		return "", nil, err
 	}
-	path := filepath.Join(dir, "tmp_aperture_provider.js")
-	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+	f, err := os.CreateTemp(dir, "tmp_aperture_provider_*.js")
+	if err != nil {
 		return "", nil, err
 	}
-	return path, func() { os.Remove(path) }, nil
+	path := f.Name()
+	remove := func() { _ = os.Remove(path) }
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		remove()
+		return "", nil, err
+	}
+	if _, err := f.WriteString(src); err != nil {
+		_ = f.Close()
+		remove()
+		return "", nil, err
+	}
+	if err := f.Close(); err != nil {
+		remove()
+		return "", nil, err
+	}
+	return path, remove, nil
 }

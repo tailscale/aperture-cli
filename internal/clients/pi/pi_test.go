@@ -233,6 +233,31 @@ func TestWriteProviderExtension(t *testing.T) {
 	}
 }
 
+func TestWriteProviderExtension_UniquePaths(t *testing.T) {
+	isolateConfigDir(t)
+
+	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5"}}
+	b := backendByIDOrFatal(t, "openai_responses")
+	path1, cleanup1, err := writeProviderExtension(testHost, p, b)
+	if err != nil {
+		t.Fatalf("first writeProviderExtension: %v", err)
+	}
+	defer cleanup1()
+	path2, cleanup2, err := writeProviderExtension(testHost, p, b)
+	if err != nil {
+		t.Fatalf("second writeProviderExtension: %v", err)
+	}
+	defer cleanup2()
+
+	if path1 == path2 {
+		t.Fatalf("concurrent extensions use the same path %q", path1)
+	}
+	cleanup1()
+	if _, err := os.Stat(path2); err != nil {
+		t.Errorf("cleaning up the first extension affected the second: %v", err)
+	}
+}
+
 // TestWriteProviderExtension_EmbeddedJSONIsValid checks the generated file's
 // provider config parses as JSON, which is what catches an unescaped value
 // silently producing a broken extension.
@@ -455,17 +480,18 @@ func TestBackendsFor(t *testing.T) {
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "openai-api", Compatibility: map[string]bool{"openai_responses": true}},
-		{ID: "bedrock", Compatibility: map[string]bool{"bedrock_converse": true}},
-		{ID: "anthropic", Compatibility: map[string]bool{"anthropic_messages": true}},
-		{ID: "none", Compatibility: map[string]bool{"something_else": true}},
+		{ID: "openai-api", Models: []string{"gpt-5"}, Compatibility: map[string]bool{"openai_responses": true}},
+		{ID: "bedrock", Models: []string{"model"}, Compatibility: map[string]bool{"bedrock_converse": true}},
+		{ID: "anthropic", Models: []string{"claude"}, Compatibility: map[string]bool{"anthropic_messages": true}},
+		{ID: "empty", Compatibility: map[string]bool{"openai_responses": true}},
+		{ID: "none", Models: []string{"model"}, Compatibility: map[string]bool{"something_else": true}},
 	}
 	got := compatibleProviders(provs)
 	ids := make([]string, len(got))
 	for i, p := range got {
 		ids[i] = p.ID
 	}
-	// bedrock and none are both unusable from Pi.
+	// bedrock and none have no supported protocol; empty has no routable model.
 	if want := []string{"openai-api", "anthropic"}; !slices.Equal(ids, want) {
 		t.Errorf("compatibleProviders = %v, want %v", ids, want)
 	}
