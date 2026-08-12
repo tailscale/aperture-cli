@@ -237,7 +237,7 @@ func resolveReplay(g *config.Global) (config.ProviderInfo, backend, string, bool
 		return config.ProviderInfo{}, backend{}, "", false
 	}
 	// The provider must still serve that backend's protocol.
-	if !providerSupports(prov, b) {
+	if len(prov.Models) == 0 || !providerSupports(prov, b) {
 		return config.ProviderInfo{}, backend{}, "", false
 	}
 	// The recorded model must still be offered by that provider.
@@ -277,7 +277,7 @@ func (c *Client) QuickSelectLabel(g *config.Global) string {
 func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 	var out []config.ProviderInfo
 	for _, p := range all {
-		if len(backendsFor(p)) > 0 {
+		if len(p.Models) > 0 && len(backendsFor(p)) > 0 {
 			out = append(out, p)
 		}
 	}
