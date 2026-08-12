@@ -23,6 +23,7 @@ import (
 	_ "github.com/tailscale/aperture-cli/internal/clients/copilot"
 	_ "github.com/tailscale/aperture-cli/internal/clients/gemini"
 	_ "github.com/tailscale/aperture-cli/internal/clients/opencode"
+	_ "github.com/tailscale/aperture-cli/internal/clients/pi"
 )
 
 var (
