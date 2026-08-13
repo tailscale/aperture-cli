@@ -24,6 +24,7 @@ A CLI launcher for coding agents preconfigured to work with [Aperture](https://a
 - [OpenCode](https://github.com/sst/opencode)
 - [Codex](https://github.com/openai/codex)
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started)
+- [Hermes Agent](https://hermes-agent.nousresearch.com)
 - [Oh My Pi](https://omp.sh)
 - [Pi](https://pi.dev)
 - [Claude Cowork](https://support.claude.com/en/articles/13345190-get-started-with-claude-cowork)
