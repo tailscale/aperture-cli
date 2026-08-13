@@ -22,6 +22,7 @@ import (
 	_ "github.com/tailscale/aperture-cli/internal/clients/codex"
 	_ "github.com/tailscale/aperture-cli/internal/clients/copilot"
 	_ "github.com/tailscale/aperture-cli/internal/clients/gemini"
+	_ "github.com/tailscale/aperture-cli/internal/clients/hermes"
 	_ "github.com/tailscale/aperture-cli/internal/clients/omp"
 	_ "github.com/tailscale/aperture-cli/internal/clients/opencode"
 	_ "github.com/tailscale/aperture-cli/internal/clients/pi"
