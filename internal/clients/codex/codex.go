@@ -58,10 +58,10 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 // Upgrade creates an UpgradePlan for Codex
 func (c *Client) Upgrade() clients.UpgradePlan {
 	return clients.PlanUpgrade(clients.UpgradeSpec{
-		BinaryName: binaryName,
-		ExtraPaths: commonBinaryPaths(),
-		NPMPackage: "@openai/codex",
-		BrewName:   "codex",
+		BinaryName:           binaryName,
+		ExtraPaths:           commonBinaryPaths(),
+		NPMPackage:           "@openai/codex",
+		BrewName:             "codex",
 		NativeUpgradeCommand: "curl -fsSL https://chatgpt.com/codex/install.sh | sh", // no self-update command
 	})
 }
