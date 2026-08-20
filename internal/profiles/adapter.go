@@ -52,6 +52,13 @@ func (c *desktopClient) Install(g *config.Global) clients.InstallPlan {
 	}
 }
 
+func (c *desktopClient) Upgrade() clients.UpgradePlan {
+	// The desktop app manages its own updates.
+	return clients.UpgradePlan{
+		Hint: "Claude Cowork updates itself; restart the app to apply pending updates.",
+	}
+}
+
 func (c *desktopClient) Uninstall() clients.UninstallPlan {
 	// Desktop uninstall is user-driven via the OS — no scripted path today.
 	return clients.UninstallPlan{
