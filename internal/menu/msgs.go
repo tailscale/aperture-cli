@@ -10,6 +10,14 @@ type ExecDoneMsg struct{ Err error }
 // clients are installed).
 type InstallDoneMsg struct{ Err error }
 
+// UpgradeDoneMsg is emitted when an agent upgrade finishes
+type UpgradeDoneMsg struct {
+	Client string
+	Err    error
+	Output string
+	Detail string
+}
+
 // LaunchDoneMsg is emitted when a GUI launch (desktop app) returns control
 // immediately. Unlike ExecDoneMsg, the TUI does not re-run preflight —
 // launching a desktop app does not invalidate anything.
