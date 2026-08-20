@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -471,7 +473,7 @@ func (m *model) upgradeConfirmMenu(c clients.Client) *menu.Menu {
 				Label:    "Upgrade",
 				Shortcut: "y",
 				Action: func() menu.Result {
-					return menu.Result{Cmd: runInstallCmd(plan.Run), PopOnDone: true}
+					return menu.Result{Cmd: runUpgradeCmd(c.Name(), plan.Run)}
 				},
 			},
 			{
@@ -481,6 +483,33 @@ func (m *model) upgradeConfirmMenu(c clients.Client) *menu.Menu {
 			},
 		},
 		Hint: "y to upgrade · n to cancel",
+	}
+}
+
+// upgradeResultMenu reports whether an upgrade completed or failed, and why.
+func (m *model) upgradeResultMenu(msg menu.UpgradeDoneMsg) *menu.Menu {
+	ok := menu.MenuItem{Label: "OK", Action: func() menu.Result { return menu.Result{Pop: true} }}
+	if msg.Err == nil {
+		pre := ""
+		if msg.Output != "" {
+			pre = "Now at: " + msg.Output
+		}
+		return &menu.Menu{
+			Title:    msg.Client + " upgrade complete",
+			Preamble: pre,
+			Items:    []menu.MenuItem{ok},
+			Hint:     "Enter to continue",
+		}
+	}
+	pre := "Reason: " + msg.Err.Error()
+	if msg.Detail != "" {
+		pre += "\n\n" + msg.Detail
+	}
+	return &menu.Menu{
+		Title:    msg.Client + " upgrade failed",
+		Preamble: pre,
+		Items:    []menu.MenuItem{ok},
+		Hint:     "Enter to continue",
 	}
 }
 
@@ -561,6 +590,45 @@ func runInstallCmd(producer func() (*exec.Cmd, error)) tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return menu.InstallDoneMsg{Err: err}
 	})
+}
+
+// runUpgradeCmd runs an upgrade with terminal takeover, teeing output so the
+// outcome screen can report the new version or why the upgrade failed, and
+// emits menu.UpgradeDoneMsg.
+func runUpgradeCmd(client string, producer func() (*exec.Cmd, error)) tea.Cmd {
+	cmd, err := producer()
+	if err != nil {
+		return func() tea.Msg { return menu.UpgradeDoneMsg{Client: client, Err: err} }
+	}
+	if cmd == nil {
+		return func() tea.Msg { return menu.UpgradeDoneMsg{Client: client} }
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return menu.UpgradeDoneMsg{
+			Client: client,
+			Err:    err,
+			Output: tailLines(stdout.String(), 1),
+			Detail: tailLines(stderr.String(), 6),
+		}
+	})
+}
+
+// tailLines returns the last n non-blank lines of s.
+func tailLines(s string, n int) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			out = append(out, strings.TrimRight(l, " \t\r"))
+		}
+	}
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return strings.Join(out, "\n")
 }
 
 // runUninstallFn returns a tea.Cmd that invokes the uninstall function and

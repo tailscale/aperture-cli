@@ -309,6 +309,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetStack(m.rootMenu())
 		return m, tea.ClearScreen
 
+	case menu.UpgradeDoneMsg:
+		// Rebuild root (the binary may have changed), then show the outcome.
+		m.step = stepMenu
+		m.resetStack(m.rootMenu())
+		m.stack = append(m.stack, m.upgradeResultMenu(msg))
+		m.cursors = append(m.cursors, 0)
+		return m, tea.ClearScreen
+
 	case menu.LaunchDoneMsg:
 		// Desktop-style launch returned immediately; stay on root menu.
 		m.popToRoot()

@@ -159,6 +159,43 @@ func TestUpgradeConfirmMenu_HintOnlyWhenRunNil(t *testing.T) {
 	}
 }
 
+func TestUpgradeResultMenu(t *testing.T) {
+	m := &model{g: &config.Global{}}
+
+	ok := m.upgradeResultMenu(menu.UpgradeDoneMsg{Client: "Claude Code", Output: "2.2.0 (Claude Code)"})
+	if ok.Title != "Claude Code upgrade complete" {
+		t.Errorf("success title = %q", ok.Title)
+	}
+	if !strings.Contains(ok.Preamble, "2.2.0") {
+		t.Errorf("success preamble missing version: %q", ok.Preamble)
+	}
+
+	fail := m.upgradeResultMenu(menu.UpgradeDoneMsg{
+		Client: "Claude Code",
+		Err:    fmt.Errorf("exit status 1"),
+		Detail: "npm ERR! EACCES permission denied",
+	})
+	if fail.Title != "Claude Code upgrade failed" {
+		t.Errorf("failure title = %q", fail.Title)
+	}
+	if !strings.Contains(fail.Preamble, "exit status 1") || !strings.Contains(fail.Preamble, "EACCES") {
+		t.Errorf("failure preamble missing reason/detail: %q", fail.Preamble)
+	}
+}
+
+func TestTailLines(t *testing.T) {
+	in := "one\n\ntwo  \nthree\n"
+	if got := tailLines(in, 1); got != "three" {
+		t.Errorf("tailLines(1) = %q", got)
+	}
+	if got := tailLines(in, 2); got != "two\nthree" {
+		t.Errorf("tailLines(2) = %q", got)
+	}
+	if got := tailLines("", 3); got != "" {
+		t.Errorf("tailLines(empty) = %q", got)
+	}
+}
+
 func TestMenuEngine_PushPop(t *testing.T) {
 	sub := &menu.Menu{
 		Title: "Sub",
