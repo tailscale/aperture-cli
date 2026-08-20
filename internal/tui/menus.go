@@ -116,6 +116,10 @@ func (m *model) settingsMenu() *menu.Menu {
 				Action: func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
 			},
 			{
+				Label:  "Upgrade",
+				Action: func() menu.Result { return menu.Result{Next: m.upgradeMenu()} },
+			},
+			{
 				Label:  "Uninstall",
 				Action: func() menu.Result { return menu.Result{Next: m.uninstallMenu()} },
 			},
@@ -417,6 +421,66 @@ func (m *model) installConfirmMenu(c clients.Client) *menu.Menu {
 			},
 		},
 		Hint: "y to install · n to cancel",
+	}
+}
+
+// upgradeMenu lists installed clients and confirms/runs each upgrade.
+func (m *model) upgradeMenu() *menu.Menu {
+	var items []menu.MenuItem
+	for _, c := range registeredClients(m.g) {
+		if !c.IsInstalled() {
+			continue
+		}
+		c := c
+		items = append(items, menu.MenuItem{
+			Label:  c.Name(),
+			Action: func() menu.Result { return menu.Result{Next: m.upgradeConfirmMenu(c)} },
+		})
+	}
+	if len(items) == 0 {
+		return &menu.Menu{
+			Title: "Upgrade",
+			Items: []menu.MenuItem{{Label: "No agents installed.", Disabled: true}},
+			Hint:  "Esc to go back",
+		}
+	}
+	return &menu.Menu{
+		Title: "Upgrade",
+		Items: items,
+		Hint:  "Enter to select · Esc to go back",
+	}
+}
+
+func (m *model) upgradeConfirmMenu(c clients.Client) *menu.Menu {
+	plan := c.Upgrade()
+	if plan.Run == nil {
+		return &menu.Menu{
+			Title: c.Name(),
+			Items: []menu.MenuItem{
+				{Label: plan.Hint, Disabled: true},
+				{Label: "OK", Shortcut: "y", Action: func() menu.Result { return menu.Result{Pop: true} }},
+			},
+			Hint: "Enter to go back",
+		}
+	}
+	return &menu.Menu{
+		Title: "Upgrade " + c.Name() + "?",
+		Items: []menu.MenuItem{
+			{Label: "This will run: " + plan.Hint, Disabled: true},
+			{
+				Label:    "Upgrade",
+				Shortcut: "y",
+				Action: func() menu.Result {
+					return menu.Result{Cmd: runInstallCmd(plan.Run), PopOnDone: true}
+				},
+			},
+			{
+				Label:    "Cancel",
+				Shortcut: "n",
+				Action:   func() menu.Result { return menu.Result{Pop: true} },
+			},
+		},
+		Hint: "y to upgrade · n to cancel",
 	}
 }
 
