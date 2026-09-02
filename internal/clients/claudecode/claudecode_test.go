@@ -39,6 +39,27 @@ func TestEnv_Bedrock(t *testing.T) {
 	}
 }
 
+func TestEnv_Mantle(t *testing.T) {
+	b := lookupBackend("mantle")
+	env, err := envForBackend(testHost, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"ANTHROPIC_BEDROCK_MANTLE_BASE_URL": testHost,
+		"CLAUDE_CODE_USE_MANTLE":            "1",
+		"CLAUDE_CODE_SKIP_MANTLE_AUTH":      "1",
+	}
+	for k, v := range want {
+		if env[k] != v {
+			t.Errorf("%s = %q, want %q", k, env[k], v)
+		}
+	}
+	if _, ok := env["ANTHROPIC_MODEL"]; ok {
+		t.Error("Mantle environment should let Claude Code select its own model")
+	}
+}
+
 func TestEnv_Vertex(t *testing.T) {
 	b := lookupBackend("vertex")
 	env, err := envForBackend(testHost, b)
@@ -113,6 +134,24 @@ func TestDedupedBackendsFor_AnthropicVsZAI(t *testing.T) {
 	}
 }
 
+func TestBackendsFor_Mantle(t *testing.T) {
+	p := config.ProviderInfo{
+		Upstream:      "bedrock-mantle",
+		Compatibility: map[string]bool{"anthropic_messages": true},
+	}
+	got := backendsFor(p)
+	if len(got) != 1 || got[0].id != "mantle" {
+		t.Errorf("backendsFor = %+v, want [mantle]", got)
+	}
+}
+
+func TestBackendsFor_MantleRequiresAnthropicMessages(t *testing.T) {
+	p := config.ProviderInfo{Upstream: "bedrock-mantle"}
+	if got := backendsFor(p); len(got) != 0 {
+		t.Errorf("backendsFor = %+v, want empty", got)
+	}
+}
+
 func TestDedupedBackendsFor_Multi(t *testing.T) {
 	p := config.ProviderInfo{Compatibility: map[string]bool{
 		"anthropic_messages":   true,
@@ -128,10 +167,11 @@ func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
 		{ID: "anthropic", Compatibility: map[string]bool{"anthropic_messages": true}},
 		{ID: "bedrock", Compatibility: map[string]bool{"bedrock_model_invoke": true}},
+		{ID: "mantle", Upstream: "bedrock-mantle", Compatibility: map[string]bool{"anthropic_messages": true}},
 		{ID: "openai-only", Compatibility: map[string]bool{"openai_chat": true}},
 	}
 	got := compatibleProviders(provs)
-	if len(got) != 2 {
+	if len(got) != 3 {
 		t.Errorf("compatibleProviders = %+v", got)
 	}
 }
@@ -167,6 +207,18 @@ func TestTierModelEnv_NonBedrock(t *testing.T) {
 	env := tierModelEnv(b, p)
 	if len(env) != 0 {
 		t.Errorf("tierModelEnv(anthropic) = %+v, want empty", env)
+	}
+}
+
+func TestTierModelEnv_Mantle(t *testing.T) {
+	b := lookupBackend("mantle")
+	p := config.ProviderInfo{
+		Upstream:      "bedrock-mantle",
+		Models:        []string{"anthropic.claude-opus-5"},
+		Compatibility: map[string]bool{"anthropic_messages": true},
+	}
+	if env := tierModelEnv(b, p); len(env) != 0 {
+		t.Errorf("tierModelEnv(mantle) = %+v, want empty", env)
 	}
 }
 

@@ -19,6 +19,12 @@ func envForBackend(apertureHost string, b backend) (map[string]string, error) {
 			"CLAUDE_CODE_USE_BEDROCK":       "1",
 			"CLAUDE_CODE_SKIP_BEDROCK_AUTH": "1",
 		}, nil
+	case "mantle":
+		return map[string]string{
+			"ANTHROPIC_BEDROCK_MANTLE_BASE_URL": apertureHost,
+			"CLAUDE_CODE_USE_MANTLE":            "1",
+			"CLAUDE_CODE_SKIP_MANTLE_AUTH":      "1",
+		}, nil
 	case "vertex":
 		return map[string]string{
 			"CLOUD_ML_REGION":              "_aperture_auto_vertex_region_",
@@ -52,6 +58,9 @@ var managedEnvVars = []string{
 	"ANTHROPIC_BEDROCK_BASE_URL",
 	"CLAUDE_CODE_USE_BEDROCK",
 	"CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+	"ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+	"CLAUDE_CODE_USE_MANTLE",
+	"CLAUDE_CODE_SKIP_MANTLE_AUTH",
 	"CLOUD_ML_REGION",
 	"CLAUDE_CODE_USE_VERTEX",
 	"CLAUDE_CODE_SKIP_VERTEX_AUTH",
