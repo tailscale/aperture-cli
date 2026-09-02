@@ -26,7 +26,9 @@ func init() {
 }
 
 // Client is the Claude Code CLI client.
-type Client struct{}
+type Client struct {
+	launchFn func(clients.LaunchSpec) tea.Cmd
+}
 
 const (
 	name       = "Claude Code"
@@ -194,7 +196,11 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, mode
 		LastModel:       model,
 	})
 
-	cmd := clients.Launch(clients.LaunchSpec{
+	launchFn := c.launchFn
+	if launchFn == nil {
+		launchFn = clients.Launch
+	}
+	cmd := launchFn(clients.LaunchSpec{
 		Binary: bin,
 		Args:   args,
 		Env:    env,

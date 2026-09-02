@@ -1,8 +1,12 @@
 package claudecode
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 )
 
@@ -220,6 +224,107 @@ func TestTierModelEnv_Mantle(t *testing.T) {
 	if env := tierModelEnv(b, p); len(env) != 0 {
 		t.Errorf("tierModelEnv(mantle) = %+v, want empty", env)
 	}
+}
+
+func TestMantleMenuLaunchAndReplay(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("PATH", "")
+	bin := filepath.Join(home, ".local", "bin", "claude")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var specs []clients.LaunchSpec
+	c := &Client{launchFn: func(spec clients.LaunchSpec) tea.Cmd {
+		spec.Env = cloneMap(spec.Env)
+		specs = append(specs, spec)
+		return func() tea.Msg { return nil }
+	}}
+
+	p := config.ProviderInfo{
+		ID:       "mantle-anthropic",
+		Name:     "AWS Bedrock (Mantle) - Anthropic",
+		Upstream: "bedrock-mantle",
+		Models: []string{
+			"anthropic.claude-opus-5",
+			"anthropic.claude-sonnet-5",
+		},
+		// Include Bedrock Invoke compatibility to prove that the authoritative
+		// upstream type still selects only Mantle.
+		Compatibility: map[string]bool{
+			"anthropic_messages":   true,
+			"bedrock_model_invoke": true,
+		},
+	}
+	g := &config.Global{
+		ApertureHost: testHost,
+		Providers:    []config.ProviderInfo{p},
+	}
+	result := c.Menu(g).Action()
+	if result.Next != nil {
+		t.Fatal("Mantle launch unexpectedly opened a backend or model picker")
+	}
+	if result.Cmd == nil || !result.PopOnDone {
+		t.Fatalf("Mantle launch result = %+v, want executable command that pops on completion", result)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("launch count = %d, want 1", len(specs))
+	}
+	checkMantleLaunchSpec(t, specs[0], bin)
+	if got := g.LastLaunch; got.LastClientName != name || got.LastBackendType != "mantle" || got.LastProviderID != p.ID || got.LastModel != "" {
+		t.Errorf("recorded launch = %+v, want Claude Code/Mantle/%s with no model", got, p.ID)
+	}
+
+	if cmd := c.Replay(g); cmd == nil {
+		t.Fatal("Replay returned nil for a current Mantle launch")
+	}
+	if len(specs) != 2 {
+		t.Fatalf("launch count after Replay = %d, want 2", len(specs))
+	}
+	checkMantleLaunchSpec(t, specs[1], bin)
+}
+
+func checkMantleLaunchSpec(t *testing.T, spec clients.LaunchSpec, wantBinary string) {
+	t.Helper()
+	if spec.Binary != wantBinary {
+		t.Errorf("Binary = %q, want %q", spec.Binary, wantBinary)
+	}
+	wantEnv := map[string]string{
+		"ANTHROPIC_BEDROCK_MANTLE_BASE_URL": testHost,
+		"CLAUDE_CODE_USE_MANTLE":            "1",
+		"CLAUDE_CODE_SKIP_MANTLE_AUTH":      "1",
+	}
+	if len(spec.Env) != len(wantEnv) {
+		t.Errorf("Env = %#v, want only Mantle transport variables", spec.Env)
+	}
+	for k, want := range wantEnv {
+		if got := spec.Env[k]; got != want {
+			t.Errorf("Env[%q] = %q, want %q", k, got, want)
+		}
+	}
+	for _, key := range []string{
+		"ANTHROPIC_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+	} {
+		if _, ok := spec.Env[key]; ok {
+			t.Errorf("Env unexpectedly contains %s", key)
+		}
+	}
+}
+
+func cloneMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func lookupBackend(id string) backend {
