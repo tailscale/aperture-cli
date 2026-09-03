@@ -27,6 +27,9 @@ func (c *fakeClient) IsInstalled() bool     { return c.installed }
 func (c *fakeClient) Install(*config.Global) clients.InstallPlan {
 	return clients.InstallPlan{Hint: "install " + c.name}
 }
+func (c *fakeClient) Upgrade() clients.UpgradePlan {
+	return clients.UpgradePlan{Hint: "upgrade " + c.name}
+}
 func (c *fakeClient) Uninstall() clients.UninstallPlan {
 	return clients.UninstallPlan{Hint: "uninstall " + c.name}
 }
@@ -122,6 +125,74 @@ func TestRootMenu_NoQuickSelectWhenReplayNil(t *testing.T) {
 		if !it.Hidden && strings.Contains(it.Label, "Quick select") {
 			t.Errorf("unexpected quick-select row: %+v", it)
 		}
+	}
+}
+
+func TestUpgradeMenu_ListsOnlyInstalled(t *testing.T) {
+	withFakeClients(t, []clients.Client{
+		&fakeClient{name: "A", installed: true},
+		&fakeClient{name: "B", installed: false},
+	})
+
+	m := &model{g: &config.Global{}}
+	um := m.upgradeMenu()
+	if len(um.Items) != 1 {
+		t.Fatalf("upgrade items = %d, want 1", len(um.Items))
+	}
+	if um.Items[0].Label != "A" {
+		t.Errorf("upgrade item = %q, want A", um.Items[0].Label)
+	}
+}
+
+func TestUpgradeConfirmMenu_HintOnlyWhenRunNil(t *testing.T) {
+	fc := &fakeClient{name: "A", installed: true}
+	withFakeClients(t, []clients.Client{fc})
+
+	m := &model{g: &config.Global{}}
+	cm := m.upgradeConfirmMenu(fc)
+	// fakeClient's UpgradePlan has no Run, so the menu is hint + OK only.
+	if len(cm.Items) != 2 {
+		t.Fatalf("confirm items = %d, want 2", len(cm.Items))
+	}
+	if cm.Items[0].Label != "upgrade A" {
+		t.Errorf("hint = %q, want %q", cm.Items[0].Label, "upgrade A")
+	}
+}
+
+func TestUpgradeResultMenu(t *testing.T) {
+	m := &model{g: &config.Global{}}
+
+	ok := m.upgradeResultMenu(menu.UpgradeDoneMsg{Client: "Claude Code", Output: "2.2.0 (Claude Code)"})
+	if ok.Title != "Claude Code upgrade complete" {
+		t.Errorf("success title = %q", ok.Title)
+	}
+	if !strings.Contains(ok.Preamble, "2.2.0") {
+		t.Errorf("success preamble missing version: %q", ok.Preamble)
+	}
+
+	fail := m.upgradeResultMenu(menu.UpgradeDoneMsg{
+		Client: "Claude Code",
+		Err:    fmt.Errorf("exit status 1"),
+		Detail: "npm ERR! EACCES permission denied",
+	})
+	if fail.Title != "Claude Code upgrade failed" {
+		t.Errorf("failure title = %q", fail.Title)
+	}
+	if !strings.Contains(fail.Preamble, "exit status 1") || !strings.Contains(fail.Preamble, "EACCES") {
+		t.Errorf("failure preamble missing reason/detail: %q", fail.Preamble)
+	}
+}
+
+func TestTailLines(t *testing.T) {
+	in := "one\n\ntwo  \nthree\n"
+	if got := tailLines(in, 1); got != "three" {
+		t.Errorf("tailLines(1) = %q", got)
+	}
+	if got := tailLines(in, 2); got != "two\nthree" {
+		t.Errorf("tailLines(2) = %q", got)
+	}
+	if got := tailLines("", 3); got != "" {
+		t.Errorf("tailLines(empty) = %q", got)
 	}
 }
 

@@ -11,8 +11,8 @@ import (
 // Client is one AI coding agent that the launcher can install and launch.
 // Each client lives in its own sub-package and is wholly responsible for
 // its own provider/backend/model flow, env generation, config writing,
-// install and uninstall — all of which are expressed through the MenuItem
-// returned from Menu() plus the InstallPlan / UninstallPlan.
+// install, upgrade and uninstall — all of which are expressed through the
+// MenuItem returned from Menu() plus the InstallPlan / UpgradePlan / UninstallPlan.
 type Client interface {
 	// Name is the user-visible display name (e.g. "Claude Code").
 	Name() string
@@ -33,6 +33,9 @@ type Client interface {
 	// Install describes how to install the client. May read g for
 	// host-dependent setup (e.g. writing platform config before download).
 	Install(g *config.Global) InstallPlan
+
+	// Upgrade describes how to upgrade the client to its latest version.
+	Upgrade() UpgradePlan
 
 	// Uninstall describes how to uninstall the client.
 	Uninstall() UninstallPlan
@@ -59,6 +62,16 @@ type InstallPlan struct {
 	Hint string
 	// Run returns the command to execute on confirmation. If nil, the install
 	// is manual-only: the TUI shows Hint and does nothing.
+	Run func() (*exec.Cmd, error)
+}
+
+// UpgradePlan describes how to upgrade an installed client.
+type UpgradePlan struct {
+	// Hint is shown to the user before confirming; e.g.
+	// "npm install -g @openai/codex@latest".
+	Hint string
+	// Run returns the command to execute on confirmation. If nil, the
+	// upgrade is manual-only: the TUI shows Hint and does nothing.
 	Run func() (*exec.Cmd, error)
 }
 

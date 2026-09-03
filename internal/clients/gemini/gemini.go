@@ -76,6 +76,16 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 	}
 }
 
+// Upgrade creates an UpgradePlan for Gemini
+func (c *Client) Upgrade() clients.UpgradePlan {
+	return clients.PlanUpgrade(clients.UpgradeSpec{
+		BinaryName: binaryName,
+		ExtraPaths: commonBinaryPaths(),
+		NPMPackage: "@google/gemini-cli",
+		BrewName:   "gemini-cli",
+	})
+}
+
 // Uninstall implements clients.Client.
 func (c *Client) Uninstall() clients.UninstallPlan {
 	return clients.UninstallPlan{

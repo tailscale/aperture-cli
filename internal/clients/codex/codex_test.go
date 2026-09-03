@@ -100,6 +100,16 @@ func TestInstallUninstall(t *testing.T) {
 	if uninstall.Hint != "npm uninstall -g @openai/codex" {
 		t.Errorf("Uninstall.Hint = %q", uninstall.Hint)
 	}
+
+	// The upgrade command depends on how (and whether) codex is installed
+	// on the host, only assert plan is populated
+	upgrade := c.Upgrade()
+	if upgrade.Hint == "" {
+		t.Error("Upgrade.Hint is empty")
+	}
+	if upgrade.Run == nil {
+		t.Error("Upgrade.Run is nil")
+	}
 }
 
 func TestReplay_StaleProvider(t *testing.T) {

@@ -78,6 +78,17 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 	}
 }
 
+// Upgrade implements UpgradePlan for Claude Code
+func (c *Client) Upgrade() clients.UpgradePlan {
+	return clients.PlanUpgrade(clients.UpgradeSpec{
+		BinaryName:     binaryName,
+		ExtraPaths:     commonBinaryPaths(),
+		NPMPackage:     "@anthropic-ai/claude-code",
+		BrewName:       "claude-code",
+		SelfUpdateArgs: []string{"update"},
+	})
+}
+
 // Uninstall implements clients.Client.
 func (c *Client) Uninstall() clients.UninstallPlan {
 	return clients.UninstallPlan{

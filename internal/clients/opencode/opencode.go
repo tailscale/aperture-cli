@@ -66,6 +66,17 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 	}
 }
 
+// Upgrade creates an UpgradePlan for OpenCode
+func (c *Client) Upgrade() clients.UpgradePlan {
+	return clients.PlanUpgrade(clients.UpgradeSpec{
+		BinaryName:     binaryName,
+		ExtraPaths:     commonBinaryPaths(),
+		NPMPackage:     "opencode-ai",
+		BrewName:       "opencode",
+		SelfUpdateArgs: []string{"upgrade"},
+	})
+}
+
 // Uninstall implements clients.Client.
 func (c *Client) Uninstall() clients.UninstallPlan {
 	return clients.UninstallPlan{
