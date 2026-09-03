@@ -78,19 +78,20 @@ func pickSDK(compat map[string]bool, apertureHost string) (npm string, options m
 // chosen one) mapped to the SDK picked from its compatibility map.
 func writeProviderConfig(apertureHost string, p config.ProviderInfo) (string, func(), error) {
 	npm, options := pickSDK(p.Compatibility, apertureHost)
+	providerID := configProviderID(p)
 
 	models := make(map[string]opencodeModelEntry, len(p.Models))
 	whitelist := make([]string, 0, len(p.Models))
 	for _, m := range p.Models {
-		fqn := p.ID + "/" + m
-		models[fqn] = opencodeModelEntry{ID: m, Name: fqn}
-		whitelist = append(whitelist, fqn)
+		name := configuredModelName(providerID, p.ID, m)
+		models[name] = opencodeModelEntry{ID: m, Name: name}
+		whitelist = append(whitelist, name)
 	}
 
 	cfg := opencodeConfig{
 		Schema: "https://opencode.ai/config.json",
 		Provider: map[string]opencodeProvider{
-			p.ID: {
+			providerID: {
 				NPM:       npm,
 				Name:      "Aperture (" + p.ID + ")",
 				Options:   options,
@@ -118,4 +119,21 @@ func writeProviderConfig(apertureHost string, p config.ProviderInfo) (string, fu
 		return "", nil, err
 	}
 	return path, func() { os.Remove(path) }, nil
+}
+
+func configProviderID(p config.ProviderInfo) string {
+	if p.Compatibility["bedrock_model_invoke"] || p.Compatibility["bedrock_converse"] {
+		// OpenCode has special Bedrock handling wired to its built-in
+		// "amazon-bedrock" provider ID. v0.0.6 used that path; v0.0.7 regressed
+		// by emitting the selected Aperture provider ID instead.
+		return "amazon-bedrock"
+	}
+	return p.ID
+}
+
+func configuredModelName(providerID, originalProviderID, model string) string {
+	if providerID == "amazon-bedrock" {
+		return model
+	}
+	return originalProviderID + "/" + model
 }
