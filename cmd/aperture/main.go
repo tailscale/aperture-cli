@@ -109,6 +109,12 @@ func gitCommitHeightInDir(dir string) string {
 }
 
 func main() {
+	// Subcommands are dispatched before flag.Parse so their own flag sets
+	// own everything after the subcommand name.
+	if len(os.Args) > 1 && os.Args[1] == "skills" {
+		os.Exit(runSkills(os.Args[2:]))
+	}
+
 	flag.Parse()
 
 	if *flagVersion {
