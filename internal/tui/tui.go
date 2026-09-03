@@ -21,6 +21,7 @@ import (
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
+	"github.com/tailscale/aperture-cli/internal/updatecheck"
 )
 
 type step int
@@ -89,10 +90,17 @@ type model struct {
 	bridgeLogCh      chan string
 	bridgeLogs       []string
 	bridgeCancel     context.CancelFunc
+
+	updateVersion string
+	updateURL     string
 }
 
 func (m *model) Init() tea.Cmd {
-	return m.activateEndpointCmd(m.g.ActiveEndpoint())
+	activate := m.activateEndpointCmd(m.g.ActiveEndpoint())
+	if !updatecheck.ValidVersion(m.buildVersion) {
+		return activate
+	}
+	return tea.Batch(activate, checkForUpdateCmd())
 }
 
 // preflightResult is emitted when the /api/providers check completes.
@@ -112,6 +120,20 @@ type endpointActivationResult struct {
 type bridgeLogMsg string
 type bridgeLogDoneMsg struct{}
 type quitMsg struct{ Err error }
+
+type updateCheckResult struct {
+	release updatecheck.Release
+	err     error
+}
+
+func checkForUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		release, err := updatecheck.Latest(ctx, &http.Client{Timeout: 2 * time.Second})
+		return updateCheckResult{release: release, err: err}
+	}
+}
 
 func runPreflight(host string) tea.Cmd {
 	return func() tea.Msg {
@@ -284,6 +306,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case bridgeLogDoneMsg:
 		m.bridgeLogCh = nil
+		return m, nil
+
+	case updateCheckResult:
+		if msg.err == nil && updatecheck.IsNewer(m.buildVersion, msg.release.Version) {
+			m.updateVersion = msg.release.Version
+			m.updateURL = msg.release.URL
+		}
 		return m, nil
 
 	case quitMsg:
@@ -649,6 +678,14 @@ func (m *model) viewMenu() string {
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Aperture " + m.buildVersion))
 		sb.WriteString("\n")
+		if m.updateVersion != "" {
+			notice := "Update available: " + m.updateVersion
+			if m.updateURL != "" {
+				notice += "  " + m.updateURL
+			}
+			sb.WriteString(greenStyle.Render(notice))
+			sb.WriteString("\n")
+		}
 	}
 	return sb.String()
 }
