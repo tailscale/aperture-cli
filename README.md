@@ -4,7 +4,8 @@
   <a href="#supported-agents">Supported agents</a> |
   <a href="#installation">Installation</a> |
   <a href="#usage">Usage</a> |
-  <a href="#development">Development</a>
+  <a href="#development">Development</a> |
+  <a href="#contributing">Contributing</a>
 </p>
 
 <p align="center">
@@ -23,6 +24,9 @@ A CLI launcher for coding agents preconfigured to work with [Aperture](https://a
 - [OpenCode](https://github.com/sst/opencode)
 - [Codex](https://github.com/openai/codex)
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/cli-getting-started)
+- [Hermes Agent](https://hermes-agent.nousresearch.com)
+- [Oh My Pi](https://omp.sh)
+- [Pi](https://pi.dev)
 - [Claude Cowork](https://support.claude.com/en/articles/13345190-get-started-with-claude-cowork)
 
 ## Installation
@@ -75,3 +79,9 @@ make test    # run tests
 make install # install to $GOPATH/bin
 make clean   # remove built binary
 ```
+
+## Contributing
+
+To add a new coding agent, see [docs/adding-a-client.md](./docs/adding-a-client.md).
+
+Agent-facing skills for this repo live in [.agents/skills/](./.agents/skills/).
