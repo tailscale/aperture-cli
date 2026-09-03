@@ -1,8 +1,9 @@
-// Package claudecode is the Claude Code CLI client. It supports four routing
-// flavors: Anthropic direct, AWS Bedrock, Google Vertex, and z.ai. The flow
-// per launch is provider → backend → optional model (skipped for Bedrock,
-// which resolves models from ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL
-// env vars derived from the provider's model list at runtime) → Check → exec.
+// Package claudecode is the Claude Code CLI client. It supports five routing
+// flavors: Anthropic direct, AWS Bedrock, AWS Bedrock Mantle, Google Vertex,
+// and z.ai. The flow per launch is provider → backend → optional model
+// (skipped for Bedrock and Mantle) → Check → exec. Bedrock resolves models from
+// ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL env vars derived from the
+// provider's model list; Claude Code maps its own aliases for Mantle.
 package claudecode
 
 import (
@@ -25,7 +26,9 @@ func init() {
 }
 
 // Client is the Claude Code CLI client.
-type Client struct{}
+type Client struct {
+	launchFn func(clients.LaunchSpec) tea.Cmd
+}
 
 const (
 	name       = "Claude Code"
@@ -38,13 +41,15 @@ type backend struct {
 	displayName string
 	compatKeys  []string
 	// picksModel is false for backends where the user does not pick a
-	// specific model (Bedrock: models are resolved per-tier at runtime).
+	// specific model (Bedrock: models are resolved per-tier at runtime;
+	// Mantle: Claude Code maps its model aliases to Mantle model IDs).
 	picksModel bool
 }
 
 var backends = []backend{
 	{id: "anthropic", displayName: "Anthropic API", compatKeys: []string{"anthropic_messages"}, picksModel: true},
 	{id: "bedrock", displayName: "AWS Bedrock", compatKeys: []string{"bedrock_model_invoke"}, picksModel: false},
+	{id: "mantle", displayName: "Amazon Bedrock (Mantle)", compatKeys: []string{"anthropic_messages"}, picksModel: false},
 	{id: "vertex", displayName: "Google Vertex", compatKeys: []string{"google_raw_predict"}, picksModel: true},
 	{id: "zai", displayName: "z.ai", compatKeys: []string{"anthropic_messages"}, picksModel: true},
 }
@@ -191,7 +196,11 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, mode
 		LastModel:       model,
 	})
 
-	cmd := clients.Launch(clients.LaunchSpec{
+	launchFn := c.launchFn
+	if launchFn == nil {
+		launchFn = clients.Launch
+	}
+	cmd := launchFn(clients.LaunchSpec{
 		Binary: bin,
 		Args:   args,
 		Env:    env,
@@ -288,6 +297,17 @@ func dedupedBackendsFor(p config.ProviderInfo) []backend {
 }
 
 func backendMatches(p config.ProviderInfo, b backend) bool {
+	// Mantle speaks the Anthropic Messages protocol, but Claude Code needs a
+	// distinct transport mode for its authentication and model-ID semantics.
+	// Upstream metadata is therefore authoritative; compatibility alone cannot
+	// distinguish Mantle from a regular Anthropic-compatible provider.
+	if p.Upstream == "bedrock-mantle" {
+		if b.id != "mantle" {
+			return false
+		}
+	} else if b.id == "mantle" {
+		return false
+	}
 	for _, k := range b.compatKeys {
 		if p.Compatibility[k] {
 			return true

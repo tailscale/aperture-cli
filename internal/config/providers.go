@@ -7,6 +7,7 @@ type ProviderInfo struct {
 	Description   string          `json:"description"`
 	Models        []string        `json:"models"`
 	Compatibility map[string]bool `json:"compatibility"`
+	Upstream      string          `json:"upstream"`
 }
 
 // DisplayName returns the provider's Name, falling back to ID if Name is empty.

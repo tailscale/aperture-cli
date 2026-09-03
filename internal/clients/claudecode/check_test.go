@@ -41,7 +41,7 @@ func TestCheck_WithConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"),
-		[]byte(`{"env":{"ANTHROPIC_BASE_URL":"https://example.com","CLAUDE_CODE_USE_BEDROCK":"1"}}`), 0o644); err != nil {
+		[]byte(`{"env":{"ANTHROPIC_BASE_URL":"https://example.com","CLAUDE_CODE_USE_BEDROCK":"1","CLAUDE_CODE_USE_MANTLE":"1"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	err := checkClaudeSettings()
@@ -54,6 +54,9 @@ func TestCheck_WithConflicts(t *testing.T) {
 	}
 	if !strings.Contains(msg, "CLAUDE_CODE_USE_BEDROCK") {
 		t.Errorf("error should mention CLAUDE_CODE_USE_BEDROCK, got: %s", msg)
+	}
+	if !strings.Contains(msg, "CLAUDE_CODE_USE_MANTLE") {
+		t.Errorf("error should mention CLAUDE_CODE_USE_MANTLE, got: %s", msg)
 	}
 }
 
