@@ -53,12 +53,12 @@ This is useful on machines where installing Tailscale is not practical, where Ap
 
 To use bridge mode:
 
-1. Open `Settings`, then open `Bridges` and press `a` to add a bridge.
-2. Go back to `Settings`, then open `Aperture Endpoints` and press `a` to add an endpoint.
-3. Choose `Bridge`, select the bridge you created, then enter the Aperture URL.
-4. Select the bridged endpoint so it becomes active.
-5. Follow the Tailscale login prompt for the bridge.
-6. Launch an agent.
+1. Open `Settings`, then open `Aperture Endpoints` and press `a` to add an endpoint.
+2. Choose `Bridge`, then select an existing bridge or choose `Add Bridge`.
+3. Enter the Aperture URL and follow the Tailscale login prompt for the bridge.
+4. Aperture CLI verifies `/v1/models`, makes the endpoint active, and returns to the agent menu.
+
+If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active. Select a configured endpoint from `Aperture Endpoints` to switch to it.
 
 ### Flags
 

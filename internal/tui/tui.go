@@ -90,6 +90,8 @@ type model struct {
 	bridgeLogCtx     context.Context
 	bridgeLogs       []string
 	bridgeCancel     context.CancelFunc
+	failedEndpoint   *config.Endpoint
+	connected        bool
 }
 
 func (m *model) Init() tea.Cmd {
@@ -281,15 +283,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case preflightResult:
 		if msg.err != nil {
+			m.connected = false
 			m.preflightErr = msg.err.Error()
 			m.forcedToEndpoint = true
+			failed := m.g.ActiveEndpoint()
+			m.failedEndpoint = &failed
 			m.step = stepMenu
 			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
 		m.g.Providers = msg.providers
+		m.connected = true
 		m.preflightErr = ""
 		m.forcedToEndpoint = false
+		m.failedEndpoint = nil
 		m.step = stepMenu
 		m.resetStack(m.rootMenu())
 		return m, tea.ClearScreen
@@ -297,17 +304,34 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case endpointActivationResult:
 		m.bridgeCancel = nil
 		if msg.err != nil {
+			if sameEndpoint(msg.endpoint, m.g.ActiveEndpoint()) {
+				m.connected = false
+			}
 			m.preflightErr = msg.err.Error()
 			m.forcedToEndpoint = true
-			m.g.ApertureHost = msg.endpoint.URL
+			failed := msg.endpoint
+			m.failedEndpoint = &failed
 			m.step = stepMenu
 			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
+		if !sameEndpoint(m.g.ActiveEndpoint(), msg.endpoint) {
+			if err := m.g.SetActiveEndpoint(msg.endpoint); err != nil {
+				m.preflightErr = "could not save active endpoint: " + err.Error()
+				m.forcedToEndpoint = true
+				failed := msg.endpoint
+				m.failedEndpoint = &failed
+				m.step = stepMenu
+				m.resetStack(m.setupGuideMenu())
+				return m, nil
+			}
+		}
 		m.g.ApertureHost = msg.host
 		m.g.Providers = msg.providers
+		m.connected = true
 		m.preflightErr = ""
 		m.forcedToEndpoint = false
+		m.failedEndpoint = nil
 		m.step = stepMenu
 		m.resetStack(m.rootMenu())
 		return m, tea.ClearScreen
@@ -628,7 +652,7 @@ func (m *model) View() string {
 		return sb.String()
 	case stepError:
 		var sb strings.Builder
-		sb.WriteString(errorStyle.Render("Cannot launch"))
+		sb.WriteString(errorStyle.Render("Error"))
 		sb.WriteString("\n\n")
 		sb.WriteString(m.wrapText("", m.errMsg))
 		sb.WriteString("\n\n")
@@ -855,14 +879,18 @@ func assignTokens(items []menu.MenuItem) []string {
 // preflight-failure mode shows the red "couldn't reach" banner.
 func (m *model) menuHeader(top *menu.Menu) string {
 	if len(m.stack) == 1 && top.Title == rootTitle {
-		header := dotGreen + " Connected to " + m.g.ApertureHost
+		header := dotGreen + " Connected to " + m.endpointLabel(m.g.ActiveEndpoint())
 		if n := len(m.g.Providers); n > 0 {
 			header += fmt.Sprintf(" (%d providers)", n)
 		}
 		return m.wrapText("", header) + "\n\n"
 	}
 	if m.forcedToEndpoint && (top.Title == endpointsTitle || top.Title == setupGuideTitle) {
-		header := m.wrapText("", dotRed+" Could not reach "+m.g.ApertureHost) + "\n"
+		target := m.g.ActiveEndpoint()
+		if m.failedEndpoint != nil {
+			target = *m.failedEndpoint
+		}
+		header := m.wrapText("", dotRed+" Could not reach "+m.endpointLabel(target)) + "\n"
 		if m.preflightErr != "" {
 			header += dimStyle.Render(m.wrapText("  ", m.preflightErr)) + "\n"
 		}

@@ -73,15 +73,20 @@ func (g *Global) ActiveEndpoint() Endpoint {
 // (adding it if missing), updates ApertureHost to the endpoint URL, and
 // persists. Bridge activation later rewrites ApertureHost to localhost.
 func (g *Global) SetActiveEndpoint(ep Endpoint) error {
-	g.ApertureHost = ep.URL
 	eps := []Endpoint{ep}
-	for _, ep := range g.Settings.Endpoints {
-		if !sameEndpoint(ep, eps[0]) {
-			eps = append(eps, ep)
+	for _, existing := range g.Settings.Endpoints {
+		if !sameEndpoint(existing, ep) {
+			eps = append(eps, existing)
 		}
 	}
-	g.Settings.Endpoints = eps
-	return SaveSettings(g.Settings)
+	next := g.Settings
+	next.Endpoints = eps
+	if err := SaveSettings(next); err != nil {
+		return err
+	}
+	g.Settings = next
+	g.ApertureHost = ep.URL
+	return nil
 }
 
 // SetApertureHost rotates the direct URL to the front of the endpoint list
@@ -98,8 +103,54 @@ func (g *Global) UpsertEndpoint(ep Endpoint) error {
 			return nil
 		}
 	}
-	g.Settings.Endpoints = append(g.Settings.Endpoints, ep)
-	return SaveSettings(g.Settings)
+	next := g.Settings
+	next.Endpoints = append(append([]Endpoint(nil), g.Settings.Endpoints...), ep)
+	if err := SaveSettings(next); err != nil {
+		return err
+	}
+	g.Settings = next
+	return nil
+}
+
+// ReplaceEndpoint replaces old with next in place and persists the result.
+// It does not change which endpoint is active unless old is already active.
+func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
+	eps := append([]Endpoint(nil), g.Settings.Endpoints...)
+	oldIdx := -1
+	for i, existing := range eps {
+		if !sameEndpoint(existing, old) {
+			continue
+		}
+		oldIdx = i
+		break
+	}
+	if oldIdx < 0 {
+		return fmt.Errorf("endpoint %s is not configured", old.URL)
+	}
+	eps[oldIdx] = next
+	deduped := eps[:0]
+	for _, ep := range eps {
+		duplicate := false
+		for _, existing := range deduped {
+			if sameEndpoint(existing, ep) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			deduped = append(deduped, ep)
+		}
+	}
+	updated := g.Settings
+	updated.Endpoints = deduped
+	if err := SaveSettings(updated); err != nil {
+		return err
+	}
+	g.Settings = updated
+	if oldIdx == 0 {
+		g.ApertureHost = next.URL
+	}
+	return nil
 }
 
 // RemoveEndpoint deletes the endpoint at idx and persists. The active endpoint
@@ -112,11 +163,16 @@ func (g *Global) RemoveEndpoint(idx int) error {
 	eps := make([]Endpoint, 0, len(g.Settings.Endpoints)-1)
 	eps = append(eps, g.Settings.Endpoints[:idx]...)
 	eps = append(eps, g.Settings.Endpoints[idx+1:]...)
-	g.Settings.Endpoints = eps
-	if len(eps) > 0 {
+	next := g.Settings
+	next.Endpoints = eps
+	if err := SaveSettings(next); err != nil {
+		return err
+	}
+	g.Settings = next
+	if idx == 0 && len(eps) > 0 {
 		g.ApertureHost = eps[0].URL
 	}
-	return SaveSettings(g.Settings)
+	return nil
 }
 
 // AddBridge creates, saves, and returns a bridge with a generated stable ID.
@@ -130,10 +186,12 @@ func (g *Global) AddBridge(name string) (Bridge, error) {
 		return Bridge{}, err
 	}
 	p := Bridge{ID: id, Name: name}
-	g.Settings.Bridges = append(g.Settings.Bridges, p)
-	if err := SaveSettings(g.Settings); err != nil {
+	next := g.Settings
+	next.Bridges = append(append([]Bridge(nil), g.Settings.Bridges...), p)
+	if err := SaveSettings(next); err != nil {
 		return Bridge{}, err
 	}
+	g.Settings = next
 	return p, nil
 }
 
@@ -148,8 +206,14 @@ func (g *Global) RemoveBridge(id string) error {
 		if p.ID != id {
 			continue
 		}
-		g.Settings.Bridges = append(g.Settings.Bridges[:i], g.Settings.Bridges[i+1:]...)
-		return SaveSettings(g.Settings)
+		next := g.Settings
+		next.Bridges = append([]Bridge(nil), g.Settings.Bridges[:i]...)
+		next.Bridges = append(next.Bridges, g.Settings.Bridges[i+1:]...)
+		if err := SaveSettings(next); err != nil {
+			return err
+		}
+		g.Settings = next
+		return nil
 	}
 	return nil
 }
@@ -166,6 +230,9 @@ func (g *Global) Bridge(id string) (Bridge, bool) {
 
 // RecordLaunch stores the launch record to disk and updates the in-memory copy.
 func (g *Global) RecordLaunch(s LaunchState) error {
+	ep := g.ActiveEndpoint()
+	s.LastEndpointURL = ep.URL
+	s.LastBridgeID = ep.BridgeID
 	g.LastLaunch = s
 	return SaveState(s)
 }
