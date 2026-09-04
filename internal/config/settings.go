@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"tailscale.com/atomicfile"
 )
 
 // DefaultLocation is the fallback Aperture endpoint URL used when the user
@@ -55,20 +57,24 @@ func settingsPath() (string, error) {
 	return filepath.Join(dir, "aperture", "settings.json"), nil
 }
 
-// LoadSettings reads the persisted launcher settings. Errors are silently
-// ignored and a default Settings value is returned.
+// LoadSettings reads the persisted launcher settings. A missing file is a
+// first-run condition; other read and parse errors are returned so a later
+// settings write cannot silently replace unreadable configuration.
 func LoadSettings() (Settings, error) {
 	path, err := settingsPath()
 	if err != nil {
-		return defaultSettings(), nil
+		return Settings{}, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return defaultSettings(), nil
+		if os.IsNotExist(err) {
+			return defaultSettings(), nil
+		}
+		return Settings{}, fmt.Errorf("reading settings: %w", err)
 	}
 	var s Settings
 	if err := json.Unmarshal(data, &s); err != nil {
-		return defaultSettings(), nil
+		return Settings{}, fmt.Errorf("parsing settings: %w", err)
 	}
 	if len(s.Endpoints) == 0 {
 		s.Endpoints = []Endpoint{{URL: DefaultLocation}}
@@ -89,7 +95,7 @@ func SaveSettings(s Settings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return atomicfile.WriteFile(path, data, 0o600)
 }
 
 func defaultSettings() Settings {

@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
@@ -363,6 +367,173 @@ func TestEndpointActivationFailure_ShowsSetupGuide(t *testing.T) {
 			title = m.top().Title
 		}
 		t.Errorf("top menu title = %q, want %q", title, setupGuideTitle)
+	}
+	if got := m.menuHeader(m.top()); !strings.Contains(got, "timeout") {
+		t.Errorf("failure header does not contain the underlying error: %q", got)
+	}
+}
+
+func TestSetupGuideMenu_BridgeDoesNotRequireSystemTailscale(t *testing.T) {
+	m := &model{g: &config.Global{
+		ApertureHost: "http://aperture",
+		Settings: config.Settings{
+			Bridges:   []config.Bridge{{ID: "bridge-abcdef", Name: "Work Bridge"}},
+			Endpoints: []config.Endpoint{{URL: "http://aperture", BridgeID: "bridge-abcdef"}},
+		},
+	}}
+
+	guide := m.setupGuideMenu()
+	if !strings.Contains(guide.Preamble, "embedded Tailscale node") {
+		t.Errorf("bridge preamble = %q", guide.Preamble)
+	}
+	if !strings.Contains(guide.Preamble, "does not need Tailscale installed") {
+		t.Errorf("bridge preamble gives system-Tailscale guidance: %q", guide.Preamble)
+	}
+}
+
+func TestEndpointBridgeMenu_AddsFirstBridgeInline(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	m := &model{
+		g: &config.Global{Settings: config.Settings{
+			Endpoints: []config.Endpoint{{URL: "http://ai"}},
+		}},
+		step: stepMenu,
+	}
+	m.resetStack(m.endpointBridgeMenu())
+
+	var add menu.MenuItem
+	for _, item := range m.top().Items {
+		if item.Label == "Add Bridge" {
+			add = item
+			break
+		}
+	}
+	if add.Action == nil {
+		t.Fatal("Add Bridge action not found")
+	}
+	add.Action()
+	if m.step != stepInput || m.inputOnSave == nil {
+		t.Fatal("Add Bridge did not prompt for a name")
+	}
+	if cmd := m.inputOnSave("Work Bridge"); cmd != nil {
+		if msg := cmd(); msg != nil {
+			t.Fatalf("adding bridge returned %T: %v", msg, msg)
+		}
+	}
+
+	if len(m.g.Settings.Bridges) != 1 || m.g.Settings.Bridges[0].Name != "Work Bridge" {
+		t.Fatalf("bridges = %+v", m.g.Settings.Bridges)
+	}
+	if top := m.top(); top.Title != "Choose a bridge" || len(top.Items) != 1 || top.Items[0].Label != "Work Bridge" {
+		t.Fatalf("bridge chooser was not refreshed: %+v", top)
+	}
+}
+
+func TestBridgeLogSinkIgnoresLateLogsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan string, 1)
+	logf := bridgeLogSink(ctx, ch)
+
+	cancel()
+	close(ch)
+	// This is the sequence that panicked in v0.0.9: preflight had ended and
+	// closed its channel, but tsnet emitted another background debug log.
+	logf("late tsnet log")
+}
+
+func TestWaitBridgeLogDrainsBufferedLogBeforeCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan string, 1)
+	ch <- "final dial error"
+	cancel()
+
+	msg := waitBridgeLog(ctx, ch)()
+	logMsg, ok := msg.(bridgeLogMsg)
+	if !ok {
+		t.Fatalf("message = %T, want bridgeLogMsg", msg)
+	}
+	if logMsg.line != "final dial error" {
+		t.Errorf("line = %q, want final dial error", logMsg.line)
+	}
+}
+
+func TestAppendBridgeLogRetainsDiagnosticsOverTsnetNoise(t *testing.T) {
+	logs := []string{
+		`Bridge network: state=Running tailnet="example.com" peers=598`,
+		`Bridge target is visible: requested="aperture.example.ts.net"`,
+	}
+	for i := range bridgeLogLimit + 10 {
+		logs = appendBridgeLog(logs, fmt.Sprintf("magicsock: noisy line %d", i))
+	}
+	logs = appendBridgeLog(logs, "Bridge dial failed: lookup failed")
+
+	if len(logs) != bridgeLogLimit {
+		t.Fatalf("len(logs) = %d, want %d", len(logs), bridgeLogLimit)
+	}
+	got := strings.Join(logs, "\n")
+	for _, want := range []string{"Bridge network:", "Bridge target is visible:", "Bridge dial failed:"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("logs lost %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestFetchProvidersIncludesErrorResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "bridge proxy error: lookup aperture", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	_, err := fetchProviders(srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "lookup aperture") {
+		t.Fatalf("fetchProviders error = %v, want response detail", err)
+	}
+}
+
+func TestWrapTextPreservesContentWithinTerminalWidth(t *testing.T) {
+	m := &model{width: 40}
+	text := "Bridge dial failed: address=aperture.example.ts.net:80 error=lookup aperture.example.ts.net on 127.0.0.53:53: no such host"
+	got := m.wrapText("  ", text)
+
+	for i, line := range strings.Split(got, "\n") {
+		if width := ansi.StringWidth(line); width > m.width {
+			t.Errorf("line %d width = %d, want <= %d: %q", i, width, m.width, line)
+		}
+		if !strings.HasPrefix(line, "  ") {
+			t.Errorf("line %d does not preserve indentation: %q", i, line)
+		}
+	}
+	compact := func(s string) string { return strings.Join(strings.Fields(ansi.Strip(s)), "") }
+	if compact(got) != compact(text) {
+		t.Errorf("wrapped content changed:\n got: %q\nwant: %q", got, text)
+	}
+}
+
+func TestFailureViewWrapsDiagnostics(t *testing.T) {
+	m := &model{
+		g: &config.Global{
+			ApertureHost: "http://aperture.example.ts.net",
+			Debug:        true,
+			Settings: config.Settings{
+				Bridges:   []config.Bridge{{ID: "bridge-abcdef", Name: "Work Bridge"}},
+				Endpoints: []config.Endpoint{{URL: "http://aperture.example.ts.net", BridgeID: "bridge-abcdef"}},
+			},
+		},
+		width:            50,
+		forcedToEndpoint: true,
+		preflightErr:     "bridge Work Bridge could not reach endpoint: lookup aperture.example.ts.net on 127.0.0.53:53: no such host",
+		bridgeLogs: []string{
+			`Bridge network: state=Running tailnet="example.com" dns_suffix="example.ts.net" peers=597`,
+		},
+	}
+	m.resetStack(m.setupGuideMenu())
+
+	for i, line := range strings.Split(m.View(), "\n") {
+		if width := ansi.StringWidth(line); width > m.width {
+			t.Errorf("line %d width = %d, want <= %d: %q", i, width, m.width, line)
+		}
 	}
 }
 

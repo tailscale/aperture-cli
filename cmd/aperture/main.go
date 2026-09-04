@@ -27,7 +27,7 @@ import (
 
 var (
 	flagVersion = flag.Bool("version", false, "print version and exit")
-	flagDebug   = flag.Bool("debug", false, "print env vars set before launching agent")
+	flagDebug   = flag.Bool("debug", false, "enable bridge diagnostics and print agent launch environment")
 
 	buildVersion = "B0-dev"
 	buildCommit  = "unknown"

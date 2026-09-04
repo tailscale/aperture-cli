@@ -245,6 +245,32 @@ func (m *model) endpointsMenu() *menu.Menu {
 // setupGuideMenu is shown when the preflight check fails. It diagnoses
 // the user's Tailscale status and provides actionable guidance.
 func (m *model) setupGuideMenu() *menu.Menu {
+	if ep := m.g.ActiveEndpoint(); ep.BridgeID != "" {
+		bridgeName := ep.BridgeID
+		if bridge, ok := m.g.Bridge(ep.BridgeID); ok {
+			bridgeName = bridge.Name
+		}
+		return &menu.Menu{
+			Title: setupGuideTitle,
+			Preamble: "Could not reach Aperture at " + ep.URL + " through bridge " + bridgeName + ".\n\n" +
+				"The bridge uses an embedded Tailscale node; this machine does not need Tailscale installed or running.",
+			Items: []menu.MenuItem{
+				{
+					Label: "Retry connection",
+					Action: func() menu.Result {
+						return menu.Result{Cmd: m.activateEndpointCmd(m.g.ActiveEndpoint())}
+					},
+				},
+				{
+					Label:  "Connection options",
+					Action: func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
+				},
+			},
+			Hint:   "Enter to select · Esc to quit",
+			OnBack: func() tea.Cmd { return m.quitCmd() },
+		}
+	}
+
 	ts := checkTailscale()
 
 	var preamble string
@@ -327,8 +353,17 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 					Disabled: true,
 				},
 				{
-					Label:  "Add Bridge",
-					Action: func() menu.Result { return menu.Result{Next: m.bridgesMenu()} },
+					Label: "Add Bridge",
+					Action: func() menu.Result {
+						m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+							if _, err := m.g.AddBridge(v); err != nil {
+								return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
+							}
+							m.refreshMenuByTitle("Choose a bridge", m.endpointBridgeMenu())
+							return nil
+						})
+						return menu.Result{}
+					},
 				},
 			},
 			Hint: "Enter to add a bridge · Esc to go back",

@@ -23,8 +23,8 @@ type Global struct {
 	// Populated by the TUI's preflight after a successful check.
 	Providers []ProviderInfo
 
-	// Debug enables verbose stderr dumps of env/args before each launch.
-	// Not persisted; set from the --debug flag.
+	// Debug enables bridge diagnostics and verbose stderr dumps of env/args
+	// before each launch. Not persisted; set from the --debug flag.
 	Debug bool
 }
 
