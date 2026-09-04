@@ -60,6 +60,10 @@ type InstallPlan struct {
 	// Run returns the command to execute on confirmation. If nil, the install
 	// is manual-only: the TUI shows Hint and does nothing.
 	Run func() (*exec.Cmd, error)
+	// SkipInstalledCheck is for commands that only begin a user-driven
+	// installation, such as opening a download page. Automated installers
+	// should leave this false so the TUI verifies the resulting binary.
+	SkipInstalledCheck bool
 }
 
 // UninstallPlan describes how to uninstall a client.

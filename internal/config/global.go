@@ -19,7 +19,8 @@ type Global struct {
 	// LastLaunch is the persisted record of the last successful client launch.
 	LastLaunch LaunchState
 
-	// Providers is the list returned from the active endpoint's /api/providers.
+	// Providers is the provider-level view aggregated from the active
+	// endpoint's /v1/models response.
 	// Populated by the TUI's preflight after a successful check.
 	Providers []ProviderInfo
 

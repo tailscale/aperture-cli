@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -442,7 +441,7 @@ func (m *model) installConfirmMenu(c clients.Client) *menu.Menu {
 					if plan.Run == nil {
 						return menu.Result{Pop: true}
 					}
-					return menu.Result{Cmd: runInstallCmd(plan.Run), PopOnDone: true}
+					return menu.Result{Cmd: runInstallCmd(c, plan), PopOnDone: true}
 				},
 			},
 			{
@@ -515,23 +514,30 @@ func (m *model) uninstallConfirmMenu(c clients.Client) *menu.Menu {
 	}
 }
 
-// runInstallCmd returns a tea.Cmd that runs the provided install command
-// with terminal takeover (so the user sees download progress) and emits
-// menu.InstallDoneMsg on completion.
-func runInstallCmd(producer func() (*exec.Cmd, error)) tea.Cmd {
-	cmd, err := producer()
+// runInstallCmd returns a tea.Cmd that runs the provided install command with
+// terminal takeover (so the user sees download progress). A zero exit status
+// is successful only if the client binary can then be found.
+func runInstallCmd(client clients.Client, plan clients.InstallPlan) tea.Cmd {
+	cmd, err := plan.Run()
 	if err != nil {
 		return func() tea.Msg { return menu.InstallDoneMsg{Err: err} }
 	}
 	if cmd == nil {
-		return func() tea.Msg { return menu.InstallDoneMsg{} }
+		return func() tea.Msg { return installDoneMsg(client, plan.SkipInstalledCheck, nil) }
 	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return menu.InstallDoneMsg{Err: err}
+		return installDoneMsg(client, plan.SkipInstalledCheck, err)
 	})
+}
+
+func installDoneMsg(client clients.Client, skipInstalledCheck bool, err error) menu.InstallDoneMsg {
+	if err == nil && !skipInstalledCheck && !client.IsInstalled() {
+		err = fmt.Errorf("%s installer completed, but %q was not found on PATH or in a known install location", client.Name(), client.BinaryName())
+	}
+	return menu.InstallDoneMsg{Err: err}
 }
 
 // runUninstallFn returns a tea.Cmd that invokes the uninstall function and

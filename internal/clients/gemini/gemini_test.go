@@ -11,9 +11,9 @@ import (
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "vertex", Compatibility: map[string]bool{"experimental_gemini_cli_vertex_compat": true}},
-		{ID: "gemini", Compatibility: map[string]bool{"gemini_generate_content": true}},
-		{ID: "openai", Compatibility: map[string]bool{"openai_chat": true}},
+		{ID: "vertex", SupportedEndpoints: map[string]bool{config.EndpointVertexGemini: true}},
+		{ID: "gemini", SupportedEndpoints: map[string]bool{config.EndpointGemini: true}},
+		{ID: "openai", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 2 {
@@ -22,7 +22,7 @@ func TestCompatibleProviders(t *testing.T) {
 }
 
 func TestBackendsFor_Vertex(t *testing.T) {
-	p := config.ProviderInfo{Compatibility: map[string]bool{"experimental_gemini_cli_vertex_compat": true}}
+	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{config.EndpointVertexGemini: true}}
 	bs := backendsFor(p)
 	if len(bs) != 1 || bs[0].id != "vertex" {
 		t.Errorf("backendsFor(vertex) = %+v", bs)
@@ -30,7 +30,7 @@ func TestBackendsFor_Vertex(t *testing.T) {
 }
 
 func TestBackendsFor_GeminiAPI(t *testing.T) {
-	p := config.ProviderInfo{Compatibility: map[string]bool{"gemini_generate_content": true}}
+	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{config.EndpointGemini: true}}
 	bs := backendsFor(p)
 	if len(bs) != 1 || bs[0].id != "gemini" {
 		t.Errorf("backendsFor(gemini) = %+v", bs)
@@ -38,9 +38,9 @@ func TestBackendsFor_GeminiAPI(t *testing.T) {
 }
 
 func TestBackendsFor_Both(t *testing.T) {
-	p := config.ProviderInfo{Compatibility: map[string]bool{
-		"experimental_gemini_cli_vertex_compat": true,
-		"gemini_generate_content":               true,
+	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{
+		config.EndpointVertexGemini: true,
+		config.EndpointGemini:       true,
 	}}
 	bs := backendsFor(p)
 	if len(bs) != 2 {

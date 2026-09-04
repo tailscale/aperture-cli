@@ -373,6 +373,58 @@ func TestEndpointActivationFailure_ShowsSetupGuide(t *testing.T) {
 	}
 }
 
+func TestInstallFailureShowsError(t *testing.T) {
+	m := &model{g: &config.Global{}, step: stepMenu}
+	installMenu := &menu.Menu{Title: "Install Claude Code?"}
+	m.resetStack(installMenu)
+
+	m.Update(menu.InstallDoneMsg{Err: fmt.Errorf("exit status 1")})
+	if m.step != stepError {
+		t.Fatalf("step = %v, want stepError", m.step)
+	}
+	if !strings.Contains(m.errMsg, "Install failed: exit status 1") {
+		t.Errorf("errMsg = %q, want install failure", m.errMsg)
+	}
+	if m.top() != installMenu {
+		t.Error("install failure discarded the confirmation menu")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.step != stepMenu || m.top() != installMenu {
+		t.Error("dismissing the error did not return to the install confirmation")
+	}
+}
+
+func TestInstallCompletionRequiresDetectedBinary(t *testing.T) {
+	client := &fakeClient{name: "Claude Code"}
+	msg := installDoneMsg(client, false, nil)
+	if msg.Err == nil || !strings.Contains(msg.Err.Error(), `"fake" was not found`) {
+		t.Fatalf("installDoneMsg error = %v, want missing binary", msg.Err)
+	}
+
+	client.installed = true
+	if msg := installDoneMsg(client, false, nil); msg.Err != nil {
+		t.Fatalf("installDoneMsg error = %v for installed client", msg.Err)
+	}
+
+	wantErr := fmt.Errorf("installer failed")
+	if msg := installDoneMsg(client, false, wantErr); msg.Err != wantErr {
+		t.Fatalf("installDoneMsg error = %v, want original error %v", msg.Err, wantErr)
+	}
+}
+
+func TestInstallCompletionCanSkipBinaryCheck(t *testing.T) {
+	client := &fakeClient{name: "Claude Cowork"}
+	if msg := installDoneMsg(client, true, nil); msg.Err != nil {
+		t.Fatalf("installDoneMsg error = %v for user-driven install", msg.Err)
+	}
+
+	wantErr := fmt.Errorf("could not open download page")
+	if msg := installDoneMsg(client, true, wantErr); msg.Err != wantErr {
+		t.Fatalf("installDoneMsg error = %v, want original error %v", msg.Err, wantErr)
+	}
+}
+
 func TestSetupGuideMenu_BridgeDoesNotRequireSystemTailscale(t *testing.T) {
 	m := &model{g: &config.Global{
 		ApertureHost: "http://aperture",
@@ -489,6 +541,40 @@ func TestFetchProvidersIncludesErrorResponseBody(t *testing.T) {
 	_, err := fetchProviders(srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "lookup aperture") {
 		t.Fatalf("fetchProviders error = %v, want response detail", err)
+	}
+}
+
+func TestFetchProvidersUsesModelsEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %q, want GET", r.Method)
+		}
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if got := r.Header.Get("User-Agent"); got != "aperture-cli" {
+			t.Errorf("User-Agent = %q, want aperture-cli", got)
+		}
+		_, _ = w.Write([]byte(`{
+			"object":"list",
+			"data":[{
+				"id":"claude-opus-5",
+				"supported_endpoints":["/v1/messages"],
+				"metadata":{"provider":{
+					"id":"anthropic","name":"Anthropic","description":"",
+					"requires_client_auth":false,"upstream":"anthropic"
+				}}
+			}]
+		}`))
+	}))
+	defer srv.Close()
+
+	got, err := fetchProviders(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "anthropic" || !got[0].SupportsEndpoint(config.EndpointAnthropicMessages) {
+		t.Fatalf("fetchProviders() = %#v, want Anthropic Messages provider", got)
 	}
 }
 

@@ -71,7 +71,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := http.Get(localURL + "/api/providers")
+	resp, err := http.Get(localURL + "/v1/models")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestActivateNormalLoggingOmitsDebugDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.Get(localURL + "/api/providers")
+	resp, err := http.Get(localURL + "/v1/models")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestActivate(t *testing.T) {
 				f := activate(t, backend)
 				defer f.manager.Close()
 
-				resp, err := http.Get(f.localURL + "/api/providers")
+				resp, err := http.Get(f.localURL + "/v1/models")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -259,8 +259,8 @@ func TestActivate(t *testing.T) {
 			name: "forwards request path",
 			run: func(t *testing.T) {
 				backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path != "/api/providers" {
-						t.Errorf("path = %q, want /api/providers", r.URL.Path)
+					if r.URL.Path != "/v1/models" {
+						t.Errorf("path = %q, want /v1/models", r.URL.Path)
 					}
 				}))
 				defer backend.Close()
@@ -268,7 +268,7 @@ func TestActivate(t *testing.T) {
 				f := activate(t, backend)
 				defer f.manager.Close()
 
-				resp, err := http.Get(f.localURL + "/api/providers")
+				resp, err := http.Get(f.localURL + "/v1/models")
 				if err != nil {
 					t.Fatal(err)
 				}

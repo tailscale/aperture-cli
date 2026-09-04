@@ -33,7 +33,7 @@ const (
 type backend struct {
 	id          string
 	displayName string
-	compatKey   string
+	endpoint    string
 	authType    string
 }
 
@@ -41,13 +41,13 @@ var backends = []backend{
 	{
 		id:          "vertex",
 		displayName: "Google Vertex",
-		compatKey:   "experimental_gemini_cli_vertex_compat",
+		endpoint:    config.EndpointVertexGemini,
 		authType:    "vertex-ai",
 	},
 	{
 		id:          "gemini",
 		displayName: "Gemini API",
-		compatKey:   "gemini_generate_content",
+		endpoint:    config.EndpointGemini,
 		authType:    "gemini-api-key",
 	},
 }
@@ -209,7 +209,7 @@ func (c *Client) Replay(g *config.Global) tea.Cmd {
 		return nil
 	}
 	b := backends[idx]
-	if !prov.Compatibility[b.compatKey] {
+	if !prov.SupportsEndpoint(b.endpoint) {
 		return nil
 	}
 	res := c.launch(g, prov, b)
@@ -242,7 +242,7 @@ func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 func backendsFor(p config.ProviderInfo) []backend {
 	var out []backend
 	for _, b := range backends {
-		if p.Compatibility[b.compatKey] {
+		if p.SupportsEndpoint(b.endpoint) {
 			out = append(out, b)
 		}
 	}

@@ -8,7 +8,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -97,7 +96,7 @@ func (m *model) Init() tea.Cmd {
 	return m.activateEndpointCmd(m.g.ActiveEndpoint())
 }
 
-// preflightResult is emitted when the /api/providers check completes.
+// preflightResult is emitted when the /v1/models check completes.
 type preflightResult struct {
 	host      string
 	providers []config.ProviderInfo
@@ -127,8 +126,15 @@ func runPreflight(host string) tea.Cmd {
 
 func fetchProviders(host string) ([]config.ProviderInfo, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	url := strings.TrimRight(host, "/") + "/api/providers"
-	resp, err := client.Get(url)
+	url := strings.TrimRight(host, "/") + "/v1/models"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Aperture intentionally filters model results for Claude Code user agents.
+	// Discovery needs the full grant-filtered model list for every harness.
+	req.Header.Set("User-Agent", "aperture-cli")
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +151,9 @@ func fetchProviders(host string) ([]config.ProviderInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	var provs []config.ProviderInfo
-	if err := json.Unmarshal(body, &provs); err != nil {
-		return nil, fmt.Errorf("could not parse providers response: %w", err)
+	provs, err := config.ParseProviders(body)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse models response: %w", err)
 	}
 	return provs, nil
 }
@@ -341,6 +347,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, runPreflight(m.g.ApertureHost)
 
 	case menu.InstallDoneMsg:
+		if msg.Err != nil {
+			m.errMsg = "Install failed: " + msg.Err.Error()
+			m.step = stepError
+			return m, nil
+		}
 		// Rebuild the root menu so install state is reflected.
 		m.step = stepMenu
 		m.resetStack(m.rootMenu())

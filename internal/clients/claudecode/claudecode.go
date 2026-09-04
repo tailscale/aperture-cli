@@ -39,7 +39,7 @@ const (
 type backend struct {
 	id          string
 	displayName string
-	compatKeys  []string
+	endpoints   []string
 	// picksModel is false for backends where the user does not pick a
 	// specific model (Bedrock: models are resolved per-tier at runtime;
 	// Mantle: Claude Code maps its model aliases to Mantle model IDs).
@@ -47,11 +47,11 @@ type backend struct {
 }
 
 var backends = []backend{
-	{id: "anthropic", displayName: "Anthropic API", compatKeys: []string{"anthropic_messages"}, picksModel: true},
-	{id: "bedrock", displayName: "AWS Bedrock", compatKeys: []string{"bedrock_model_invoke"}, picksModel: false},
-	{id: "mantle", displayName: "Amazon Bedrock (Mantle)", compatKeys: []string{"anthropic_messages"}, picksModel: false},
-	{id: "vertex", displayName: "Google Vertex", compatKeys: []string{"google_raw_predict"}, picksModel: true},
-	{id: "zai", displayName: "z.ai", compatKeys: []string{"anthropic_messages"}, picksModel: true},
+	{id: "anthropic", displayName: "Anthropic API", endpoints: []string{config.EndpointAnthropicMessages}, picksModel: true},
+	{id: "bedrock", displayName: "AWS Bedrock", endpoints: []string{config.EndpointBedrockInvoke}, picksModel: false},
+	{id: "mantle", displayName: "Amazon Bedrock (Mantle)", endpoints: []string{config.EndpointAnthropicMessages}, picksModel: false},
+	{id: "vertex", displayName: "Google Vertex", endpoints: []string{config.EndpointVertexClaude}, picksModel: true},
+	{id: "zai", displayName: "z.ai", endpoints: []string{config.EndpointAnthropicMessages}, picksModel: true},
 }
 
 // Name implements clients.Client.
@@ -73,7 +73,7 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 	return clients.InstallPlan{
 		Hint: "curl -fsSL https://claude.ai/install.sh | bash",
 		Run: func() (*exec.Cmd, error) {
-			return exec.Command("/bin/sh", "-c", "curl -fsSL https://claude.ai/install.sh | bash"), nil
+			return exec.Command("bash", "-o", "pipefail", "-c", "curl -fsSL https://claude.ai/install.sh | bash"), nil
 		},
 	}
 }
@@ -254,7 +254,7 @@ func (c *Client) QuickSelectLabel(g *config.Global) string {
 }
 
 // compatibleProviders returns providers that can service any Claude Code
-// backend, deduplicating across backends that share a compat key.
+// backend, deduplicating across backends that share an endpoint.
 func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 	var out []config.ProviderInfo
 	for _, p := range all {
@@ -265,8 +265,8 @@ func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 	return out
 }
 
-// backendsFor returns every backend the provider's compat map supports,
-// without dedup (Anthropic and z.ai both take "anthropic_messages").
+// backendsFor returns every backend the provider's endpoints support,
+// without dedup (Anthropic and z.ai both take /v1/messages).
 func backendsFor(p config.ProviderInfo) []backend {
 	var out []backend
 	for _, b := range backends {
@@ -278,15 +278,15 @@ func backendsFor(p config.ProviderInfo) []backend {
 }
 
 // dedupedBackendsFor returns backends for p, dropping ones that share a
-// compat signature with an earlier backend (keeps Anthropic, drops z.ai
-// when both match "anthropic_messages"). The user sees one row per
+// endpoint signature with an earlier backend (keeps Anthropic, drops z.ai
+// when both match /v1/messages). The user sees one row per
 // functionally distinct routing option.
 func dedupedBackendsFor(p config.ProviderInfo) []backend {
 	raw := backendsFor(p)
 	seen := make(map[string]bool)
 	var out []backend
 	for _, b := range raw {
-		sig := strings.Join(b.compatKeys, ",")
+		sig := strings.Join(b.endpoints, ",")
 		if seen[sig] {
 			continue
 		}
@@ -299,7 +299,7 @@ func dedupedBackendsFor(p config.ProviderInfo) []backend {
 func backendMatches(p config.ProviderInfo, b backend) bool {
 	// Mantle speaks the Anthropic Messages protocol, but Claude Code needs a
 	// distinct transport mode for its authentication and model-ID semantics.
-	// Upstream metadata is therefore authoritative; compatibility alone cannot
+	// Upstream metadata is therefore authoritative; endpoint support alone cannot
 	// distinguish Mantle from a regular Anthropic-compatible provider.
 	if p.Upstream == "bedrock-mantle" {
 		if b.id != "mantle" {
@@ -308,8 +308,8 @@ func backendMatches(p config.ProviderInfo, b backend) bool {
 	} else if b.id == "mantle" {
 		return false
 	}
-	for _, k := range b.compatKeys {
-		if p.Compatibility[k] {
+	for _, endpoint := range b.endpoints {
+		if p.SupportsEndpoint(endpoint) {
 			return true
 		}
 	}

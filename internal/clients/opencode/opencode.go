@@ -1,7 +1,7 @@
 // Package opencode is the OpenCode client. Unlike the other clients,
 // OpenCode has a single abstract routing flavor: the real protocol (OpenAI
 // Responses, OpenAI Chat, Anthropic Messages, Bedrock, Vertex, Gemini) is
-// decided at launch time from the chosen provider's compatibility map. The
+// decided at launch time from the chosen provider's advertised endpoints. The
 // Menu flow goes straight from provider selection to launch; model
 // selection happens inside OpenCode itself.
 package opencode
@@ -29,17 +29,17 @@ const (
 	binaryName = "opencode"
 )
 
-// compatKeys is the set of provider-compatibility flags OpenCode can
-// translate into a working config. A provider matches if any one is set.
-var compatKeys = []string{
-	"openai_responses",
-	"anthropic_messages",
-	"openai_chat",
-	"google_generate_content",
-	"google_raw_predict",
-	"bedrock_model_invoke",
-	"bedrock_converse",
-	"gemini_generate_content",
+// supportedEndpoints is the set of Aperture endpoints OpenCode can translate
+// into a working config. A provider matches if any one is advertised.
+var supportedEndpoints = []string{
+	config.EndpointOpenAIResponses,
+	config.EndpointAnthropicMessages,
+	config.EndpointOpenAIChat,
+	config.EndpointVertexGemini,
+	config.EndpointVertexClaude,
+	config.EndpointBedrockInvoke,
+	config.EndpointBedrockConverse,
+	config.EndpointGemini,
 }
 
 // Name implements clients.Client.
@@ -61,7 +61,7 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 	return clients.InstallPlan{
 		Hint: "curl -fsSL https://opencode.ai/install | bash",
 		Run: func() (*exec.Cmd, error) {
-			return exec.Command("/bin/sh", "-c", "curl -fsSL https://opencode.ai/install | bash"), nil
+			return exec.Command("bash", "-o", "pipefail", "-c", "curl -fsSL https://opencode.ai/install | bash"), nil
 		},
 	}
 }
@@ -127,7 +127,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo) menu.Result {
 		"OPENCODE_CONFIG": configPath,
 	}
 	// Bedrock SDK requires at least placeholder AWS credentials and region.
-	if p.Compatibility["bedrock_model_invoke"] || p.Compatibility["bedrock_converse"] {
+	if p.SupportsEndpoint(config.EndpointBedrockInvoke) || p.SupportsEndpoint(config.EndpointBedrockConverse) {
 		env["AWS_ACCESS_KEY_ID"] = "not-needed"
 		env["AWS_SECRET_ACCESS_KEY"] = "not-needed"
 		env["AWS_REGION"] = "us-east-1"
@@ -184,8 +184,8 @@ func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 }
 
 func providerMatches(p config.ProviderInfo) bool {
-	for _, k := range compatKeys {
-		if p.Compatibility[k] {
+	for _, endpoint := range supportedEndpoints {
+		if p.SupportsEndpoint(endpoint) {
 			return true
 		}
 	}

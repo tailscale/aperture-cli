@@ -21,15 +21,6 @@ func (c *ClaudeDesktopProfile) SupportedBackends() []Backend {
 	}
 }
 
-func (c *ClaudeDesktopProfile) RequiredCompat(b Backend) []string {
-	switch b.Type {
-	case BackendAnthropic:
-		return []string{"anthropic_messages"}
-	default:
-		return nil
-	}
-}
-
 func (c *ClaudeDesktopProfile) InstallHint() string { return platformInstallHint() }
 
 // RunInstall writes the gateway configuration and returns a command that

@@ -1,6 +1,6 @@
 // Package codex is the OpenAI Codex client. It speaks OpenAI's /v1/responses
-// API and is registered only with providers whose compatibility map includes
-// "openai_responses". On launch it writes a CODEX_HOME containing auth.json
+// API and is registered only with providers that advertise /v1/responses. On
+// launch it writes a CODEX_HOME containing auth.json
 // (pre-populated so the first run skips interactive login) and config.toml
 // (pointing Codex at the aperture gateway).
 package codex
@@ -26,7 +26,6 @@ type Client struct{}
 const (
 	name       = "OpenAI Codex"
 	binaryName = "codex"
-	compatKey  = "openai_responses"
 )
 
 // Name implements clients.Client.
@@ -180,7 +179,7 @@ func (c *Client) Replay(g *config.Global) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	if !prov.Compatibility[compatKey] {
+	if !prov.SupportsEndpoint(config.EndpointOpenAIResponses) {
 		return nil
 	}
 	model := g.LastLaunch.LastModel
@@ -206,7 +205,7 @@ func (c *Client) QuickSelectLabel(g *config.Global) string {
 func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 	var out []config.ProviderInfo
 	for _, p := range all {
-		if p.Compatibility[compatKey] {
+		if p.SupportsEndpoint(config.EndpointOpenAIResponses) {
 			out = append(out, p)
 		}
 	}

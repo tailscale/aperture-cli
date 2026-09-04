@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -11,12 +12,26 @@ import (
 
 const testHost = "http://ai.example.com"
 
+func TestInstallCommandDetectsPipelineFailures(t *testing.T) {
+	plan := (&Client{}).Install(&config.Global{})
+	cmd, err := plan.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cmd.Args, []string{
+		"bash", "-o", "pipefail", "-c",
+		"curl -fsSL https://opencode.ai/install | bash",
+	}) {
+		t.Errorf("install command args = %q, want bash with pipefail", cmd.Args)
+	}
+}
+
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "anthropic", Compatibility: map[string]bool{"anthropic_messages": true}},
-		{ID: "openai", Compatibility: map[string]bool{"openai_chat": true}},
-		{ID: "bedrock", Compatibility: map[string]bool{"bedrock_converse": true}},
-		{ID: "none", Compatibility: map[string]bool{"something_else": true}},
+		{ID: "anthropic", SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}},
+		{ID: "openai", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}},
+		{ID: "bedrock", SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}},
+		{ID: "none", SupportedEndpoints: map[string]bool{"/unknown": true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 3 {
@@ -26,21 +41,21 @@ func TestCompatibleProviders(t *testing.T) {
 
 func TestPickSDK(t *testing.T) {
 	cases := []struct {
-		name    string
-		compat  map[string]bool
-		wantNPM string
+		name      string
+		endpoints map[string]bool
+		wantNPM   string
 	}{
-		{"responses", map[string]bool{"openai_responses": true}, "@ai-sdk/openai"},
-		{"anthropic", map[string]bool{"anthropic_messages": true}, "@ai-sdk/anthropic"},
-		{"chat_only", map[string]bool{"openai_chat": true}, "@ai-sdk/openai-compatible"},
-		{"vertex", map[string]bool{"google_generate_content": true}, "@ai-sdk/google-vertex"},
-		{"bedrock", map[string]bool{"bedrock_converse": true}, "@ai-sdk/amazon-bedrock"},
-		{"gemini", map[string]bool{"gemini_generate_content": true}, "@ai-sdk/google"},
-		{"none", map[string]bool{"unknown": true}, ""},
+		{"responses", map[string]bool{config.EndpointOpenAIResponses: true}, "@ai-sdk/openai"},
+		{"anthropic", map[string]bool{config.EndpointAnthropicMessages: true}, "@ai-sdk/anthropic"},
+		{"chat_only", map[string]bool{config.EndpointOpenAIChat: true}, "@ai-sdk/openai-compatible"},
+		{"vertex", map[string]bool{config.EndpointVertexGemini: true}, "@ai-sdk/google-vertex"},
+		{"bedrock", map[string]bool{config.EndpointBedrockConverse: true}, "@ai-sdk/amazon-bedrock"},
+		{"gemini", map[string]bool{config.EndpointGemini: true}, "@ai-sdk/google"},
+		{"none", map[string]bool{"/unknown": true}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			npm, _ := pickSDK(tc.compat, testHost)
+			npm, _ := pickSDK(config.ProviderInfo{SupportedEndpoints: tc.endpoints}, testHost)
 			if npm != tc.wantNPM {
 				t.Errorf("npm = %q, want %q", npm, tc.wantNPM)
 			}
@@ -49,10 +64,10 @@ func TestPickSDK(t *testing.T) {
 }
 
 func TestPickSDK_ResponsesBeatsChat(t *testing.T) {
-	npm, _ := pickSDK(map[string]bool{
-		"openai_chat":      true,
-		"openai_responses": true,
-	}, testHost)
+	npm, _ := pickSDK(config.ProviderInfo{SupportedEndpoints: map[string]bool{
+		config.EndpointOpenAIChat:      true,
+		config.EndpointOpenAIResponses: true,
+	}}, testHost)
 	if npm != "@ai-sdk/openai" {
 		t.Errorf("npm = %q, want @ai-sdk/openai (responses should win)", npm)
 	}
@@ -70,11 +85,11 @@ func TestWriteProviderConfig(t *testing.T) {
 		wantOptions map[string]string
 	}{
 		{
-			name: "anthropic_messages",
+			name: "anthropic",
 			provider: config.ProviderInfo{
 				ID: "anthropic", Name: "Anthropic",
-				Models:        []string{"claude-sonnet-4-5", "claude-haiku-4-5"},
-				Compatibility: map[string]bool{"anthropic_messages": true},
+				Models:             []string{"claude-sonnet-4-5", "claude-haiku-4-5"},
+				SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true},
 			},
 			wantNPM: "@ai-sdk/anthropic",
 			wantOptions: map[string]string{
@@ -83,11 +98,11 @@ func TestWriteProviderConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "bedrock_converse",
+			name: "bedrock",
 			provider: config.ProviderInfo{
 				ID: "bedrock", Name: "AWS Bedrock",
-				Models:        []string{"us.anthropic.claude-opus-4-7"},
-				Compatibility: map[string]bool{"bedrock_converse": true},
+				Models:             []string{"us.anthropic.claude-opus-4-7"},
+				SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true},
 			},
 			wantNPM: "@ai-sdk/amazon-bedrock",
 			wantOptions: map[string]string{
@@ -96,13 +111,13 @@ func TestWriteProviderConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "google_generate_content",
+			name: "vertex",
 			provider: config.ProviderInfo{
 				ID: "vertex", Name: "Vertex",
 				Models: []string{"gemini-2.5-pro"},
-				Compatibility: map[string]bool{
-					"google_generate_content": true,
-					"google_raw_predict":      true,
+				SupportedEndpoints: map[string]bool{
+					config.EndpointVertexGemini: true,
+					config.EndpointVertexClaude: true,
 				},
 			},
 			wantNPM: "@ai-sdk/google-vertex",
@@ -112,13 +127,13 @@ func TestWriteProviderConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "openai_responses",
+			name: "openai",
 			provider: config.ProviderInfo{
 				ID: "openai", Name: "OpenAI",
 				Models: []string{"gpt-5"},
-				Compatibility: map[string]bool{
-					"openai_chat":      true,
-					"openai_responses": true,
+				SupportedEndpoints: map[string]bool{
+					config.EndpointOpenAIChat:      true,
+					config.EndpointOpenAIResponses: true,
 				},
 			},
 			wantNPM: "@ai-sdk/openai",
@@ -131,8 +146,8 @@ func TestWriteProviderConfig(t *testing.T) {
 			name: "openai_chat_only",
 			provider: config.ProviderInfo{
 				ID: "openrouter", Name: "OpenRouter",
-				Models:        []string{"qwen/qwen3-235b-a22b-2507"},
-				Compatibility: map[string]bool{"openai_chat": true},
+				Models:             []string{"qwen/qwen3-235b-a22b-2507"},
+				SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true},
 			},
 			wantNPM: "@ai-sdk/openai-compatible",
 			wantOptions: map[string]string{
