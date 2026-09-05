@@ -3,6 +3,7 @@ package claudecode
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,6 +12,20 @@ import (
 )
 
 const testHost = "http://ai.example.com"
+
+func TestInstallCommandDetectsPipelineFailures(t *testing.T) {
+	plan := (&Client{}).Install(&config.Global{})
+	cmd, err := plan.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cmd.Args, []string{
+		"bash", "-o", "pipefail", "-c",
+		"curl -fsSL https://claude.ai/install.sh | bash",
+	}) {
+		t.Errorf("install command args = %q, want bash with pipefail", cmd.Args)
+	}
+}
 
 func TestEnv_Anthropic(t *testing.T) {
 	env, err := envForBackend(testHost, backends[0])
@@ -122,16 +137,16 @@ func TestApplyModel_Bare(t *testing.T) {
 }
 
 func TestBackendsFor_Anthropic(t *testing.T) {
-	p := config.ProviderInfo{Compatibility: map[string]bool{"anthropic_messages": true}}
+	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
 	got := backendsFor(p)
-	// anthropic + zai both take anthropic_messages.
+	// anthropic + zai both take /v1/messages.
 	if len(got) != 2 {
 		t.Errorf("backendsFor = %+v", got)
 	}
 }
 
 func TestDedupedBackendsFor_AnthropicVsZAI(t *testing.T) {
-	p := config.ProviderInfo{Compatibility: map[string]bool{"anthropic_messages": true}}
+	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
 	got := dedupedBackendsFor(p)
 	if len(got) != 1 || got[0].id != "anthropic" {
 		t.Errorf("dedupedBackendsFor = %+v, want [anthropic]", got)
@@ -140,8 +155,8 @@ func TestDedupedBackendsFor_AnthropicVsZAI(t *testing.T) {
 
 func TestBackendsFor_Mantle(t *testing.T) {
 	p := config.ProviderInfo{
-		Upstream:      "bedrock-mantle",
-		Compatibility: map[string]bool{"anthropic_messages": true},
+		Upstream:           "bedrock-mantle",
+		SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true},
 	}
 	got := backendsFor(p)
 	if len(got) != 1 || got[0].id != "mantle" {
@@ -156,10 +171,21 @@ func TestBackendsFor_MantleRequiresAnthropicMessages(t *testing.T) {
 	}
 }
 
+func TestBackendsFor_MantleOpenAIIsNotClaudeCompatible(t *testing.T) {
+	p := config.ProviderInfo{
+		ID:                 "mantle-openai",
+		Upstream:           "bedrock-mantle",
+		SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true},
+	}
+	if got := backendsFor(p); len(got) != 0 {
+		t.Errorf("backendsFor = %+v, want empty", got)
+	}
+}
+
 func TestDedupedBackendsFor_Multi(t *testing.T) {
-	p := config.ProviderInfo{Compatibility: map[string]bool{
-		"anthropic_messages":   true,
-		"bedrock_model_invoke": true,
+	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{
+		config.EndpointAnthropicMessages: true,
+		config.EndpointBedrockInvoke:     true,
 	}}
 	got := dedupedBackendsFor(p)
 	if len(got) != 2 {
@@ -169,10 +195,10 @@ func TestDedupedBackendsFor_Multi(t *testing.T) {
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "anthropic", Compatibility: map[string]bool{"anthropic_messages": true}},
-		{ID: "bedrock", Compatibility: map[string]bool{"bedrock_model_invoke": true}},
-		{ID: "mantle", Upstream: "bedrock-mantle", Compatibility: map[string]bool{"anthropic_messages": true}},
-		{ID: "openai-only", Compatibility: map[string]bool{"openai_chat": true}},
+		{ID: "anthropic", SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}},
+		{ID: "bedrock", SupportedEndpoints: map[string]bool{config.EndpointBedrockInvoke: true}},
+		{ID: "mantle", Upstream: "bedrock-mantle", SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}},
+		{ID: "openai-only", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 3 {
@@ -188,7 +214,7 @@ func TestTierModelEnv_Bedrock(t *testing.T) {
 			"us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 			"us.anthropic.claude-haiku-4-5-20251001-v1:0",
 		},
-		Compatibility: map[string]bool{"bedrock_model_invoke": true},
+		SupportedEndpoints: map[string]bool{config.EndpointBedrockInvoke: true},
 	}
 	env := tierModelEnv(b, p)
 	if !containsSubstr(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "opus") {
@@ -205,8 +231,8 @@ func TestTierModelEnv_Bedrock(t *testing.T) {
 func TestTierModelEnv_NonBedrock(t *testing.T) {
 	b := lookupBackend("anthropic")
 	p := config.ProviderInfo{
-		Models:        []string{"claude-opus-4", "claude-sonnet-4"},
-		Compatibility: map[string]bool{"anthropic_messages": true},
+		Models:             []string{"claude-opus-4", "claude-sonnet-4"},
+		SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true},
 	}
 	env := tierModelEnv(b, p)
 	if len(env) != 0 {
@@ -217,9 +243,9 @@ func TestTierModelEnv_NonBedrock(t *testing.T) {
 func TestTierModelEnv_Mantle(t *testing.T) {
 	b := lookupBackend("mantle")
 	p := config.ProviderInfo{
-		Upstream:      "bedrock-mantle",
-		Models:        []string{"anthropic.claude-opus-5"},
-		Compatibility: map[string]bool{"anthropic_messages": true},
+		Upstream:           "bedrock-mantle",
+		Models:             []string{"anthropic.claude-opus-5"},
+		SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true},
 	}
 	if env := tierModelEnv(b, p); len(env) != 0 {
 		t.Errorf("tierModelEnv(mantle) = %+v, want empty", env)
@@ -254,11 +280,11 @@ func TestMantleMenuLaunchAndReplay(t *testing.T) {
 			"anthropic.claude-opus-5",
 			"anthropic.claude-sonnet-5",
 		},
-		// Include Bedrock Invoke compatibility to prove that the authoritative
+		// Include Bedrock Invoke support to prove that the authoritative
 		// upstream type still selects only Mantle.
-		Compatibility: map[string]bool{
-			"anthropic_messages":   true,
-			"bedrock_model_invoke": true,
+		SupportedEndpoints: map[string]bool{
+			config.EndpointAnthropicMessages: true,
+			config.EndpointBedrockInvoke:     true,
 		},
 	}
 	g := &config.Global{

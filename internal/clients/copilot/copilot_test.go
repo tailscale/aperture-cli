@@ -65,9 +65,9 @@ func TestBuildEnv_Anthropic(t *testing.T) {
 
 func TestBackendsFor(t *testing.T) {
 	t.Run("openai_both", func(t *testing.T) {
-		p := config.ProviderInfo{Compatibility: map[string]bool{
-			"openai_chat":      true,
-			"openai_responses": true,
+		p := config.ProviderInfo{SupportedEndpoints: map[string]bool{
+			config.EndpointOpenAIChat:      true,
+			config.EndpointOpenAIResponses: true,
 		}}
 		bs := backendsFor(p)
 		if len(bs) != 2 {
@@ -75,14 +75,14 @@ func TestBackendsFor(t *testing.T) {
 		}
 	})
 	t.Run("anthropic_only", func(t *testing.T) {
-		p := config.ProviderInfo{Compatibility: map[string]bool{"anthropic_messages": true}}
+		p := config.ProviderInfo{SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
 		bs := backendsFor(p)
 		if len(bs) != 1 || bs[0].id != "anthropic" {
 			t.Errorf("backendsFor = %+v, want [anthropic]", bs)
 		}
 	})
 	t.Run("bedrock_none", func(t *testing.T) {
-		p := config.ProviderInfo{Compatibility: map[string]bool{"bedrock": true}}
+		p := config.ProviderInfo{SupportedEndpoints: map[string]bool{"/unknown": true}}
 		bs := backendsFor(p)
 		if len(bs) != 0 {
 			t.Errorf("backendsFor = %+v, want empty", bs)
@@ -92,9 +92,9 @@ func TestBackendsFor(t *testing.T) {
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "openai", Compatibility: map[string]bool{"openai_chat": true, "openai_responses": true}},
-		{ID: "anthropic", Compatibility: map[string]bool{"anthropic_messages": true}},
-		{ID: "bedrock", Compatibility: map[string]bool{"bedrock": true}},
+		{ID: "openai", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true, config.EndpointOpenAIResponses: true}},
+		{ID: "anthropic", SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}},
+		{ID: "bedrock", SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 2 {

@@ -42,7 +42,8 @@ func (c *desktopClient) IsInstalled() bool {
 
 func (c *desktopClient) Install(g *config.Global) clients.InstallPlan {
 	return clients.InstallPlan{
-		Hint: platformInstallHint(),
+		Hint:               platformInstallHint(),
+		SkipInstalledCheck: true,
 		Run: func() (*exec.Cmd, error) {
 			if err := platformConfigure(GatewayURL(g.ApertureHost)); err != nil {
 				return nil, err

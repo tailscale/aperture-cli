@@ -8,7 +8,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -87,6 +87,7 @@ type model struct {
 	forcedToEndpoint bool // true when preflight failure dropped user on endpoints menu
 	preflightLabel   string
 	bridgeLogCh      chan string
+	bridgeLogCtx     context.Context
 	bridgeLogs       []string
 	bridgeCancel     context.CancelFunc
 }
@@ -95,7 +96,7 @@ func (m *model) Init() tea.Cmd {
 	return m.activateEndpointCmd(m.g.ActiveEndpoint())
 }
 
-// preflightResult is emitted when the /api/providers check completes.
+// preflightResult is emitted when the /v1/models check completes.
 type preflightResult struct {
 	host      string
 	providers []config.ProviderInfo
@@ -109,8 +110,11 @@ type endpointActivationResult struct {
 	err       error
 }
 
-type bridgeLogMsg string
-type bridgeLogDoneMsg struct{}
+type bridgeLogMsg struct {
+	ch   chan string
+	line string
+}
+type bridgeLogDoneMsg struct{ ch chan string }
 type quitMsg struct{ Err error }
 
 func runPreflight(host string) tea.Cmd {
@@ -122,22 +126,34 @@ func runPreflight(host string) tea.Cmd {
 
 func fetchProviders(host string) ([]config.ProviderInfo, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	url := strings.TrimRight(host, "/") + "/api/providers"
-	resp, err := client.Get(url)
+	url := strings.TrimRight(host, "/") + "/v1/models"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Aperture intentionally filters model results for Claude Code user agents.
+	// Discovery needs the full grant-filtered model list for every harness.
+	req.Header.Set("User-Agent", "aperture-cli")
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		detail := strings.TrimSpace(string(body))
+		if detail != "" {
+			return nil, fmt.Errorf("unexpected status %d from %s: %s", resp.StatusCode, url, detail)
+		}
 		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	var provs []config.ProviderInfo
-	if err := json.Unmarshal(body, &provs); err != nil {
-		return nil, fmt.Errorf("could not parse providers response: %w", err)
+	provs, err := config.ParseProviders(body)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse models response: %w", err)
 	}
 	return provs, nil
 }
@@ -147,6 +163,7 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 	m.preflightErr = ""
 	m.bridgeLogs = nil
 	m.bridgeLogCh = nil
+	m.bridgeLogCtx = nil
 	if m.bridgeCancel != nil {
 		m.bridgeCancel()
 		m.bridgeCancel = nil
@@ -184,37 +201,60 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 	ch := make(chan string, 32)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.bridgeLogCh = ch
+	m.bridgeLogCtx = ctx
 	m.bridgeCancel = cancel
 	m.preflightLabel = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
+	bridgeLogf := bridgeLogSink(ctx, ch)
 	activate := func() tea.Msg {
 		defer cancel()
-		defer close(ch)
-		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, func(line string) {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				return
-			}
-			select {
-			case ch <- line:
-			default:
-			}
-		})
+		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, bridgeLogf)
 		if err != nil {
 			return endpointActivationResult{endpoint: ep, host: ep.URL, err: err}
 		}
 		provs, err := fetchProviders(localURL)
+		if err != nil {
+			err = fmt.Errorf("bridge %s could not reach %s: %w", bridge.Name, ep.URL, err)
+		}
 		return endpointActivationResult{endpoint: ep, host: localURL, providers: provs, err: err}
 	}
-	return tea.Batch(activate, waitBridgeLog(ch))
+	return tea.Batch(activate, waitBridgeLog(ctx, ch))
 }
 
-func waitBridgeLog(ch <-chan string) tea.Cmd {
-	return func() tea.Msg {
-		line, ok := <-ch
-		if !ok {
-			return bridgeLogDoneMsg{}
+func bridgeLogSink(ctx context.Context, ch chan<- string) func(string) {
+	return func(line string) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
 		}
-		return bridgeLogMsg(line)
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+		case ch <- line:
+		default:
+		}
+	}
+}
+
+func waitBridgeLog(ctx context.Context, ch chan string) tea.Cmd {
+	return func() tea.Msg {
+		// Drain anything already logged before observing cancellation. This
+		// preserves the final dial/proxy error when preflight cancels the log
+		// context immediately after the request returns.
+		select {
+		case line := <-ch:
+			return bridgeLogMsg{ch: ch, line: line}
+		default:
+		}
+		select {
+		case line := <-ch:
+			return bridgeLogMsg{ch: ch, line: line}
+		case <-ctx.Done():
+			return bridgeLogDoneMsg{ch: ch}
+		}
 	}
 }
 
@@ -273,17 +313,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case bridgeLogMsg:
-		m.bridgeLogs = append(m.bridgeLogs, string(msg))
-		if len(m.bridgeLogs) > 12 {
-			m.bridgeLogs = m.bridgeLogs[len(m.bridgeLogs)-12:]
+		if m.bridgeLogCh != msg.ch {
+			return m, nil
 		}
+		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, msg.line)
 		if m.bridgeLogCh != nil {
-			return m, waitBridgeLog(m.bridgeLogCh)
+			return m, waitBridgeLog(m.bridgeLogCtx, m.bridgeLogCh)
 		}
 		return m, nil
 
 	case bridgeLogDoneMsg:
-		m.bridgeLogCh = nil
+		if m.bridgeLogCh == msg.ch {
+			m.bridgeLogCh = nil
+			m.bridgeLogCtx = nil
+		}
 		return m, nil
 
 	case quitMsg:
@@ -304,6 +347,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, runPreflight(m.g.ApertureHost)
 
 	case menu.InstallDoneMsg:
+		if msg.Err != nil {
+			m.errMsg = "Install failed: " + msg.Err.Error()
+			m.step = stepError
+			return m, nil
+		}
 		// Rebuild the root menu so install state is reflected.
 		m.step = stepMenu
 		m.resetStack(m.rootMenu())
@@ -347,6 +395,43 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+const bridgeLogLimit = 12
+
+// appendBridgeLog bounds the on-screen bridge log while retaining the
+// diagnostics produced by aperture-cli itself. Verbose tsnet messages can be
+// frequent enough to otherwise evict the network identity, target visibility,
+// and dial failure that -debug is intended to expose.
+func appendBridgeLog(logs []string, line string) []string {
+	logs = append(logs, line)
+	for len(logs) > bridgeLogLimit {
+		drop := 0
+		for i, line := range logs {
+			if !importantBridgeLog(line) {
+				drop = i
+				break
+			}
+		}
+		logs = append(logs[:drop], logs[drop+1:]...)
+	}
+	return logs
+}
+
+func importantBridgeLog(line string) bool {
+	for _, prefix := range []string{
+		"Bridge network:",
+		"Bridge health:",
+		"Bridge target ",
+		"Bridge dial failed:",
+		"Bridge proxy error:",
+		"Could not read bridge network status:",
+	} {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *model) updateMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -535,9 +620,9 @@ func (m *model) View() string {
 			label = "Checking " + m.g.ApertureHost + " ..."
 		}
 		var sb strings.Builder
-		sb.WriteString(dotYellow + " " + label + "\n")
+		sb.WriteString(m.wrapText("", dotYellow+" "+label) + "\n")
 		for _, line := range m.bridgeLogs {
-			sb.WriteString(dimStyle.Render("  " + line))
+			sb.WriteString(dimStyle.Render(m.wrapText("  ", line)))
 			sb.WriteString("\n")
 		}
 		return sb.String()
@@ -545,7 +630,7 @@ func (m *model) View() string {
 		var sb strings.Builder
 		sb.WriteString(errorStyle.Render("Cannot launch"))
 		sb.WriteString("\n\n")
-		sb.WriteString(m.errMsg)
+		sb.WriteString(m.wrapText("", m.errMsg))
 		sb.WriteString("\n\n")
 		sb.WriteString(dimStyle.Render("Any key to go back · q to quit\n"))
 		return sb.String()
@@ -581,7 +666,7 @@ func (m *model) viewMenu() string {
 	}
 	if top.Preamble != "" {
 		for _, line := range strings.Split(top.Preamble, "\n") {
-			sb.WriteString(dimStyle.Render("  " + line))
+			sb.WriteString(dimStyle.Render(m.wrapText("  ", line)))
 			sb.WriteString("\n")
 		}
 		sb.WriteString("\n")
@@ -774,16 +859,38 @@ func (m *model) menuHeader(top *menu.Menu) string {
 		if n := len(m.g.Providers); n > 0 {
 			header += fmt.Sprintf(" (%d providers)", n)
 		}
-		return header + "\n\n"
+		return m.wrapText("", header) + "\n\n"
 	}
 	if m.forcedToEndpoint && (top.Title == endpointsTitle || top.Title == setupGuideTitle) {
-		header := dotRed + " Could not reach " + m.g.ApertureHost + "\n"
-		if m.preflightErr != "" && top.Title != setupGuideTitle {
-			header += dimStyle.Render("  "+m.preflightErr) + "\n"
+		header := m.wrapText("", dotRed+" Could not reach "+m.g.ApertureHost) + "\n"
+		if m.preflightErr != "" {
+			header += dimStyle.Render(m.wrapText("  ", m.preflightErr)) + "\n"
+		}
+		if m.g.Debug {
+			for _, line := range m.bridgeLogs {
+				header += dimStyle.Render(m.wrapText("  ", line)) + "\n"
+			}
 		}
 		return header + "\n"
 	}
 	return ""
+}
+
+// wrapText wraps application output before Bubble Tea's renderer sees it.
+// Bubble Tea truncates over-width lines rather than wrapping them, which can
+// otherwise remove the useful end of a bridge error. Continuation lines keep
+// the same indentation as the first line.
+func (m *model) wrapText(indent, text string) string {
+	if m.width <= 0 {
+		return indent + text
+	}
+	indentWidth := ansi.StringWidth(indent)
+	if indentWidth >= m.width {
+		indent = ""
+		indentWidth = 0
+	}
+	wrapped := ansi.Wrap(text, m.width-indentWidth, "")
+	return indent + strings.ReplaceAll(wrapped, "\n", "\n"+indent)
 }
 
 // --- Stack helpers ---

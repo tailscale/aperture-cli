@@ -1,6 +1,10 @@
 package profiles
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tailscale/aperture-cli/internal/config"
+)
 
 func TestGatewayURL(t *testing.T) {
 	tests := []struct {
@@ -17,5 +21,12 @@ func TestGatewayURL(t *testing.T) {
 		if got := GatewayURL(tt.input); got != tt.want {
 			t.Errorf("GatewayURL(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestDesktopInstallSkipsImmediateBinaryCheck(t *testing.T) {
+	plan := (&desktopClient{}).Install(&config.Global{})
+	if !plan.SkipInstalledCheck {
+		t.Error("Claude Cowork install must wait for the user instead of checking for the binary immediately")
 	}
 }

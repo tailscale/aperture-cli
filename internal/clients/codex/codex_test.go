@@ -13,9 +13,9 @@ const testHost = "http://ai.example.com"
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "openai", Compatibility: map[string]bool{"openai_responses": true}},
-		{ID: "openrouter", Compatibility: map[string]bool{"openai_chat": true}},
-		{ID: "anthropic", Compatibility: map[string]bool{"anthropic_messages": true}},
+		{ID: "openai", SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
+		{ID: "openrouter", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}},
+		{ID: "anthropic", SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 1 || got[0].ID != "openai" {

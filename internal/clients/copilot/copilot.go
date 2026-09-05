@@ -29,15 +29,15 @@ const (
 type backend struct {
 	id           string
 	displayName  string
-	compatKey    string
+	endpoint     string
 	providerType string
 	wireAPI      string
 }
 
 var backends = []backend{
-	{id: "openai_chat", displayName: "OpenAI Chat Completions", compatKey: "openai_chat", providerType: "openai", wireAPI: "completions"},
-	{id: "openai_responses", displayName: "OpenAI Responses", compatKey: "openai_responses", providerType: "openai", wireAPI: "responses"},
-	{id: "anthropic", displayName: "Anthropic Messages", compatKey: "anthropic_messages", providerType: "anthropic"},
+	{id: "openai_chat", displayName: "OpenAI Chat Completions", endpoint: config.EndpointOpenAIChat, providerType: "openai", wireAPI: "completions"},
+	{id: "openai_responses", displayName: "OpenAI Responses", endpoint: config.EndpointOpenAIResponses, providerType: "openai", wireAPI: "responses"},
+	{id: "anthropic", displayName: "Anthropic Messages", endpoint: config.EndpointAnthropicMessages, providerType: "anthropic"},
 }
 
 // Name implements clients.Client.
@@ -207,7 +207,7 @@ func (c *Client) Replay(g *config.Global) tea.Cmd {
 		return nil
 	}
 	b := backends[idx]
-	if !prov.Compatibility[b.compatKey] {
+	if !prov.SupportsEndpoint(b.endpoint) {
 		return nil
 	}
 	model := g.LastLaunch.LastModel
@@ -248,7 +248,7 @@ func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 func backendsFor(p config.ProviderInfo) []backend {
 	var out []backend
 	for _, b := range backends {
-		if p.Compatibility[b.compatKey] {
+		if p.SupportsEndpoint(b.endpoint) {
 			out = append(out, b)
 		}
 	}

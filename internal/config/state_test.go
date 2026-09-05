@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -107,6 +108,47 @@ func TestSettings_RoundTrip(t *testing.T) {
 	}
 	if !got.YoloMode {
 		t.Error("YoloMode = false, want true")
+	}
+}
+
+func TestSettings_MissingFileUsesDefaults(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	got, err := config.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Endpoints) != 1 || got.Endpoints[0].URL != config.DefaultLocation {
+		t.Errorf("default endpoints = %+v", got.Endpoints)
+	}
+}
+
+func TestSettings_InvalidJSONReturnsErrorWithoutReplacingFile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	cfgDir := filepath.Join(tmp, ".config")
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	path := filepath.Join(cfgDir, "aperture", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const malformed = `{"bridges":[{"id":"bridge-abcdef"}]`
+	if err := os.WriteFile(path, []byte(malformed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := config.LoadSettings()
+	if err == nil || !strings.Contains(err.Error(), "parsing settings") {
+		t.Fatalf("LoadSettings error = %v, want parsing error", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != malformed {
+		t.Errorf("malformed settings were replaced: got %q", got)
 	}
 }
 

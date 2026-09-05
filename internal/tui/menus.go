@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -245,6 +244,32 @@ func (m *model) endpointsMenu() *menu.Menu {
 // setupGuideMenu is shown when the preflight check fails. It diagnoses
 // the user's Tailscale status and provides actionable guidance.
 func (m *model) setupGuideMenu() *menu.Menu {
+	if ep := m.g.ActiveEndpoint(); ep.BridgeID != "" {
+		bridgeName := ep.BridgeID
+		if bridge, ok := m.g.Bridge(ep.BridgeID); ok {
+			bridgeName = bridge.Name
+		}
+		return &menu.Menu{
+			Title: setupGuideTitle,
+			Preamble: "Could not reach Aperture at " + ep.URL + " through bridge " + bridgeName + ".\n\n" +
+				"The bridge uses an embedded Tailscale node; this machine does not need Tailscale installed or running.",
+			Items: []menu.MenuItem{
+				{
+					Label: "Retry connection",
+					Action: func() menu.Result {
+						return menu.Result{Cmd: m.activateEndpointCmd(m.g.ActiveEndpoint())}
+					},
+				},
+				{
+					Label:  "Connection options",
+					Action: func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
+				},
+			},
+			Hint:   "Enter to select · Esc to quit",
+			OnBack: func() tea.Cmd { return m.quitCmd() },
+		}
+	}
+
 	ts := checkTailscale()
 
 	var preamble string
@@ -327,8 +352,17 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 					Disabled: true,
 				},
 				{
-					Label:  "Add Bridge",
-					Action: func() menu.Result { return menu.Result{Next: m.bridgesMenu()} },
+					Label: "Add Bridge",
+					Action: func() menu.Result {
+						m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+							if _, err := m.g.AddBridge(v); err != nil {
+								return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
+							}
+							m.refreshMenuByTitle("Choose a bridge", m.endpointBridgeMenu())
+							return nil
+						})
+						return menu.Result{}
+					},
 				},
 			},
 			Hint: "Enter to add a bridge · Esc to go back",
@@ -407,7 +441,7 @@ func (m *model) installConfirmMenu(c clients.Client) *menu.Menu {
 					if plan.Run == nil {
 						return menu.Result{Pop: true}
 					}
-					return menu.Result{Cmd: runInstallCmd(plan.Run), PopOnDone: true}
+					return menu.Result{Cmd: runInstallCmd(c, plan), PopOnDone: true}
 				},
 			},
 			{
@@ -480,23 +514,30 @@ func (m *model) uninstallConfirmMenu(c clients.Client) *menu.Menu {
 	}
 }
 
-// runInstallCmd returns a tea.Cmd that runs the provided install command
-// with terminal takeover (so the user sees download progress) and emits
-// menu.InstallDoneMsg on completion.
-func runInstallCmd(producer func() (*exec.Cmd, error)) tea.Cmd {
-	cmd, err := producer()
+// runInstallCmd returns a tea.Cmd that runs the provided install command with
+// terminal takeover (so the user sees download progress). A zero exit status
+// is successful only if the client binary can then be found.
+func runInstallCmd(client clients.Client, plan clients.InstallPlan) tea.Cmd {
+	cmd, err := plan.Run()
 	if err != nil {
 		return func() tea.Msg { return menu.InstallDoneMsg{Err: err} }
 	}
 	if cmd == nil {
-		return func() tea.Msg { return menu.InstallDoneMsg{} }
+		return func() tea.Msg { return installDoneMsg(client, plan.SkipInstalledCheck, nil) }
 	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return menu.InstallDoneMsg{Err: err}
+		return installDoneMsg(client, plan.SkipInstalledCheck, err)
 	})
+}
+
+func installDoneMsg(client clients.Client, skipInstalledCheck bool, err error) menu.InstallDoneMsg {
+	if err == nil && !skipInstalledCheck && !client.IsInstalled() {
+		err = fmt.Errorf("%s installer completed, but %q was not found on PATH or in a known install location", client.Name(), client.BinaryName())
+	}
+	return menu.InstallDoneMsg{Err: err}
 }
 
 // runUninstallFn returns a tea.Cmd that invokes the uninstall function and

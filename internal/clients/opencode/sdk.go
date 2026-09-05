@@ -30,26 +30,26 @@ type opencodeModelEntry struct {
 }
 
 // pickSDK chooses the AI SDK npm package and baseline options for a provider
-// based on its compatibility map. Order matters: when a provider supports
+// based on its advertised endpoints. Order matters: when a provider supports
 // multiple protocols, the first match wins.
-func pickSDK(compat map[string]bool, apertureHost string) (npm string, options map[string]string) {
+func pickSDK(p config.ProviderInfo, apertureHost string) (npm string, options map[string]string) {
 	switch {
-	case compat["openai_responses"]:
+	case p.SupportsEndpoint(config.EndpointOpenAIResponses):
 		return "@ai-sdk/openai", map[string]string{
 			"baseURL": apertureHost + "/v1",
 			"apiKey":  "not-required",
 		}
-	case compat["anthropic_messages"]:
+	case p.SupportsEndpoint(config.EndpointAnthropicMessages):
 		return "@ai-sdk/anthropic", map[string]string{
 			"baseURL": apertureHost + "/v1",
 			"apiKey":  "not-required",
 		}
-	case compat["openai_chat"]:
+	case p.SupportsEndpoint(config.EndpointOpenAIChat):
 		return "@ai-sdk/openai-compatible", map[string]string{
 			"baseURL": apertureHost + "/v1",
 			"apiKey":  "not-required",
 		}
-	case compat["google_generate_content"] || compat["google_raw_predict"]:
+	case p.SupportsEndpoint(config.EndpointVertexGemini) || p.SupportsEndpoint(config.EndpointVertexClaude):
 		// Setting apiKey triggers the Vertex SDK's "express mode" which skips
 		// google-auth-library / ADC. We still need the full project-scoped
 		// path because aperture's vertex router only matches that pattern;
@@ -58,12 +58,12 @@ func pickSDK(compat map[string]bool, apertureHost string) (npm string, options m
 			"apiKey":  "not-required",
 			"baseURL": apertureHost + "/v1/projects/_aperture_auto_vertex_project_id_/locations/_aperture_auto_vertex_region_/publishers/google",
 		}
-	case compat["bedrock_model_invoke"] || compat["bedrock_converse"]:
+	case p.SupportsEndpoint(config.EndpointBedrockInvoke) || p.SupportsEndpoint(config.EndpointBedrockConverse):
 		return "@ai-sdk/amazon-bedrock", map[string]string{
 			"region":   "us-east-1",
 			"endpoint": apertureHost + "/bedrock",
 		}
-	case compat["gemini_generate_content"]:
+	case p.SupportsEndpoint(config.EndpointGemini):
 		return "@ai-sdk/google", map[string]string{
 			"baseURL": apertureHost + "/v1beta",
 			"apiKey":  "not-required",
@@ -75,9 +75,9 @@ func pickSDK(compat map[string]bool, apertureHost string) (npm string, options m
 // writeProviderConfig writes the per-launch OpenCode config under
 // ~/.opencode/tmp_aperture_config.json and returns the path plus a cleanup
 // function that removes the file. The config defines one provider (the
-// chosen one) mapped to the SDK picked from its compatibility map.
+// chosen one) mapped to the SDK picked from its advertised endpoints.
 func writeProviderConfig(apertureHost string, p config.ProviderInfo) (string, func(), error) {
-	npm, options := pickSDK(p.Compatibility, apertureHost)
+	npm, options := pickSDK(p, apertureHost)
 
 	models := make(map[string]opencodeModelEntry, len(p.Models))
 	whitelist := make([]string, 0, len(p.Models))
