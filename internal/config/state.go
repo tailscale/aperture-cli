@@ -6,13 +6,15 @@ import (
 	"path/filepath"
 )
 
-// LaunchState records the last-used client/backend/provider/model so the TUI
-// can offer a one-key quick re-launch on startup.
+// LaunchState records the last-used client, endpoint, provider, backend, and
+// model so the TUI can offer a one-key quick re-launch on startup.
 type LaunchState struct {
 	LastClientName  string `json:"lastClientName,omitempty"`
 	LastBackendType string `json:"lastBackendType,omitempty"`
 	LastProviderID  string `json:"lastProviderId,omitempty"`
 	LastModel       string `json:"lastModel,omitempty"`
+	LastEndpointURL string `json:"lastEndpointUrl,omitempty"`
+	LastBridgeID    string `json:"lastBridgeId,omitempty"`
 }
 
 // statePath returns the path to the launcher state JSON file.
