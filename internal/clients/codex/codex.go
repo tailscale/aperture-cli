@@ -56,7 +56,7 @@ func installPlan(goos string) clients.InstallPlan {
 		return clients.InstallPlan{
 			Hint: command,
 			Run: func() (*exec.Cmd, error) {
-				return exec.Command("bash", "-o", "pipefail", "-c", command), nil
+				return exec.Command("/bin/sh", "-c", command), nil
 			},
 		}
 	}
@@ -70,6 +70,18 @@ func installPlan(goos string) clients.InstallPlan {
 
 // Uninstall implements clients.Client.
 func (c *Client) Uninstall() clients.UninstallPlan {
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		if install, ok := findStandaloneInstall(); ok {
+			return clients.UninstallPlan{
+				Hint: "remove standalone Codex installation at " + install.binaryPath,
+				Run:  install.remove,
+			}
+		}
+	}
+	return npmUninstallPlan()
+}
+
+func npmUninstallPlan() clients.UninstallPlan {
 	return clients.UninstallPlan{
 		Hint: "npm uninstall -g @openai/codex",
 		Run: func() error {

@@ -1,8 +1,13 @@
 package codex
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -71,8 +76,8 @@ func TestInstallPlan(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(cmd.Args, []string{"bash", "-o", "pipefail", "-c", command}) {
-				t.Errorf("install command args = %q, want bash with pipefail", cmd.Args)
+			if !slices.Equal(cmd.Args, []string{"/bin/sh", "-c", command}) {
+				t.Errorf("install command args = %q, want the documented POSIX shell command", cmd.Args)
 			}
 		})
 	}
@@ -85,10 +90,116 @@ func TestInstallPlan(t *testing.T) {
 	})
 }
 
-func TestUninstall(t *testing.T) {
+func TestUninstallFallsBackToNPM(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Setenv("HOME", t.TempDir())
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CODEX_INSTALL_DIR", "")
+
 	uninstall := (&Client{}).Uninstall()
 	if uninstall.Hint != "npm uninstall -g @openai/codex" {
 		t.Errorf("Uninstall.Hint = %q", uninstall.Hint)
+	}
+}
+
+func TestStandaloneUninstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires privileges on Windows")
+	}
+
+	home := t.TempDir()
+	codexHome := filepath.Join(home, "codex-home")
+	root := filepath.Join(codexHome, "packages", "standalone")
+	releaseBin := filepath.Join(root, "releases", "1.2.3", "bin")
+	if err := os.MkdirAll(releaseBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseBin, "codex"), []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseBin, "codex-code-mode-host"), []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "releases", "1.2.3"), filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+
+	installDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(installDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(installDir, "codex")
+	if err := os.Symlink(filepath.Join(root, "current", "bin", "codex"), binaryPath); err != nil {
+		t.Fatal(err)
+	}
+	codeModeHost := filepath.Join(installDir, "codex-code-mode-host")
+	if err := os.Symlink(filepath.Join(root, "current", "bin", "codex-code-mode-host"), codeModeHost); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(configPath, []byte("model = \"test\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "")
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CODEX_INSTALL_DIR", installDir)
+
+	uninstall := (&Client{}).Uninstall()
+	if !strings.Contains(uninstall.Hint, "standalone Codex installation") {
+		t.Fatalf("Uninstall.Hint = %q, want standalone installer", uninstall.Hint)
+	}
+	if err := uninstall.Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{binaryPath, codeModeHost, root} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s still exists after uninstall: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Errorf("uninstall removed user configuration: %v", err)
+	}
+}
+
+func TestStandaloneUninstallRejectsChangedSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires privileges on Windows")
+	}
+
+	dir := t.TempDir()
+	root := filepath.Join(dir, "codex-home", "packages", "standalone")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(dir, "codex")
+	if err := os.Symlink(filepath.Join(root, "current", "bin", "codex"), binaryPath); err != nil {
+		t.Fatal(err)
+	}
+	install := standaloneInstall{binaryPath: binaryPath, root: root}
+	if err := os.Remove(binaryPath); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(dir, "user-managed-codex")
+	if err := os.WriteFile(outside, []byte("keep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, binaryPath); err != nil {
+		t.Fatal(err)
+	}
+
+	err := install.remove()
+	if err == nil || !strings.Contains(err.Error(), "no longer a standalone installer symlink") {
+		t.Fatalf("remove error = %v, want changed-symlink error", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("user-managed binary was removed: %v", err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Errorf("standalone package root was removed after validation failed: %v", err)
 	}
 }
 
