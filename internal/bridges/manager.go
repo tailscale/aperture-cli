@@ -28,6 +28,11 @@ type Manager struct {
 	newNode func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode
 }
 
+const (
+	bridgeDNSRetryWindow   = 5 * time.Second
+	bridgeDNSRetryInterval = 250 * time.Millisecond
+)
+
 type nodeRuntime struct {
 	node    tailnetNode
 	proxies map[string]*proxyRuntime
@@ -255,14 +260,21 @@ func startProxy(node tailnetNode, target *url.URL, logf func(string), debug bool
 		if debug {
 			logf(fmt.Sprintf("Bridge dialing network=%s address=%s", network, address))
 		}
-		conn, err := node.DialContext(ctx, network, address)
+		conn, attempts, err := dialWithDNSRetry(
+			ctx,
+			node.DialContext,
+			network,
+			address,
+			bridgeDNSRetryWindow,
+			bridgeDNSRetryInterval,
+		)
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if err != nil {
-			logf(fmt.Sprintf("Bridge dial failed: network=%s address=%s elapsed=%s error=%T: %v", network, address, elapsed, err, err))
+			logf(fmt.Sprintf("Bridge dial failed: network=%s address=%s attempts=%d elapsed=%s error=%T: %v", network, address, attempts, elapsed, err, err))
 			return nil, err
 		}
 		if debug {
-			logf(fmt.Sprintf("Bridge dial connected: address=%s remote=%s elapsed=%s", address, conn.RemoteAddr(), elapsed))
+			logf(fmt.Sprintf("Bridge dial connected: address=%s remote=%s attempts=%d elapsed=%s", address, conn.RemoteAddr(), attempts, elapsed))
 		}
 		return conn, nil
 	}
@@ -289,6 +301,51 @@ func startProxy(node tailnetNode, target *url.URL, logf func(string), debug bool
 		server:   srv,
 		listener: ln,
 	}, nil
+}
+
+type bridgeDialFunc func(context.Context, string, string) (net.Conn, error)
+
+// dialWithDNSRetry gives an embedded tsnet node a short window to receive the
+// target's peer map after Up reports Running. Until that map arrives, tsnet's
+// MagicDNS lookup falls through to the host resolver and returns a DNSError.
+// Non-DNS failures are returned immediately.
+func dialWithDNSRetry(
+	ctx context.Context,
+	dial bridgeDialFunc,
+	network, address string,
+	retryWindow, retryInterval time.Duration,
+) (net.Conn, int, error) {
+	deadline := time.Now().Add(retryWindow)
+	attempts := 0
+	for {
+		conn, err := dial(ctx, network, address)
+		attempts++
+		if err == nil {
+			return conn, attempts, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, attempts, ctxErr
+		}
+		var dnsErr *net.DNSError
+		if !errors.As(err, &dnsErr) || retryWindow <= 0 || retryInterval <= 0 {
+			return nil, attempts, err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, attempts, err
+		}
+		if retryInterval > remaining {
+			retryInterval = remaining
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, attempts, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func logBridgeStatus(logf func(string), status *ipnstate.Status, target *url.URL) {

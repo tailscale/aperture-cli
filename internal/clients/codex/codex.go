@@ -1,14 +1,15 @@
 // Package codex is the OpenAI Codex client. It speaks OpenAI's /v1/responses
-// API and is registered only with providers that advertise /v1/responses. On
-// launch it writes a CODEX_HOME containing auth.json
-// (pre-populated so the first run skips interactive login) and config.toml
-// (pointing Codex at the aperture gateway).
+// API and is registered only with providers that advertise /v1/responses. It
+// points Codex at the Aperture gateway with per-launch configuration overrides
+// while preserving the user's normal Codex configuration and state.
 package codex
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"slices"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/clients"
@@ -46,6 +47,19 @@ func (c *Client) IsInstalled() bool {
 
 // Install implements clients.Client.
 func (c *Client) Install(_ *config.Global) clients.InstallPlan {
+	return installPlan(runtime.GOOS)
+}
+
+func installPlan(goos string) clients.InstallPlan {
+	if goos == "linux" || goos == "darwin" {
+		const command = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+		return clients.InstallPlan{
+			Hint: command,
+			Run: func() (*exec.Cmd, error) {
+				return exec.Command("/bin/sh", "-c", command), nil
+			},
+		}
+	}
 	return clients.InstallPlan{
 		Hint: "npm install -g @openai/codex",
 		Run: func() (*exec.Cmd, error) {
@@ -56,6 +70,18 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 
 // Uninstall implements clients.Client.
 func (c *Client) Uninstall() clients.UninstallPlan {
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		if install, ok := findStandaloneInstall(); ok {
+			return clients.UninstallPlan{
+				Hint: "remove standalone Codex installation at " + install.binaryPath,
+				Run:  install.remove,
+			}
+		}
+	}
+	return npmUninstallPlan()
+}
+
+func npmUninstallPlan() clients.UninstallPlan {
 	return clients.UninstallPlan{
 		Hint: "npm uninstall -g @openai/codex",
 		Run: func() error {
@@ -123,27 +149,17 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo) menu.Result 
 	}}
 }
 
-// launch writes CODEX_HOME, builds the exec spec, records the launch state,
-// and returns a tea.Cmd.
+// launch builds the exec spec, records the launch state, and returns a tea.Cmd.
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) menu.Result {
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
 		bin = binaryName
 	}
-	codexHome, err := writeConfig(g.ApertureHost)
-	if err != nil {
-		return errorResult("Failed to write Codex config: " + err.Error())
+	modelCatalogPath, cleanup, err := prepareModelCatalog(bin, g.Providers, p.ID)
+	if err != nil && g.Debug {
+		fmt.Fprintf(os.Stderr, "\r\n[debug] unable to prepare Codex model aliases: %v\r\n", err)
 	}
-	env := map[string]string{
-		"OPENAI_BASE_URL": g.ApertureHost + "/v1",
-		"OPENAI_API_KEY":  "not-needed",
-		"CODEX_HOME":      codexHome,
-	}
-	if model != "" {
-		env["OPENAI_MODEL"] = stripProviderPrefix(model)
-	}
-
-	args := []string{}
+	args, env := apertureLaunchConfig(g.ApertureHost, modelCatalogPath)
 	if model != "" {
 		args = append(args, "--model", model)
 	}
@@ -159,10 +175,11 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 	})
 
 	cmd := clients.Launch(clients.LaunchSpec{
-		Binary: bin,
-		Args:   args,
-		Env:    env,
-		Debug:  g.Debug,
+		Binary:  bin,
+		Args:    args,
+		Env:     env,
+		Cleanup: cleanup,
+		Debug:   g.Debug,
 	})
 	return menu.Result{Cmd: cmd, PopOnDone: true}
 }
@@ -219,13 +236,6 @@ func fqnModels(p config.ProviderInfo) []string {
 		out[i] = p.ID + "/" + m
 	}
 	return out
-}
-
-func stripProviderPrefix(fqn string) string {
-	if _, after, ok := strings.Cut(fqn, "/"); ok {
-		return after
-	}
-	return fqn
 }
 
 // errorResult returns a Result that pops the current stack and emits an

@@ -2,12 +2,14 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -748,6 +750,28 @@ func TestFetchProvidersUsesModelsEndpoint(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != "anthropic" || !got[0].SupportsEndpoint(config.EndpointAnthropicMessages) {
 		t.Fatalf("fetchProviders() = %#v, want Anthropic Messages provider", got)
+	}
+}
+
+func TestFetchProvidersContextHonorsCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := fetchProvidersContext(ctx, srv.URL, time.Minute)
+		result <- err
+	}()
+	<-requestStarted
+	cancel()
+
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("fetchProvidersContext error = %v, want context canceled", err)
 	}
 }
 

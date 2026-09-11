@@ -8,8 +8,8 @@ import (
 
 // ClientConfigDir returns the directory where a client may store its own
 // isolated state. The directory is created if it does not exist. Typical
-// usage: clients that manage their own on-disk home (e.g. Codex's CODEX_HOME,
-// Gemini's GEMINI_CLI_HOME) pass the returned path to the agent binary.
+// usage: clients that manage their own on-disk home (e.g. Gemini's
+// GEMINI_CLI_HOME) pass the returned path to the agent binary.
 func ClientConfigDir(name string) (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tailscale/aperture-cli/internal/config"
 	"tailscale.com/ipn/ipnstate"
@@ -21,6 +23,7 @@ type fakeNode struct {
 	upErr       error
 	statusErr   error
 	dialErr     error
+	dialFn      bridgeDialFunc
 	up          int
 	closed      bool
 }
@@ -35,6 +38,9 @@ func (n *fakeNode) Status(context.Context) (*ipnstate.Status, error) {
 }
 
 func (n *fakeNode) DialContext(ctx context.Context, network, _ string) (net.Conn, error) {
+	if n.dialFn != nil {
+		return n.dialFn(ctx, network, n.backendAddr)
+	}
 	if n.dialErr != nil {
 		return nil, n.dialErr
 	}
@@ -167,6 +173,157 @@ func TestActivateNormalLoggingOmitsDebugDiagnostics(t *testing.T) {
 			t.Errorf("normal logs contain debug diagnostic %q:\n%s", unwanted, got)
 		}
 	}
+}
+
+func TestActivateRetriesDNSWhilePeerMapArrives(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	var attempts atomic.Int32
+	node := &fakeNode{
+		backendAddr: strings.TrimPrefix(backend.URL, "http://"),
+		status: &ipnstate.Status{
+			BackendState: "Running",
+			TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1")},
+		},
+	}
+	node.dialFn = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if attempts.Add(1) == 1 {
+			return nil, &net.DNSError{
+				Err:         "server misbehaving",
+				Name:        "ai",
+				Server:      "127.0.0.53:53",
+				IsTemporary: true,
+			}
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, address)
+	}
+
+	m := NewManager(true)
+	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+		return node
+	}
+	defer m.Close()
+
+	var logs []string
+	localURL, err := m.Activate(
+		context.Background(),
+		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
+		"http://ai",
+		func(line string) { logs = append(logs, line) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(localURL + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("dial attempts = %d, want 2", got)
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "attempts=2") {
+		t.Fatalf("logs missing recovered dial attempt count:\n%s", got)
+	}
+}
+
+func TestDialWithDNSRetry(t *testing.T) {
+	t.Run("recovers when embedded DNS receives the target", func(t *testing.T) {
+		backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		defer backend.Close()
+
+		attempts := 0
+		dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, &net.DNSError{
+					Err:         "server misbehaving",
+					Name:        "ai",
+					Server:      "127.0.0.53:53",
+					IsTemporary: true,
+				}
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, strings.TrimPrefix(backend.URL, "http://"))
+		}
+
+		conn, gotAttempts, err := dialWithDNSRetry(
+			context.Background(), dial, "tcp", "ai:80", time.Second, time.Millisecond,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+		if gotAttempts != 2 {
+			t.Fatalf("attempts = %d, want 2", gotAttempts)
+		}
+	})
+
+	t.Run("stops when the retry window expires", func(t *testing.T) {
+		wantErr := &net.DNSError{Err: "server misbehaving", Name: "ai"}
+		attempts := 0
+		dial := func(context.Context, string, string) (net.Conn, error) {
+			attempts++
+			return nil, wantErr
+		}
+
+		_, gotAttempts, err := dialWithDNSRetry(
+			context.Background(), dial, "tcp", "ai:80", 5*time.Millisecond, time.Hour,
+		)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+		if gotAttempts < 2 || gotAttempts != attempts {
+			t.Fatalf("attempts = %d/%d, want at least 2 matching attempts", gotAttempts, attempts)
+		}
+	})
+
+	t.Run("does not retry non-DNS failures", func(t *testing.T) {
+		wantErr := errors.New("connection refused")
+		attempts := 0
+		dial := func(context.Context, string, string) (net.Conn, error) {
+			attempts++
+			return nil, wantErr
+		}
+
+		_, gotAttempts, err := dialWithDNSRetry(
+			context.Background(), dial, "tcp", "ai:80", time.Second, time.Millisecond,
+		)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("error = %v, want %v", err, wantErr)
+		}
+		if gotAttempts != 1 || attempts != 1 {
+			t.Fatalf("attempts = %d/%d, want 1/1", gotAttempts, attempts)
+		}
+	})
+
+	t.Run("stops when activation is canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		attempts := 0
+		dial := func(context.Context, string, string) (net.Conn, error) {
+			attempts++
+			cancel()
+			return nil, &net.DNSError{Err: "server misbehaving", Name: "ai"}
+		}
+
+		_, gotAttempts, err := dialWithDNSRetry(
+			ctx, dial, "tcp", "ai:80", time.Second, time.Second,
+		)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context canceled", err)
+		}
+		if gotAttempts != 1 || attempts != 1 {
+			t.Fatalf("attempts = %d/%d, want 1/1", gotAttempts, attempts)
+		}
+	})
 }
 
 func (n *fakeNode) Close() error {

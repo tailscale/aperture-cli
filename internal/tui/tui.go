@@ -44,6 +44,11 @@ var (
 	dotRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("●")
 )
 
+const (
+	providerFetchTimeout       = 10 * time.Second
+	bridgeProviderFetchTimeout = 30 * time.Second
+)
+
 // NewModel returns the TUI model. g holds the persisted launcher state
 // (settings, endpoints, last launch). buildVersion is shown at the bottom
 // of the client picker.
@@ -127,9 +132,13 @@ func runPreflight(host string) tea.Cmd {
 }
 
 func fetchProviders(host string) ([]config.ProviderInfo, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	return fetchProvidersContext(context.Background(), host, providerFetchTimeout)
+}
+
+func fetchProvidersContext(ctx context.Context, host string, timeout time.Duration) ([]config.ProviderInfo, error) {
+	client := &http.Client{Timeout: timeout}
 	url := strings.TrimRight(host, "/") + "/v1/models"
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +222,7 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 		if err != nil {
 			return endpointActivationResult{endpoint: ep, host: ep.URL, err: err}
 		}
-		provs, err := fetchProviders(localURL)
+		provs, err := fetchProvidersContext(ctx, localURL, bridgeProviderFetchTimeout)
 		if err != nil {
 			err = fmt.Errorf("bridge %s could not reach %s: %w", bridge.Name, ep.URL, err)
 		}
