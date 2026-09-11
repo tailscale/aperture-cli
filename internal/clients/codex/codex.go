@@ -5,7 +5,10 @@
 package codex
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -44,6 +47,19 @@ func (c *Client) IsInstalled() bool {
 
 // Install implements clients.Client.
 func (c *Client) Install(_ *config.Global) clients.InstallPlan {
+	return installPlan(runtime.GOOS)
+}
+
+func installPlan(goos string) clients.InstallPlan {
+	if goos == "linux" || goos == "darwin" {
+		const command = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+		return clients.InstallPlan{
+			Hint: command,
+			Run: func() (*exec.Cmd, error) {
+				return exec.Command("bash", "-o", "pipefail", "-c", command), nil
+			},
+		}
+	}
 	return clients.InstallPlan{
 		Hint: "npm install -g @openai/codex",
 		Run: func() (*exec.Cmd, error) {
@@ -127,7 +143,11 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 	if bin == "" {
 		bin = binaryName
 	}
-	args, env := apertureLaunchConfig(g.ApertureHost)
+	modelCatalogPath, cleanup, err := prepareModelCatalog(bin, g.Providers)
+	if err != nil && g.Debug {
+		fmt.Fprintf(os.Stderr, "\r\n[debug] unable to prepare Codex model aliases: %v\r\n", err)
+	}
+	args, env := apertureLaunchConfig(g.ApertureHost, modelCatalogPath)
 	if model != "" {
 		args = append(args, "--model", model)
 	}
@@ -143,10 +163,11 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 	})
 
 	cmd := clients.Launch(clients.LaunchSpec{
-		Binary: bin,
-		Args:   args,
-		Env:    env,
-		Debug:  g.Debug,
+		Binary:  bin,
+		Args:    args,
+		Env:     env,
+		Cleanup: cleanup,
+		Debug:   g.Debug,
 	})
 	return menu.Result{Cmd: cmd, PopOnDone: true}
 }

@@ -2,6 +2,7 @@ package codex
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -31,7 +32,7 @@ func TestFqnModels(t *testing.T) {
 }
 
 func TestApertureLaunchConfig(t *testing.T) {
-	args, env := apertureLaunchConfig(testHost)
+	args, env := apertureLaunchConfig(testHost, "")
 	wantArgs := []string{
 		"--config", `model_provider="tailscale_aperture_cli"`,
 		"--config", `model_providers.tailscale_aperture_cli={ name = "Aperture", base_url = "http://ai.example.com/v1", env_key = "APERTURE_CODEX_API_KEY", supports_websockets = false }`,
@@ -50,19 +51,42 @@ func TestApertureLaunchConfig(t *testing.T) {
 	}
 }
 
-func TestInstallUninstall(t *testing.T) {
-	c := &Client{}
-	g := &config.Global{}
-
-	install := c.Install(g)
-	if install.Hint != "npm install -g @openai/codex" {
-		t.Errorf("Install.Hint = %q", install.Hint)
+func TestApertureLaunchConfigWithModelCatalog(t *testing.T) {
+	args, _ := apertureLaunchConfig(testHost, `/tmp/aperture "models".json`)
+	want := `model_catalog_json="/tmp/aperture \"models\".json"`
+	if got := args[len(args)-1]; got != want {
+		t.Errorf("model catalog override = %q, want %q", got, want)
 	}
-	if install.Run == nil {
-		t.Error("Install.Run is nil")
+}
+
+func TestInstallPlan(t *testing.T) {
+	const command = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			plan := installPlan(goos)
+			if plan.Hint != command {
+				t.Errorf("Hint = %q, want %q", plan.Hint, command)
+			}
+			cmd, err := plan.Run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(cmd.Args, []string{"bash", "-o", "pipefail", "-c", command}) {
+				t.Errorf("install command args = %q, want bash with pipefail", cmd.Args)
+			}
+		})
 	}
 
-	uninstall := c.Uninstall()
+	t.Run("other", func(t *testing.T) {
+		plan := installPlan("windows")
+		if plan.Hint != "npm install -g @openai/codex" {
+			t.Errorf("Hint = %q, want npm fallback", plan.Hint)
+		}
+	})
+}
+
+func TestUninstall(t *testing.T) {
+	uninstall := (&Client{}).Uninstall()
 	if uninstall.Hint != "npm uninstall -g @openai/codex" {
 		t.Errorf("Uninstall.Hint = %q", uninstall.Hint)
 	}
