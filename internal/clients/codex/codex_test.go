@@ -1,9 +1,7 @@
 package codex
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -32,55 +30,23 @@ func TestFqnModels(t *testing.T) {
 	}
 }
 
-func TestStripProviderPrefix(t *testing.T) {
-	cases := map[string]string{
-		"openai/gpt-5":          "gpt-5",
-		"vertex/gemini-2.5-pro": "gemini-2.5-pro",
-		"bare-model":            "bare-model",
-		"provider/nested/model": "nested/model",
+func TestApertureLaunchConfig(t *testing.T) {
+	args, env := apertureLaunchConfig(testHost)
+	wantArgs := []string{
+		"--config", `model_provider="tailscale_aperture_cli"`,
+		"--config", `model_providers.tailscale_aperture_cli={ name = "Aperture", base_url = "http://ai.example.com/v1", env_key = "APERTURE_CODEX_API_KEY", supports_websockets = false }`,
 	}
-	for in, want := range cases {
-		if got := stripProviderPrefix(in); got != want {
-			t.Errorf("stripProviderPrefix(%q) = %q, want %q", in, got, want)
+	if !reflect.DeepEqual(args, wantArgs) {
+		t.Errorf("args = %#v, want %#v", args, wantArgs)
+	}
+	wantEnv := map[string]string{apertureAPIKeyEnv: "not-needed"}
+	if !reflect.DeepEqual(env, wantEnv) {
+		t.Errorf("env = %#v, want %#v", env, wantEnv)
+	}
+	for _, key := range []string{"CODEX_HOME", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"} {
+		if _, ok := env[key]; ok {
+			t.Errorf("env unexpectedly overrides %s", key)
 		}
-	}
-}
-
-func TestWriteConfig(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
-
-	codexHome, err := writeConfig(testHost)
-	if err != nil {
-		t.Fatalf("writeConfig: %v", err)
-	}
-
-	authData, err := os.ReadFile(filepath.Join(codexHome, "auth.json"))
-	if err != nil {
-		t.Fatalf("auth.json: %v", err)
-	}
-	var auth map[string]string
-	if err := json.Unmarshal(authData, &auth); err != nil {
-		t.Fatal(err)
-	}
-	if auth["auth_mode"] != "apikey" {
-		t.Errorf("auth_mode = %q, want apikey", auth["auth_mode"])
-	}
-	if auth["OPENAI_API_KEY"] != "not-needed" {
-		t.Errorf("OPENAI_API_KEY = %q, want not-needed", auth["OPENAI_API_KEY"])
-	}
-
-	tomlData, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
-	if err != nil {
-		t.Fatalf("config.toml: %v", err)
-	}
-	if got := string(tomlData); !containsAll(got, []string{
-		"model_provider = \"aperture\"",
-		"base_url = \"" + testHost + "/v1\"",
-		"env_key = \"OPENAI_API_KEY\"",
-	}) {
-		t.Errorf("config.toml missing expected entries:\n%s", got)
 	}
 }
 
@@ -114,22 +80,4 @@ func TestReplay_StaleProvider(t *testing.T) {
 	if cmd := c.Replay(g); cmd != nil {
 		t.Error("Replay with missing binary should return nil")
 	}
-}
-
-func containsAll(haystack string, needles []string) bool {
-	for _, n := range needles {
-		if !contains(haystack, n) {
-			return false
-		}
-	}
-	return true
-}
-
-func contains(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }

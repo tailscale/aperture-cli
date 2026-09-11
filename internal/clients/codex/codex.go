@@ -1,14 +1,12 @@
 // Package codex is the OpenAI Codex client. It speaks OpenAI's /v1/responses
-// API and is registered only with providers that advertise /v1/responses. On
-// launch it writes a CODEX_HOME containing auth.json
-// (pre-populated so the first run skips interactive login) and config.toml
-// (pointing Codex at the aperture gateway).
+// API and is registered only with providers that advertise /v1/responses. It
+// points Codex at the Aperture gateway with per-launch configuration overrides
+// while preserving the user's normal Codex configuration and state.
 package codex
 
 import (
 	"os/exec"
 	"slices"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/clients"
@@ -123,27 +121,13 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo) menu.Result 
 	}}
 }
 
-// launch writes CODEX_HOME, builds the exec spec, records the launch state,
-// and returns a tea.Cmd.
+// launch builds the exec spec, records the launch state, and returns a tea.Cmd.
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) menu.Result {
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
 		bin = binaryName
 	}
-	codexHome, err := writeConfig(g.ApertureHost)
-	if err != nil {
-		return errorResult("Failed to write Codex config: " + err.Error())
-	}
-	env := map[string]string{
-		"OPENAI_BASE_URL": g.ApertureHost + "/v1",
-		"OPENAI_API_KEY":  "not-needed",
-		"CODEX_HOME":      codexHome,
-	}
-	if model != "" {
-		env["OPENAI_MODEL"] = stripProviderPrefix(model)
-	}
-
-	args := []string{}
+	args, env := apertureLaunchConfig(g.ApertureHost)
 	if model != "" {
 		args = append(args, "--model", model)
 	}
@@ -219,13 +203,6 @@ func fqnModels(p config.ProviderInfo) []string {
 		out[i] = p.ID + "/" + m
 	}
 	return out
-}
-
-func stripProviderPrefix(fqn string) string {
-	if _, after, ok := strings.Cut(fqn, "/"); ok {
-		return after
-	}
-	return fqn
 }
 
 // errorResult returns a Result that pops the current stack and emits an
