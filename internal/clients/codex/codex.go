@@ -155,7 +155,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 	if bin == "" {
 		bin = binaryName
 	}
-	modelCatalogPath, cleanup, err := prepareModelCatalog(bin, g.Providers)
+	modelCatalogPath, cleanup, err := prepareModelCatalog(bin, g.Providers, p.ID)
 	if err != nil && g.Debug {
 		fmt.Fprintf(os.Stderr, "\r\n[debug] unable to prepare Codex model aliases: %v\r\n", err)
 	}
