@@ -72,10 +72,10 @@ func TestBackendBaseURL_TrimsTrailingSlash(t *testing.T) {
 
 func TestBuildProvider(t *testing.T) {
 	p := config.ProviderInfo{
-		ID:            "openai-api",
-		Name:          "OpenAI",
-		Models:        []string{"gpt-5", "gpt-5-mini"},
-		Compatibility: map[string]bool{"openai_responses": true},
+		ID:                 "openai-api",
+		Name:               "OpenAI",
+		Models:             []string{"gpt-5", "gpt-5-mini"},
+		SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true},
 	}
 	b := backendByIDOrFatal(t, "openai_responses")
 	prov := buildProvider(testHost, p, b)
@@ -140,7 +140,7 @@ func TestExtensionSource_NoNullFields(t *testing.T) {
 }
 
 func TestBuildProvider_NoModels(t *testing.T) {
-	p := config.ProviderInfo{ID: "empty", Compatibility: map[string]bool{"openai_chat": true}}
+	p := config.ProviderInfo{ID: "empty", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}}
 	prov := buildProvider(testHost, p, backendByIDOrFatal(t, "openai_chat"))
 	if len(prov.Models) != 0 {
 		t.Errorf("models len = %d, want 0", len(prov.Models))
@@ -194,10 +194,10 @@ func TestWriteProviderExtension(t *testing.T) {
 	isolateConfigDir(t)
 
 	p := config.ProviderInfo{
-		ID:            "anthropic",
-		Name:          "Anthropic",
-		Models:        []string{"claude-sonnet-4-5"},
-		Compatibility: map[string]bool{"anthropic_messages": true},
+		ID:                 "anthropic",
+		Name:               "Anthropic",
+		Models:             []string{"claude-sonnet-4-5"},
+		SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true},
 	}
 	b := backendByIDOrFatal(t, "anthropic")
 
@@ -265,9 +265,9 @@ func TestWriteProviderExtension_EmbeddedJSONIsValid(t *testing.T) {
 	isolateConfigDir(t)
 
 	p := config.ProviderInfo{
-		ID:            "openai-api",
-		Models:        []string{"gpt-5"},
-		Compatibility: map[string]bool{"openai_responses": true},
+		ID:                 "openai-api",
+		Models:             []string{"gpt-5"},
+		SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true},
 	}
 	b := backendByIDOrFatal(t, "openai_responses")
 	path, cleanup, err := writeProviderExtension(testHost, p, b)
@@ -418,55 +418,55 @@ func TestBuildArgs(t *testing.T) {
 
 func TestBackendsFor(t *testing.T) {
 	cases := []struct {
-		name   string
-		compat map[string]bool
-		want   []string
+		name      string
+		endpoints map[string]bool
+		want      []string
 	}{
 		{
-			name:   "openai_both_ordered_responses_first",
-			compat: map[string]bool{"openai_chat": true, "openai_responses": true},
-			want:   []string{"openai_responses", "openai_chat"},
+			name:      "openai_both_ordered_responses_first",
+			endpoints: map[string]bool{config.EndpointOpenAIChat: true, config.EndpointOpenAIResponses: true},
+			want:      []string{"openai_responses", "openai_chat"},
 		},
 		{
-			name:   "anthropic_only",
-			compat: map[string]bool{"anthropic_messages": true},
-			want:   []string{"anthropic"},
+			name:      "anthropic_only",
+			endpoints: map[string]bool{config.EndpointAnthropicMessages: true},
+			want:      []string{"anthropic"},
 		},
 		{
-			name:   "vertex_via_generate_content",
-			compat: map[string]bool{"google_generate_content": true},
-			want:   []string{"vertex"},
+			name:      "vertex_via_generate_content",
+			endpoints: map[string]bool{config.EndpointVertexGemini: true},
+			want:      []string{"vertex"},
 		},
 		{
-			name:   "vertex_via_raw_predict",
-			compat: map[string]bool{"google_raw_predict": true},
-			want:   []string{"vertex"},
+			name:      "vertex_via_raw_predict",
+			endpoints: map[string]bool{config.EndpointVertexClaude: true},
+			want:      []string{"vertex"},
 		},
 		{
-			name:   "vertex_not_duplicated_when_both_keys_set",
-			compat: map[string]bool{"google_generate_content": true, "google_raw_predict": true},
-			want:   []string{"vertex"},
+			name:      "vertex_not_duplicated_when_both_endpoints_advertised",
+			endpoints: map[string]bool{config.EndpointVertexGemini: true, config.EndpointVertexClaude: true},
+			want:      []string{"vertex"},
 		},
 		{
 			// Pi's bedrock API type fails at request time, so it is not offered.
-			name:   "bedrock_unsupported",
-			compat: map[string]bool{"bedrock_converse": true, "bedrock_model_invoke": true},
-			want:   nil,
+			name:      "bedrock_unsupported",
+			endpoints: map[string]bool{config.EndpointBedrockConverse: true, config.EndpointBedrockInvoke: true},
+			want:      nil,
 		},
 		{
-			name:   "unknown_key",
-			compat: map[string]bool{"something_else": true},
-			want:   nil,
+			name:      "unknown_endpoint",
+			endpoints: map[string]bool{"/unknown": true},
+			want:      nil,
 		},
 		{
-			name:   "all_four",
-			compat: map[string]bool{"openai_chat": true, "openai_responses": true, "anthropic_messages": true, "google_raw_predict": true},
-			want:   []string{"openai_responses", "anthropic", "openai_chat", "vertex"},
+			name:      "all_four",
+			endpoints: map[string]bool{config.EndpointOpenAIChat: true, config.EndpointOpenAIResponses: true, config.EndpointAnthropicMessages: true, config.EndpointVertexClaude: true},
+			want:      []string{"openai_responses", "anthropic", "openai_chat", "vertex"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			bs := backendsFor(config.ProviderInfo{Compatibility: tc.compat})
+			bs := backendsFor(config.ProviderInfo{SupportedEndpoints: tc.endpoints})
 			got := make([]string, len(bs))
 			for i, b := range bs {
 				got[i] = b.id
@@ -480,11 +480,11 @@ func TestBackendsFor(t *testing.T) {
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "openai-api", Models: []string{"gpt-5"}, Compatibility: map[string]bool{"openai_responses": true}},
-		{ID: "bedrock", Models: []string{"model"}, Compatibility: map[string]bool{"bedrock_converse": true}},
-		{ID: "anthropic", Models: []string{"claude"}, Compatibility: map[string]bool{"anthropic_messages": true}},
-		{ID: "empty", Compatibility: map[string]bool{"openai_responses": true}},
-		{ID: "none", Models: []string{"model"}, Compatibility: map[string]bool{"something_else": true}},
+		{ID: "openai-api", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
+		{ID: "bedrock", Models: []string{"model"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}},
+		{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}},
+		{ID: "empty", SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
+		{ID: "none", Models: []string{"model"}, SupportedEndpoints: map[string]bool{"/unknown": true}},
 	}
 	got := compatibleProviders(provs)
 	ids := make([]string, len(got))
@@ -515,10 +515,10 @@ func TestBackendByID(t *testing.T) {
 // Replay would pass on CI even with the checks deleted.
 func TestResolveReplay(t *testing.T) {
 	liveProvider := config.ProviderInfo{
-		ID:            "openai-api",
-		Name:          "OpenAI",
-		Models:        []string{"gpt-5"},
-		Compatibility: map[string]bool{"openai_responses": true, "openai_chat": true},
+		ID:                 "openai-api",
+		Name:               "OpenAI",
+		Models:             []string{"gpt-5"},
+		SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true, config.EndpointOpenAIChat: true},
 	}
 	base := config.LaunchState{
 		LastClientName:  name,
@@ -582,9 +582,9 @@ func TestResolveReplay(t *testing.T) {
 			// The provider still exists but dropped the protocol we recorded.
 			name: "provider_dropped_the_protocol",
 			providers: []config.ProviderInfo{{
-				ID:            "openai-api",
-				Models:        []string{"gpt-5"},
-				Compatibility: map[string]bool{"openai_chat": true},
+				ID:                 "openai-api",
+				Models:             []string{"gpt-5"},
+				SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true},
 			}},
 			mutate: func(ls *config.LaunchState) {},
 		},
@@ -596,8 +596,8 @@ func TestResolveReplay(t *testing.T) {
 		{
 			name: "provider_has_no_models_anymore",
 			providers: []config.ProviderInfo{{
-				ID:            "openai-api",
-				Compatibility: map[string]bool{"openai_responses": true},
+				ID:                 "openai-api",
+				SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true},
 			}},
 			mutate: func(ls *config.LaunchState) {},
 		},
@@ -620,9 +620,9 @@ func TestResolveReplay(t *testing.T) {
 // if the staleness logic were deleted.
 func TestReplayStalenessChecks(t *testing.T) {
 	prov := config.ProviderInfo{
-		ID:            "openai-api",
-		Models:        []string{"gpt-5"},
-		Compatibility: map[string]bool{"openai_responses": true},
+		ID:                 "openai-api",
+		Models:             []string{"gpt-5"},
+		SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true},
 	}
 
 	b := backendByIDOrFatal(t, "openai_responses")
@@ -632,7 +632,7 @@ func TestReplayStalenessChecks(t *testing.T) {
 
 	// A backend the provider no longer serves must not replay.
 	if providerSupports(prov, backendByIDOrFatal(t, "anthropic")) {
-		t.Error("provider without anthropic_messages should not support the anthropic backend")
+		t.Error("provider without /v1/messages should not support the anthropic backend")
 	}
 
 	// A backend ID that no longer exists in the table must not replay.

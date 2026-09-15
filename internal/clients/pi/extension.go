@@ -28,7 +28,7 @@ type piProvider struct {
 // number, received null". An omitted input list crashes pi outright, because
 // its --list-models formatter dereferences it without a nil check.
 //
-// reasoning stays false because GET /api/providers reports no thinking
+// reasoning stays false because GET /v1/models reports no thinking
 // capability, and claiming it makes pi send parameters the model may reject.
 type piModel struct {
 	ID            string   `json:"id"`

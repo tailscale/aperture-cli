@@ -96,8 +96,11 @@ func TestBuildArgs(t *testing.T) {
 }
 
 func TestBackendsFor(t *testing.T) {
-	p := config.ProviderInfo{Compatibility: map[string]bool{
-		"openai_responses": true, "anthropic_messages": true, "openai_chat": true, "google_raw_predict": true,
+	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{
+		config.EndpointOpenAIResponses:   true,
+		config.EndpointAnthropicMessages: true,
+		config.EndpointOpenAIChat:        true,
+		config.EndpointVertexClaude:      true,
 	}}
 	got := backendsFor(p)
 	ids := make([]string, len(got))
@@ -112,9 +115,9 @@ func TestBackendsFor(t *testing.T) {
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "match", Models: []string{"model"}, Compatibility: map[string]bool{"openai_responses": true}},
-		{ID: "empty", Compatibility: map[string]bool{"openai_responses": true}},
-		{ID: "other", Models: []string{"model"}, Compatibility: map[string]bool{"bedrock_converse": true}},
+		{ID: "match", Models: []string{"model"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
+		{ID: "empty", SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
+		{ID: "other", Models: []string{"model"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 1 || got[0].ID != "match" {
@@ -123,7 +126,7 @@ func TestCompatibleProviders(t *testing.T) {
 }
 
 func TestResolveReplay(t *testing.T) {
-	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5.6-sol"}, Compatibility: map[string]bool{"openai_responses": true}}
+	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5.6-sol"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
 	g := &config.Global{
 		Providers:  []config.ProviderInfo{p},
 		LastLaunch: config.LaunchState{LastClientName: name, LastBackendType: "openai_responses", LastProviderID: p.ID, LastModel: "openai-api/gpt-5.6-sol"},

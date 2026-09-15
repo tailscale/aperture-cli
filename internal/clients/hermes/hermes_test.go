@@ -39,8 +39,8 @@ func TestBuildArgs(t *testing.T) {
 
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "match", Compatibility: map[string]bool{compatKey: true}},
-		{ID: "other", Compatibility: map[string]bool{"openai_responses": true}},
+		{ID: "match", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}},
+		{ID: "other", SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 1 || got[0].ID != "match" {
@@ -59,10 +59,10 @@ func TestModels(t *testing.T) {
 }
 
 func TestResolveReplay(t *testing.T) {
-	p := config.ProviderInfo{ID: "provider", Models: []string{"model"}, Compatibility: map[string]bool{compatKey: true}}
+	p := config.ProviderInfo{ID: "provider", Models: []string{"model"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}}
 	g := &config.Global{
 		Providers:  []config.ProviderInfo{p},
-		LastLaunch: config.LaunchState{LastClientName: name, LastBackendType: compatKey, LastProviderID: p.ID, LastModel: "provider/model"},
+		LastLaunch: config.LaunchState{LastClientName: name, LastBackendType: backendType, LastProviderID: p.ID, LastModel: "provider/model"},
 	}
 	_, model, ok := resolveReplay(g)
 	if !ok || model != "provider/model" {
@@ -76,6 +76,20 @@ func TestResolveReplay(t *testing.T) {
 	g.LastLaunch.LastBackendType = "openai_responses"
 	if _, _, ok := resolveReplay(g); ok {
 		t.Error("resolveReplay accepted a stale backend")
+	}
+}
+
+func TestInstallCommandDetectsPipelineFailures(t *testing.T) {
+	plan := (&Client{}).Install(&config.Global{})
+	cmd, err := plan.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cmd.Args, []string{
+		"bash", "-o", "pipefail", "-c",
+		"curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+	}) {
+		t.Errorf("install command args = %q, want bash with pipefail", cmd.Args)
 	}
 }
 

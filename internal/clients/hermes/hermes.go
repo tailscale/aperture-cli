@@ -25,7 +25,10 @@ type Client struct{}
 const (
 	name       = "Hermes Agent"
 	binaryName = "hermes"
-	compatKey  = "openai_chat"
+
+	// backendType identifies Hermes' single backend in persisted launch state.
+	// Users have this string in their state.json, so it must not change.
+	backendType = "openai_chat"
 
 	installCmd   = "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
 	uninstallCmd = "hermes uninstall --yes"
@@ -48,7 +51,7 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 	return clients.InstallPlan{
 		Hint: installCmd,
 		Run: func() (*exec.Cmd, error) {
-			return exec.Command("/bin/sh", "-c", installCmd), nil
+			return exec.Command("bash", "-o", "pipefail", "-c", installCmd), nil
 		},
 	}
 }
@@ -110,7 +113,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 	env := buildEnv(g.ApertureHost, model)
 	args := buildArgs(g.Settings.YoloMode)
 	_ = g.RecordLaunch(config.LaunchState{
-		LastClientName: name, LastBackendType: compatKey, LastProviderID: p.ID, LastModel: model,
+		LastClientName: name, LastBackendType: backendType, LastProviderID: p.ID, LastModel: model,
 	})
 	cmd := clients.Launch(clients.LaunchSpec{Binary: bin, Args: args, Env: env, Debug: g.Debug})
 	return menu.Result{Cmd: cmd, PopOnDone: true}
@@ -135,7 +138,7 @@ func buildArgs(yolo bool) []string {
 }
 
 func resolveReplay(g *config.Global) (config.ProviderInfo, string, bool) {
-	if g.LastLaunch.LastClientName != name || g.LastLaunch.LastBackendType != compatKey {
+	if g.LastLaunch.LastClientName != name || g.LastLaunch.LastBackendType != backendType {
 		return config.ProviderInfo{}, "", false
 	}
 	prov, ok := g.Provider(g.LastLaunch.LastProviderID)
@@ -181,7 +184,9 @@ func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 	return out
 }
 
-func providerMatches(p config.ProviderInfo) bool { return p.Compatibility[compatKey] }
+func providerMatches(p config.ProviderInfo) bool {
+	return p.SupportsEndpoint(config.EndpointOpenAIChat)
+}
 
 func fqnModels(p config.ProviderInfo) []string {
 	out := make([]string, len(p.Models))

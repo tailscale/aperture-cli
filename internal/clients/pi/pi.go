@@ -36,16 +36,16 @@ const (
 	uninstallCmd = "npm uninstall -g @earendil-works/pi-coding-agent"
 )
 
-// backend is one Pi wire protocol paired with the Aperture compatibility key
-// a provider must set to serve it.
+// backend is one Pi wire protocol paired with the Aperture endpoints a
+// provider must advertise to serve it.
 type backend struct {
 	id          string
 	displayName string
 	// api is the value Pi expects in a provider definition's "api" field.
 	api string
-	// compatKeys are the Aperture keys that satisfy this backend; a provider
-	// matches if any one is set.
-	compatKeys []string
+	// endpoints are the Aperture endpoints that satisfy this backend; a
+	// provider matches if it advertises any one of them.
+	endpoints []string
 }
 
 // backends is ordered most-preferred first, which is also the order the
@@ -54,10 +54,10 @@ type backend struct {
 // fails at request time against Aperture, so offering it would only produce
 // a confusing runtime error.
 var backends = []backend{
-	{id: "openai_responses", displayName: "OpenAI Responses", api: "openai-responses", compatKeys: []string{"openai_responses"}},
-	{id: "anthropic", displayName: "Anthropic Messages", api: "anthropic-messages", compatKeys: []string{"anthropic_messages"}},
-	{id: "openai_chat", displayName: "OpenAI Chat Completions", api: "openai-completions", compatKeys: []string{"openai_chat"}},
-	{id: "vertex", displayName: "Google Vertex", api: "google-generative-ai", compatKeys: []string{"google_generate_content", "google_raw_predict"}},
+	{id: "openai_responses", displayName: "OpenAI Responses", api: "openai-responses", endpoints: []string{config.EndpointOpenAIResponses}},
+	{id: "anthropic", displayName: "Anthropic Messages", api: "anthropic-messages", endpoints: []string{config.EndpointAnthropicMessages}},
+	{id: "openai_chat", displayName: "OpenAI Chat Completions", api: "openai-completions", endpoints: []string{config.EndpointOpenAIChat}},
+	{id: "vertex", displayName: "Google Vertex", api: "google-generative-ai", endpoints: []string{config.EndpointVertexGemini, config.EndpointVertexClaude}},
 }
 
 // Name implements clients.Client.
@@ -295,8 +295,8 @@ func backendsFor(p config.ProviderInfo) []backend {
 }
 
 func providerSupports(p config.ProviderInfo, b backend) bool {
-	for _, k := range b.compatKeys {
-		if p.Compatibility[k] {
+	for _, endpoint := range b.endpoints {
+		if p.SupportsEndpoint(endpoint) {
 			return true
 		}
 	}

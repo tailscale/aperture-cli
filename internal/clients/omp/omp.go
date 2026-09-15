@@ -30,18 +30,19 @@ const (
 	uninstallCmd = "bun uninstall -g @oh-my-pi/pi-coding-agent"
 )
 
+// backend captures one of the wire protocols OMP can speak to Aperture.
 type backend struct {
 	id          string
 	displayName string
 	api         string
-	compatKeys  []string
+	endpoints   []string
 }
 
 var backends = []backend{
-	{id: "openai_responses", displayName: "OpenAI Responses", api: "openai-responses", compatKeys: []string{"openai_responses"}},
-	{id: "anthropic", displayName: "Anthropic Messages", api: "anthropic-messages", compatKeys: []string{"anthropic_messages"}},
-	{id: "openai_chat", displayName: "OpenAI Chat Completions", api: "openai-completions", compatKeys: []string{"openai_chat"}},
-	{id: "vertex", displayName: "Google Vertex", api: "google-generative-ai", compatKeys: []string{"google_generate_content", "google_raw_predict"}},
+	{id: "openai_responses", displayName: "OpenAI Responses", api: "openai-responses", endpoints: []string{config.EndpointOpenAIResponses}},
+	{id: "anthropic", displayName: "Anthropic Messages", api: "anthropic-messages", endpoints: []string{config.EndpointAnthropicMessages}},
+	{id: "openai_chat", displayName: "OpenAI Chat Completions", api: "openai-completions", endpoints: []string{config.EndpointOpenAIChat}},
+	{id: "vertex", displayName: "Google Vertex", api: "google-generative-ai", endpoints: []string{config.EndpointVertexGemini, config.EndpointVertexClaude}},
 }
 
 // Name implements clients.Client.
@@ -202,6 +203,8 @@ func (c *Client) QuickSelectLabel(g *config.Global) string {
 	return label
 }
 
+// compatibleProviders returns providers with models that can service any OMP
+// backend.
 func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 	var out []config.ProviderInfo
 	for _, p := range all {
@@ -222,9 +225,11 @@ func backendsFor(p config.ProviderInfo) []backend {
 	return out
 }
 
+// providerSupports reports whether the provider advertises an endpoint that
+// the backend can drive.
 func providerSupports(p config.ProviderInfo, b backend) bool {
-	for _, key := range b.compatKeys {
-		if p.Compatibility[key] {
+	for _, endpoint := range b.endpoints {
+		if p.SupportsEndpoint(endpoint) {
 			return true
 		}
 	}
