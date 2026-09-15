@@ -8,7 +8,7 @@ One naming note before you start. This guide says "harness" because that is the 
 
 Before you start, make sure the following are true. The guide does not teach these things and will not work well without them.
 
-- You have Go 1.26.2 or newer installed, which is the version pinned in `go.mod` and used by CI.
+- You have Go 1.26.6 or newer installed, which is the version pinned in `go.mod` and the lower bound of the CI matrix.
 - You have cloned the `tailscale/aperture-cli` repository and can run `make build` and `make test` successfully on an unmodified checkout.
 - You are comfortable reading and writing Go, including interfaces, methods on pointer receivers, closures, and table-driven tests.
 - You have the harness you want to add already installed on your machine, so you can test a real launch.
@@ -30,7 +30,8 @@ You will substitute your own values into the code and commands throughout this g
 | `<INSERT_BINARY_NAME>` | The name of the executable as it appears on `$PATH`, for example `opencode` or `claude`. |
 | `<INSERT_INSTALL_COMMAND>` | The shell command that installs the harness, for example `npm install -g @openai/codex`. Get this from the harness's own documentation. |
 | `<INSERT_UNINSTALL_COMMAND>` | The shell command that uninstalls the harness, for example `npm uninstall -g @openai/codex`. Step 5 uses this twice: once verbatim as a display hint, and once split into separate arguments (`"npm", "uninstall", "-g", "@openai/codex"`) because there is no shell to split it. If the harness has no uninstall command, Step 5 explains what to do instead. |
-| `<INSERT_COMPAT_KEY>` | The compatibility key your harness needs a provider to support, for example `openai_responses`. Step 2 explains how to find the valid keys and pick yours. |
+| `<INSERT_ENDPOINT_CONST>` | The `config.Endpoint*` constant naming the API path your harness needs a provider to serve, for example `config.EndpointOpenAIResponses`. Step 2 lists the constants and explains how to pick yours. |
+| `<INSERT_BACKEND_ID>` | A short stable identifier your client records in `LaunchState.LastBackendType` and matches again on replay, for example `openai_chat`. It is private to your client. If you built a `backend` struct in Step 7, this is its `id`. Step 9 covers it. |
 | `<INSERT_APERTURE_URL>` | The URL of the Aperture endpoint you will test against, for example `http://ai` or `https://ai.example.com`. |
 | `<INSERT_HARNESS_BASE_URL_VAR>` | The environment variable your harness reads for its API base URL, for example `OPENAI_BASE_URL`. Step 1 explains how to find it. |
 | `<INSERT_HARNESS_API_KEY_VAR>` | The environment variable your harness reads for its API key, for example `OPENAI_API_KEY`. Found the same way. |
@@ -44,14 +45,14 @@ The launcher is a registry of clients plus a generic menu engine, and the two kn
 
 That `init()` call is also why this guide leaves it until the very end. `clients.Register` takes a `clients.Client`, so the moment you write it, your package stops compiling until every one of the interface's nine methods exists. Adding it last keeps the package buildable and testable at each step along the way.
 
-Everything the launcher can do with a client goes through the `clients.Client` interface in `internal/clients/registry.go:16`. The interface is deliberately wide, because each client owns its own flow end to end. The TUI never asks "what providers does this client support" or "what environment variables does it need". It asks for a `menu.MenuItem` and renders it, and the client's own closures take over from there. The TUI reads the registry through one indirection, `registeredClients` in `internal/tui/tui.go:880`, which exists so tests can swap in fakes.
+Everything the launcher can do with a client goes through the `clients.Client` interface in `internal/clients/registry.go:16`. The interface is deliberately wide, because each client owns its own flow end to end. The TUI never asks "what providers does this client support" or "what environment variables does it need". It asks for a `menu.MenuItem` and renders it, and the client's own closures take over from there. The TUI reads the registry through one indirection, the `registeredClients` variable in `internal/tui/tui.go`, which exists so tests can swap in fakes.
 
 The user's path through a client looks like this. Nothing in the diagram is mandatory except the first and last box, and Step 7 explains how to collapse the middle steps when there is only one option.
 
 ```mermaid
 flowchart TD
     A["Root menu<br/>(installed clients)"] --> B["Menu()<br/>returns your MenuItem"]
-    B --> C["providerStep<br/>filter by compatibility key"]
+    B --> C["providerStep<br/>filter by supported endpoint"]
     C --> D["backendStep<br/>pick a routing flavor"]
     D --> E["modelStep<br/>pick a default model"]
     E --> F["launch()<br/>build env, write config"]
@@ -61,7 +62,9 @@ flowchart TD
 
 Two things decide most of the work. The first is how your harness accepts a custom base URL. Some harnesses read environment variables only, which makes the client short: GitHub Copilot is entirely `buildEnv` at `internal/clients/copilot/copilot.go:173`. Others need a config file on disk, so the client writes one per launch and points the harness at it with a single environment variable, which is what `writeProviderConfig` does at `internal/clients/opencode/sdk.go:79`. The second is which API protocols your harness speaks, because the launcher only offers a client the providers that can serve it.
 
-That second part works through the compatibility map. On startup the TUI fetches `GET /api/providers` from the active Aperture endpoint and unmarshals it into `[]config.ProviderInfo` (see `internal/tui/tui.go:123` and `internal/config/providers.go:4`). Each provider carries a `Compatibility map[string]bool` describing which wire protocols it can serve, such as `openai_responses` or `anthropic_messages`. Your client filters that list down to providers it can actually talk to, and if the list comes back empty it shows an error instead of a menu.
+That second part works through the supported-endpoint set. On startup the TUI fetches `GET /v1/models` from the active Aperture endpoint and hands the body to `config.ParseProviders` (see `fetchProvidersContext` in `internal/tui/tui.go` and `internal/config/providers.go:69`). The response is an OpenAI-style `{"object":"list","data":[...]}` list of *model* rows, each carrying a `supported_endpoints` array of API paths and a `metadata.provider` object. `ParseProviders` aggregates those rows upward into one `config.ProviderInfo` per provider, unioning every model's endpoints into `SupportedEndpoints map[string]bool` and collecting the model IDs into `Models`. Your client filters that list down to providers it can actually talk to by calling `p.SupportsEndpoint(...)`, and if the list comes back empty it shows an error instead of a menu.
+
+The TUI sends `User-Agent: aperture-cli` on that request on purpose. Aperture filters the model list for Claude Code user agents, and discovery needs the full grant-filtered list for every harness, not the Claude Code subset.
 
 ## Step 1: Work out how your harness accepts a custom base URL
 
@@ -76,9 +79,11 @@ env | grep -i <INSERT_BINARY_NAME>
 
 If the harness is open source, searching its source for `baseURL`, `base_url`, or `BASE_URL` is usually faster than reading its documentation.
 
-Sort what you find into one of three shapes. In the environment-variable shape, the harness reads a base URL and an API key from the process environment and needs nothing on disk. GitHub Copilot works this way through `COPILOT_PROVIDER_BASE_URL` and friends. In the config-file shape, the harness insists on reading a config file, so your client writes that file at launch time and passes its path or its parent directory in one environment variable. OpenCode works this way through `OPENCODE_CONFIG`, Codex through `CODEX_HOME`, and Gemini CLI through `GEMINI_CLI_HOME`.
+Sort what you find into one of four shapes. In the environment-variable shape, the harness reads a base URL and an API key from the process environment and needs nothing on disk. GitHub Copilot works this way through `COPILOT_PROVIDER_BASE_URL` and friends. In the config-file shape, the harness insists on reading a config file, so your client writes that file at launch time and passes its path or its parent directory in one environment variable. OpenCode works this way through `OPENCODE_CONFIG` and Gemini CLI through `GEMINI_CLI_HOME`.
 
-The third shape is a plugin: the harness has no base-URL variable at all and no config file you can point at in isolation, but it can load a file of code that registers a provider at startup. Pi works this way — it accepts `-e <path>` and calls the file's exported function with its own extension API. Treat this like the config-file shape, writing the file per launch and cleaning it up after, but note that it is code rather than data, so generate it by marshaling values to JSON and interpolating them rather than by hand-writing strings.
+The third shape is a command-line override. The harness accepts its whole routing configuration as flags, so your client assembles them per launch and never writes to the harness's own home directory. Codex works this way: `apertureLaunchConfig` at `internal/clients/codex/config.go:16` emits `--config model_provider=...` and `--config model_providers.<name>=...` pairs, plus a `--config model_catalog_json=...` pointing at a temporary catalog built by `prepareModelCatalog` in `internal/clients/codex/catalog.go`. It deliberately leaves `CODEX_HOME` alone so the user's real Codex configuration and credentials keep working. Prefer this shape when you can get it.
+
+The fourth shape is a plugin: the harness has no base-URL variable at all and no config file you can point at in isolation, but it can load a file of code that registers a provider at startup. Pi works this way — it accepts `-e <path>` and calls the file's exported function with its own extension API. Treat this like the config-file shape, writing the file per launch and cleaning it up after, but note that it is code rather than data, so generate it by marshaling values to JSON and interpolating them rather than by hand-writing strings.
 
 Do not assume a variable exists just because every other harness has one. Search the harness's own documentation and source for the exact name before writing it down. If you cannot find one, that is a finding, not a gap in your search — invent nothing. A harness with a permissive plugin API often has no URL variable at all, and a variable that looks right may not be an input: Pi *sets* `PI_MODEL` and `PI_PROVIDER` for the tools it spawns to read, so setting them yourself does nothing.
 
@@ -91,41 +96,67 @@ Write down the exact variable names and the exact config file schema before you 
 Then confirm your endpoint is reachable and answering, because nothing later in this guide works without it.
 
 ```bash
-curl -s <INSERT_APERTURE_URL>/api/providers
+curl -s -H 'User-Agent: aperture-cli' <INSERT_APERTURE_URL>/v1/models
 ```
 
-You should get back a JSON array of provider objects, each with an `id`, a `models` list, and a `compatibility` map. Keep that output open, because the next step reads it. If the request fails or returns nothing, fix your Aperture connectivity before continuing.
+You should get back an OpenAI-style listing: an object with `"object": "list"` and a `data` array of *model* rows. Each row carries an `id`, a `supported_endpoints` array of API paths, and a `metadata.provider` object with `id`, `name`, `description`, `requires_client_auth`, and `upstream`. Keep that output open, because the next step reads it. If the request fails or returns nothing, fix your Aperture connectivity before continuing.
 
-## Step 2: Choose the compatibility keys your harness can speak
+Note that the rows are models, not providers. There is no provider-level object in the response at all; `config.ParseProviders` synthesizes one per distinct `metadata.provider.id`. Sending `User-Agent: aperture-cli` matters for the same reason the TUI sends it: Aperture serves a filtered model list to Claude Code user agents.
 
-The compatibility key is how your client declares which providers it can use. Pick the wrong key and your client will either never appear in a provider list or will appear and then fail at runtime.
+## Step 2: Choose the endpoints your harness can speak
 
-The keys are defined by the Aperture server, not by this repository, so the authoritative list for your endpoint is the response you just fetched from `/api/providers`. The longest list in the codebase is `compatKeys` in `internal/clients/opencode/opencode.go:34`, reproduced below.
+A supported endpoint is how your client declares which providers it can use. Pick the wrong one and your client will either never appear in a provider list or will appear and then fail at runtime.
+
+The endpoints are canonical API paths, and they are centrally defined in this repository as constants at the top of `internal/config/providers.go:10`. That block is the authoritative list — use the constants rather than writing path strings by hand, so a rename reaches every client through the compiler.
 
 ```go
-var compatKeys = []string{
-	"openai_responses",
-	"anthropic_messages",
-	"openai_chat",
-	"google_generate_content",
-	"google_raw_predict",
-	"bedrock_model_invoke",
-	"bedrock_converse",
-	"gemini_generate_content",
-}
+const (
+	EndpointAnthropicMessages = "/v1/messages"
+	EndpointOpenAIResponses   = "/v1/responses"
+	EndpointOpenAIChat        = "/v1/chat/completions"
+	EndpointGemini            = "/v1beta/models/{model}:generateContent"
+	EndpointVertexGemini      = "/v1/projects/{project}/locations/{region}/publishers/google/models/{model}:generateContent"
+	EndpointVertexClaude      = "/v1/projects/{project}/locations/{region}/publishers/anthropic/models/{model}:rawPredict"
+	EndpointBedrockInvoke     = "/bedrock/model/{model}/invoke"
+	EndpointBedrockConverse   = "/bedrock/model/{model}/converse"
+)
 ```
 
-That list is not the complete set. Each client declares its own keys independently, so keys used by one client can be absent from another's list — `internal/clients/gemini/gemini.go:44` uses `experimental_gemini_cli_vertex_compat`, which does not appear above. To see every key the repository knows about, grep for the declarations rather than trusting any single list.
+Every client draws from that one block. The longest selection is `supportedEndpoints` in `internal/clients/opencode/opencode.go:34`, which names all eight. Aperture may advertise paths the constants do not cover — `SupportedEndpoints` is an open map keyed on whatever the server sent, so an unknown path lands in it harmlessly and simply matches nothing.
+
+Map the protocol you found in Step 1 onto one or more of these constants. A harness that speaks OpenAI Chat Completions wants `config.EndpointOpenAIChat`. One that speaks the newer OpenAI Responses API wants `config.EndpointOpenAIResponses`. One that speaks Anthropic's Messages API wants `config.EndpointAnthropicMessages`.
+
+How many endpoints you need decides how much menu you write. If your harness speaks exactly one protocol, you need one constant and no backend step, which is what Codex does by testing `config.EndpointOpenAIResponses` directly in `compatibleProviders` at `internal/clients/codex/codex.go:222`. If it speaks several and the user should choose between them, you need a `backend` struct with an `endpoint` field and one entry per protocol, which is what Copilot does at `internal/clients/copilot/copilot.go:37`. If it speaks several but the choice can be made for the user automatically, you need a list of endpoints and a resolver, which is what OpenCode does in `pickSDK` at `internal/clients/opencode/sdk.go:35`.
+
+To verify your choice, inspect the JSON from Step 1 and confirm at least one model on your endpoint lists your path in its `supported_endpoints`. This aggregates the rows the way `ParseProviders` does.
 
 ```bash
-grep -rn 'compatKey\|compatKeys' internal/clients/
+curl -s -H 'User-Agent: aperture-cli' <INSERT_APERTURE_URL>/v1/models | python3 -c '
+import json, sys
+provs = {}
+for m in json.load(sys.stdin)["data"]:
+    p = m["metadata"]["provider"]
+    e = provs.setdefault(p["id"], {"upstream": p["upstream"], "models": 0, "eps": set()})
+    e["models"] += 1
+    e["eps"].update(m.get("supported_endpoints") or [])
+for pid, v in provs.items():
+    up, n, eps = v["upstream"], v["models"], sorted(v["eps"])
+    print(f"{pid:22} upstream={up:16} models={n:3} {eps}")
+'
 ```
 
-Map the protocol you found in Step 1 onto one or more of these keys. A harness that speaks OpenAI Chat Completions wants `openai_chat`. One that speaks the newer OpenAI Responses API wants `openai_responses`. One that speaks Anthropic's Messages API wants `anthropic_messages`.
+On a typical endpoint that prints something like this, and the paths on the right are exactly what `SupportsEndpoint` is matching against.
 
-How many keys you need decides how much menu you write. If your harness speaks exactly one protocol, you need one key and no backend step, which is what Codex does with a single `compatKey` constant at `internal/clients/codex/codex.go:29`. If it speaks several and the user should choose between them, you need a `backend` struct with one entry per protocol, which is what Copilot does at `internal/clients/copilot/copilot.go:37`. If it speaks several but the choice can be made for the user automatically, you need a list of keys and a resolver, which is what OpenCode does in `pickSDK` at `internal/clients/opencode/sdk.go:35`.
+```
+vercel-ent-zdr         upstream=vercel           models= 38 ['/v1/chat/completions', '/v1/messages', '/v1/responses']
+anthropic              upstream=anthropic        models= 14 ['/v1/chat/completions', '/v1/messages']
+openai-api             upstream=openai           models= 28 ['/v1/chat/completions', '/v1/responses']
+bedrock                upstream=bedrock-runtime  models= 12 ['/bedrock/model/{model}/converse', ...]
+```
 
-To verify your choice, inspect the JSON from Step 1 and confirm at least one provider on your endpoint has your key set to `true`. If no provider does, your client will correctly refuse to launch, and that is a configuration problem on the Aperture side rather than something to work around in code.
+If no provider serves your path, your client will correctly refuse to launch, and that is a configuration problem on the Aperture side rather than something to work around in code.
+
+One provider distinction cannot be made from endpoints alone. A Mantle provider speaks the Anthropic Messages protocol like any other, but Claude Code needs a different transport mode for it, so `backendMatches` at `internal/clients/claudecode/claudecode.go:299` keys off `p.Upstream == "bedrock-mantle"` before it looks at endpoints at all. If your harness needs a similar distinction, `ProviderInfo.Upstream` is where it lives. `ProviderInfo.RequiresClientAuth` is available on the same struct for providers that want the caller's own credentials.
 
 ## Step 3: Create the package directory and files
 
@@ -144,14 +175,15 @@ cd -
 
 Write the package clause now rather than creating the files empty. A zero-byte `.go` file is a parse error, not an empty package, so `go build ./...` fails with `expected 'package', found 'EOF'` for every empty file in the directory — which would break the verification at the end of this step and every step after it until all three files have content.
 
-The main file holds the `Client` type and every interface method. The `install.go` file holds only `commonBinaryPaths`, kept separate because it is the one function that tends to differ per operating system. The test file holds your table-driven tests. If your harness needs a config file, Step 8 adds a fourth file for it: `sdk.go` in OpenCode, `config.go` in Codex and Gemini.
+The main file holds the `Client` type and every interface method. The `install.go` file holds only `commonBinaryPaths`, kept separate because it is the one function that tends to differ per operating system. The test file holds your table-driven tests. If your harness needs routing configuration built outside the main file, Step 8 adds a fourth file for it: `sdk.go` in OpenCode, `config.go` in Gemini and Codex, and `extension.go` in Pi.
 
 Open the main file and replace its bare package clause with the doc comment, the package declaration, the type, and your constants. The doc comment matters more here than in most Go code, because the existing client packages each explain their routing model up front and reviewers will look for that.
 
 ```go
 // Package <INSERT_PACKAGE_NAME> is the <INSERT_DISPLAY_NAME> client. Describe
 // here which protocols it speaks, how routing is configured (environment
-// variables, a config file, or both), and what the menu flow looks like.
+// variables, a config file, CLI overrides, or a mix), and what the menu flow
+// looks like.
 package <INSERT_PACKAGE_NAME>
 
 // Client is the <INSERT_DISPLAY_NAME> client.
@@ -160,9 +192,10 @@ type Client struct{}
 const (
 	name       = "<INSERT_DISPLAY_NAME>"
 	binaryName = "<INSERT_BINARY_NAME>"
-	compatKey  = "<INSERT_COMPAT_KEY>"
 )
 ```
+
+The endpoint your client needs is not a constant of your own: it is `<INSERT_ENDPOINT_CONST>` from `internal/config`, referenced directly wherever you need it. No client declares a private copy of an endpoint path.
 
 `Client` is an empty struct because clients hold no state of their own. All state lives in the `*config.Global` that gets passed into each method.
 
@@ -249,7 +282,7 @@ func (c *Client) Install(_ *config.Global) clients.InstallPlan {
 	return clients.InstallPlan{
 		Hint: "<INSERT_INSTALL_COMMAND>",
 		Run: func() (*exec.Cmd, error) {
-			return exec.Command("/bin/sh", "-c", "<INSERT_INSTALL_COMMAND>"), nil
+			return exec.Command("bash", "-o", "pipefail", "-c", "<INSERT_INSTALL_COMMAND>"), nil
 		},
 	}
 }
@@ -266,13 +299,17 @@ func (c *Client) Uninstall() clients.UninstallPlan {
 }
 ```
 
-Note the difference between the two `Run` fields. `Install.Run` passes the command as one string to `/bin/sh -c`, which splits it. `Uninstall.Run` has no shell, so you must split `<INSERT_UNINSTALL_COMMAND>` into its arguments yourself, exactly as Codex does at `internal/clients/codex/codex.go:63`. The example above is Codex's literal argument list — substitute your own. Passing the whole command as a single argument compiles fine and then fails at runtime with `fork/exec npm uninstall -g ...: no such file or directory`, because it looks for one executable whose filename contains spaces. No build or test step catches this, so get it right here.
+Note the difference between the two `Run` fields. `Install.Run` passes the command as one string to a shell, which splits it. `Uninstall.Run` has no shell, so you must split `<INSERT_UNINSTALL_COMMAND>` into its arguments yourself, exactly as Codex does in `npmUninstallPlan` at `internal/clients/codex/codex.go:88`. The example above is Codex's literal argument list — substitute your own. Passing the whole command as a single argument compiles fine and then fails at runtime with `fork/exec npm uninstall -g ...: no such file or directory`, because it looks for one executable whose filename contains spaces. No build or test step catches this, so get it right here.
 
-The `Hint` is shown to the user verbatim before they confirm, so write the actual command rather than a description of it. `Install.Run` returns an `*exec.Cmd` that the TUI executes, and it returns rather than runs the command so the TUI controls the terminal handoff. Wrapping the install in `/bin/sh -c` is what the existing clients do, and it is what makes a piped command such as `curl ... | bash` work.
+Use `bash -o pipefail -c` rather than `/bin/sh -c` whenever your install command contains a pipe. A plain shell reports only the exit status of the last stage, so `curl -fsSL ... | bash` succeeds with status zero when the download 404s and the empty body is piped into a shell that has nothing to do. With `pipefail` the failing `curl` propagates. Claude Code and OpenCode both do this, at `internal/clients/claudecode/claudecode.go:76` and `internal/clients/opencode/opencode.go:64`. Clients whose install command has no pipe, such as Copilot's bare `npm install -g`, still use `/bin/sh -c`.
 
-Two cases need different handling. If your harness has no scripted install, set `Run` to `nil` and the TUI will show the hint and do nothing, leaving the user to install it by hand. If uninstalling means deleting files rather than running a command, do the deletion in Go, the way Claude Code does at `internal/clients/claudecode/claudecode.go:80`.
+The `Hint` is shown to the user verbatim before they confirm, so write the actual command rather than a description of it. `Install.Run` returns an `*exec.Cmd` that the TUI executes, and it returns rather than runs the command so the TUI controls the terminal handoff.
 
-Verify with a test rather than by actually installing anything, following the pattern at `internal/clients/codex/codex_test.go:87`. Put this in your test file, which needs the package clause and two imports.
+A zero exit status is not on its own treated as success. After the installer finishes, `installDoneMsg` at `internal/tui/menus.go:648` calls `client.IsInstalled()` and reports a failure if the binary still cannot be found, which catches an installer that printed an error and exited clean. Leave `SkipInstalledCheck` at its zero value so you get that check. Set it to `true` only when your `Run` merely *starts* a user-driven installation and cannot itself finish one — opening a vendor download page, for example, which is why the Claude Cowork desktop adapter sets it at `internal/profiles/adapter.go:46`.
+
+Two cases need different handling. If your harness has no scripted install, set `Run` to `nil` and the TUI will show the hint and do nothing, leaving the user to install it by hand. If uninstalling means deleting files rather than running a command, do the deletion in Go, the way Claude Code does at `internal/clients/claudecode/claudecode.go:82`.
+
+Verify with a test rather than by actually installing anything, following the pattern in `TestInstallPlan` at `internal/clients/codex/codex_test.go:67`. Put this in your test file, which needs the package clause and two imports.
 
 ```go
 package <INSERT_PACKAGE_NAME>
@@ -303,7 +340,24 @@ func TestInstallUninstall(t *testing.T) {
 }
 ```
 
-Replace the bare package clause in your test file with the block above. The test lives in your own package rather than a `_test` package, so it can reach unexported identifiers such as `name` and `compatKey`. Note that it asserts only on the hints and on `Run` being non-nil — it never invokes `Run`, because doing so would really uninstall your harness. That is why the argument-splitting mistake described above survives a green test suite.
+Replace the bare package clause in your test file with the block above. The test lives in your own package rather than a `_test` package, so it can reach unexported identifiers such as `name` and `binaryName`. Note that it asserts only on the hints and on `Run` being non-nil — it never invokes `Run`, because doing so would really uninstall your harness. That is why the argument-splitting mistake described above survives a green test suite.
+
+If your install command is piped, assert on the argument list too, so nobody quietly reverts the `pipefail` wrapper. This is `TestInstallCommandDetectsPipelineFailures` from `internal/clients/opencode/opencode_test.go:15`; it needs `slices` added to your test imports.
+
+```go
+func TestInstallCommandDetectsPipelineFailures(t *testing.T) {
+	plan := (&Client{}).Install(&config.Global{})
+	cmd, err := plan.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cmd.Args, []string{
+		"bash", "-o", "pipefail", "-c", "<INSERT_INSTALL_COMMAND>",
+	}) {
+		t.Errorf("install command args = %q, want bash with pipefail", cmd.Args)
+	}
+}
+```
 
 Run it to confirm.
 
@@ -313,7 +367,7 @@ go test ./internal/clients/<INSERT_PACKAGE_NAME>/
 
 You should see `ok` and the package path. Tests run at this point precisely because you have not added `init()` yet.
 
-## Step 6: Filter providers by compatibility
+## Step 6: Filter providers by supported endpoint
 
 Your client must decide which of the endpoint's providers it can use. This is a small piece of code with an outsized effect, because it gates whether the client shows a menu at all, and Step 10 reuses it to decide whether a replay is still valid.
 
@@ -332,11 +386,11 @@ func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 }
 
 func providerMatches(p config.ProviderInfo) bool {
-	return p.Compatibility[compatKey]
+	return p.SupportsEndpoint(<INSERT_ENDPOINT_CONST>)
 }
 ```
 
-That is the single-protocol version. Reading a missing key from a `map[string]bool` yields `false`, so there is no need to check whether the key exists.
+That is the single-protocol version. `SupportsEndpoint` reads `SupportedEndpoints`, which is a `map[string]bool`, so a provider that does not advertise the path yields `false` without any existence check.
 
 If your harness speaks several protocols, `providerMatches` should return true when any of them match, as OpenCode does at `internal/clients/opencode/opencode.go:186`. If the user chooses between protocols, replace `providerMatches` with a `backendsFor` function that returns every matching backend and treat a non-empty result as a match, as Copilot does at `internal/clients/copilot/copilot.go:248`.
 
@@ -360,15 +414,15 @@ func stripProviderPrefix(fqn string) string {
 }
 ```
 
-Using `stripProviderPrefix` before you put a model name into the environment is not optional. Leaving the prefix on breaks path-based routing, and there is a comment explaining a concrete instance of that breakage at `internal/clients/claudecode/claudecode.go:307`.
+Using `stripProviderPrefix` before you put a model name into the environment is not optional. Leaving the prefix on breaks path-based routing, and there is a comment explaining a concrete instance of that breakage at `internal/clients/claudecode/claudecode.go:328`.
 
-Verify with a test in the style of `internal/clients/opencode/opencode_test.go:14`. Add it to the test file you started in Step 5.
+Verify with a test in the style of `TestCompatibleProviders` at `internal/clients/opencode/opencode_test.go:29`. Add it to the test file you started in Step 5.
 
 ```go
 func TestCompatibleProviders(t *testing.T) {
 	provs := []config.ProviderInfo{
-		{ID: "match", Compatibility: map[string]bool{compatKey: true}},
-		{ID: "nomatch", Compatibility: map[string]bool{"something_else": true}},
+		{ID: "match", SupportedEndpoints: map[string]bool{<INSERT_ENDPOINT_CONST>: true}},
+		{ID: "nomatch", SupportedEndpoints: map[string]bool{"/unknown": true}},
 	}
 	got := compatibleProviders(provs)
 	if len(got) != 1 || got[0].ID != "match" {
@@ -376,6 +430,8 @@ func TestCompatibleProviders(t *testing.T) {
 	}
 }
 ```
+
+Constructing a `ProviderInfo` literal by hand is the normal way to test a filter, but note what it skips: `ParseProviders` never produces a provider with a nil `SupportedEndpoints` map, because it allocates one for every provider it creates. It also never produces one with a model ID appearing twice, since it de-duplicates as it aggregates. A provider with zero models is possible only if the endpoint sends no rows for it, which cannot happen given that providers are discovered *from* model rows.
 
 Run the tests and confirm both pass.
 
@@ -430,7 +486,7 @@ func (c *Client) providerStep(g *config.Global) menu.Result {
 
 Three conventions are at work there, and every existing client follows all three. An empty list produces an error rather than an empty menu. A single option descends straight to the next step instead of making the user press Enter on a menu of one. Anything more shows a submenu returned as `Result.Next`, which pushes onto the TUI's menu stack so Esc pops back.
 
-The loop variable capture is safe here because each iteration gets a fresh `p`. That has been true since Go 1.22, and this repository targets Go 1.26.2, so you do not need the old workaround. You may still see `c := c` or `p := p` lines in code such as `internal/tui/menus.go:377`; they are no longer necessary and you do not need to copy them.
+The loop variable capture is safe here because each iteration gets a fresh `p`. That has been true since Go 1.22, and this repository targets Go 1.26.6, so you do not need the old workaround. You may still see `c := c` or `p := p` lines in code such as `internal/tui/menus.go:195`; they are no longer necessary and you do not need to copy them.
 
 Add the model step next. This one shows the model picker only when there is a real choice to make.
 
@@ -458,9 +514,9 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo) menu.Result 
 }
 ```
 
-Note that zero models is not an error. It passes an empty model string through to `launch`, which then omits the model environment variable entirely and lets the harness pick its own default. Some harnesses, OpenCode among them, prefer this because they have their own model picker inside the application.
+Note that zero models is not an error. It passes an empty model string through to `launch`, which then omits the model environment variable entirely and lets the harness pick its own default. In practice a provider always has at least one model, because `ParseProviders` discovers providers *from* model rows, so the zero branch is defensive rather than load-bearing. If your harness has its own model picker, skip the model step entirely and go from provider straight to launch, as OpenCode does at `internal/clients/opencode/opencode.go:94`.
 
-If Step 2 told you the user needs to choose a protocol, insert a backend step between the provider step and the model step. Define a `backend` struct with the fields your routing needs and a package-level slice of them, then write a `backendStep` with the same empty-check, single-option, submenu shape. `internal/clients/copilot/copilot.go:107` is the clearest example, and `internal/clients/gemini/gemini.go:119` shows a two-backend version.
+If Step 2 told you the user needs to choose a protocol, insert a backend step between the provider step and the model step. Define a `backend` struct with an `endpoint` field holding the relevant `config.Endpoint*` constant, plus whatever else your routing needs, and a package-level slice of them. Then write a `backendStep` with the same empty-check, single-option, submenu shape. `internal/clients/copilot/copilot.go:107` is the clearest example, and `internal/clients/gemini/gemini.go:119` shows a two-backend version.
 
 Every client also needs a way to surface an error, so add this helper at the bottom of the file.
 
@@ -476,7 +532,7 @@ type errString string
 func (e errString) Error() string { return string(e) }
 ```
 
-A `SimpleDoneMsg` carrying an error puts the TUI into its error state and prints your message, which you can see handled at `internal/tui/tui.go:319`. The tiny `errString` type exists so you can build an error from a string without importing `errors` or `fmt`, and every client package declares its own copy.
+A `SimpleDoneMsg` carrying an error puts the TUI into its error state and prints your message, which you can see handled at `internal/tui/tui.go:400`. The tiny `errString` type exists so you can build an error from a string without importing `errors` or `fmt`, and every client package declares its own copy.
 
 The build will fail at this point, because your menu closures call a `launch` method that does not exist yet.
 
@@ -499,7 +555,9 @@ This is the last verification until Step 9 if your harness needs no config file,
 
 Skip this step if Step 1 told you your harness is configured entirely through environment variables. Copilot has no config file at all, and its client is simpler for it.
 
-If your harness does need a file, you have a choice about lifetime. A per-launch temporary file is right when the file's contents depend on the provider and model the user just picked, and it should be deleted when the harness exits. OpenCode works this way. A persistent directory is right when the harness stores its own state alongside your config, such as credentials you do not want to destroy on every run. Codex and Gemini CLI work this way.
+Skip it too if Step 1 told you the harness takes its whole configuration as CLI flags. Codex is configured that way now and writes nothing durable; only its temporary model catalog touches disk.
+
+If your harness does need a file, you have a choice about lifetime. A per-launch temporary file is right when the file's contents depend on the provider and model the user just picked, and it should be deleted when the harness exits. OpenCode works this way, as does Codex's model catalog. A persistent directory is right when the harness stores its own state alongside your config, such as credentials you do not want to destroy on every run. Gemini CLI works this way.
 
 For the per-launch shape, create a new file `config.go` in your package and write a function that returns the path plus a cleanup closure. This is a condensed version of `writeProviderConfig` at `internal/clients/opencode/sdk.go:79`.
 
@@ -554,7 +612,9 @@ The cleanup closure is the important part. You hand it to `clients.Launch` as `L
 
 Use `config.ClientConfigDir` from `internal/config/client_config.go:13` rather than building a path by hand. It returns `<UserConfigDir>/aperture/clients/<name>`, creates the directory with mode `0o700`, and keeps every client's files in one predictable place. Write files themselves with mode `0o600`. If your harness insists on a fixed location in the user's home directory, follow OpenCode's example and write there instead, but keep the permissions.
 
-For the persistent shape, drop the cleanup function and return just the directory path, as `writeConfig` does at `internal/clients/codex/config.go:21`. Note the comments in both `codex/config.go` and `gemini/config.go` explaining that their paths are deliberately the pre-refactor legacy ones, kept so existing user credentials keep resolving. If you ever need to move a path like that, expect to migrate the contents.
+For the persistent shape, drop the cleanup function and return just the directory path, as `writeConfig` does at `internal/clients/gemini/config.go:17`. Note the comment in `gemini/config.go` explaining that its path is deliberately the pre-refactor legacy one, kept so existing user OAuth credentials keep resolving. If you ever need to move a path like that, expect to migrate the contents.
+
+Before you commit to writing into the harness's own home directory, reconsider. Codex used to be configured by redirecting `CODEX_HOME`, which also relocated the user's real Codex state. It now passes `--config` overrides instead and leaves that directory untouched, and the doc comment on `config.ClientConfigDir` was narrowed to Gemini for exactly that reason. Redirect a harness's home only when it gives you no other way in.
 
 First confirm the new file compiles. Your package as a whole still will not build, because Step 7's menu closures are still waiting on `launch`, so build just this package and expect the same two `c.launch undefined` errors and nothing else.
 
@@ -609,7 +669,7 @@ func TestWriteProviderConfig(t *testing.T) {
 go test -run TestWriteProviderConfig ./internal/clients/<INSERT_PACKAGE_NAME>/
 ```
 
-That should report `ok`. The two `t.Setenv` calls are the part to copy without thinking about it: `config.ClientConfigDir` resolves through `os.UserConfigDir()`, so without them the test writes into your own `~/.config`. `internal/clients/opencode/opencode_test.go:61` uses the same isolation for the same reason.
+That should report `ok`. The two `t.Setenv` calls are the part to copy without thinking about it: `config.ClientConfigDir` resolves through `os.UserConfigDir()`, so without them the test writes into your own `~/.config`. `TestWriteProviderConfig` at `internal/clients/opencode/opencode_test.go:76` uses the same isolation for the same reason.
 
 ## Step 9: Implement the launch
 
@@ -643,7 +703,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName:  name,
-		LastBackendType: "<INSERT_COMPAT_KEY>",
+		LastBackendType: "<INSERT_BACKEND_ID>",
 		LastProviderID:  p.ID,
 		LastModel:       model,
 	})
@@ -662,9 +722,11 @@ Substitute the four harness-specific names from the values you gathered in Step 
 
 Several details there are easy to get wrong. Falling back to the bare `binaryName` when `FindBinary` returns empty is deliberate: it lets the operating system try one more time and produces a clearer error than an empty path would. Trimming the trailing slash off `g.ApertureHost` matters because the user may have typed one and string concatenation will happily produce `//v1`. The `/v1` suffix is a guess based on the most common case, so use whatever path your harness and provider protocol actually need, and compare against `internal/clients/copilot/copilot.go:180`, where the suffix is added for OpenAI-style routing but not for Anthropic. The `Env` map is overlaid on the user's real environment rather than replacing it, as `internal/clients/launch.go:39` shows, so you only need to set what you are changing.
 
-The `RecordLaunch` error is deliberately discarded, matching every other client. A failure to persist the quick-select record is not worth interrupting a launch the user has already confirmed. `LastBackendType` must be a stable string you can match again in Step 10; if you built a `backend` struct in Step 7, use `b.id` here instead of the compatibility key.
+The `RecordLaunch` error is deliberately discarded, matching every other client. A failure to persist the quick-select record is not worth interrupting a launch the user has already confirmed. `LastBackendType` must be a stable string you can match again in Step 10; if you built a `backend` struct in Step 7 use `b.id` here, and if you did not, pick a short fixed identifier of your own. It is a private token for your client's own replay check, not an endpoint path — Codex and OpenCode both record the literal `"openai"`.
 
-Setting `PopOnDone: true` is what returns the user to the root menu after the harness exits. `clients.Launch` runs the binary in the foreground through `tea.ExecProcess`, so the TUI gives up the terminal entirely and takes it back when the child exits, at which point `ExecDoneMsg` triggers a fresh preflight (`internal/tui/tui.go:297`).
+`RecordLaunch` also stamps `LastEndpointURL` and `LastBridgeID` onto the state from `g.ActiveEndpoint()` before saving, at `internal/config/global.go:232`. You do not set those yourself, and Step 10 explains what the TUI does with them.
+
+Setting `PopOnDone: true` is what returns the user to the root menu after the harness exits. `clients.Launch` runs the binary in the foreground through `tea.ExecProcess`, so the TUI gives up the terminal entirely and takes it back when the child exits, at which point `ExecDoneMsg` triggers a fresh preflight (`internal/tui/tui.go:373`).
 
 ### Variant B: config file
 
@@ -696,7 +758,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName:  name,
-		LastBackendType: "<INSERT_COMPAT_KEY>",
+		LastBackendType: "<INSERT_BACKEND_ID>",
 		LastProviderID:  p.ID,
 		LastModel:       model,
 	})
@@ -722,11 +784,13 @@ The build should now be clean again, because `launch` exists and every menu clos
 go build ./... && go test ./internal/clients/<INSERT_PACKAGE_NAME>/
 ```
 
-The build should print nothing and the tests should report `ok`. Now test your environment construction the way Copilot's tests do at `internal/clients/copilot/copilot_test.go:11`, by pulling the environment building out into its own `buildEnv` function and asserting on the map it returns. That refactor is worth doing precisely because it makes the routing testable without launching anything.
+The build should print nothing and the tests should report `ok`. Now test your environment construction the way Copilot's tests do in `TestBuildEnv_OpenAIChat` at `internal/clients/copilot/copilot_test.go:11`, by pulling the environment building out into its own `buildEnv` function and asserting on the map it returns. That refactor is worth doing precisely because it makes the routing testable without launching anything. If your harness is configured by CLI flags rather than environment variables, do the same with an `apertureLaunchConfig`-style function returning both, as Codex's `TestApertureLaunchConfig` covers at `internal/clients/codex/codex_test.go:39`.
 
 ## Step 10: Implement replay and quick select
 
 The root menu offers a `[0]` row that re-runs the user's last session in one keystroke. `Replay` decides whether your client can honor that, and `QuickSelectLabel` describes it.
+
+One check happens before your code runs. `quickSelect` at `internal/tui/menus.go:88` compares the recorded `LastEndpointURL` and `LastBridgeID` against the active endpoint, and offers no replay unless they match and that endpoint is still configured. Launch state written before those fields existed identifies no endpoint, so it is never replayed rather than being silently re-run against whichever endpoint happens to be active. Your `Replay` therefore only ever sees a record made against the current endpoint, and does not need to check the host itself.
 
 Add both methods, plus the `"slices"` import that the model check needs.
 
@@ -762,11 +826,11 @@ func (c *Client) QuickSelectLabel(g *config.Global) string {
 }
 ```
 
-`Replay` is a chain of staleness checks, and returning `nil` from any of them means "I cannot replay this", which is normal rather than an error. Check all four things. The launch record must name your client, or another client owns it. The binary must still be installed, since the user may have removed it. The provider must still exist in the freshly fetched list, since the endpoint's configuration may have changed. The recorded model must still be offered by that provider, since model lists change often. If you added a backend step, also confirm the recorded backend ID still exists and that the provider still supports it, as at `internal/clients/copilot/copilot.go:203`.
+`Replay` is a chain of staleness checks, and returning `nil` from any of them means "I cannot replay this", which is normal rather than an error. Check all four things. The launch record must name your client, or another client owns it. The binary must still be installed, since the user may have removed it. The provider must still exist in the freshly fetched list, since the endpoint's configuration may have changed. The recorded model must still be offered by that provider, since model lists change often. If you added a backend step, also confirm the recorded backend ID still exists and that the provider still serves its endpoint, as at `internal/clients/copilot/copilot.go:203`.
 
-Two subtleties are worth knowing. `Replay` returns the `tea.Cmd` from inside the `menu.Result` rather than the `Result` itself, because the root menu wraps it in a fresh `Result` at `internal/tui/menus.go:43`. And `QuickSelectLabel` is only ever called after `Replay` returned non-nil, which is why ignoring the `ok` from `g.Provider` is safe there. On a zero `ProviderInfo`, `DisplayName()` returns an empty string rather than panicking.
+Two subtleties are worth knowing. `Replay` returns the `tea.Cmd` from inside the `menu.Result` rather than the `Result` itself, because the root menu wraps it in a fresh `Result` at `internal/tui/menus.go:43`. And `QuickSelectLabel` is only ever called after `Replay` returned non-nil, which is why ignoring the `ok` from `g.Provider` is safe there. On a zero `ProviderInfo`, `DisplayName()` returns an empty string rather than panicking. Note that the TUI appends the endpoint label to whatever you return, so do not name the endpoint yourself.
 
-Verify with a test in the style of `internal/clients/codex/codex_test.go:105`, added to your existing test file.
+Verify with a test in the style of `TestReplay_StaleProvider` at `internal/clients/codex/codex_test.go:206`, added to your existing test file.
 
 ```go
 func TestReplay_NotReplayable(t *testing.T) {
@@ -786,24 +850,24 @@ func TestReplay_NotReplayable(t *testing.T) {
 }
 ```
 
-Be clear about what that test does and does not prove. `Replay` returns `nil` at the first check that fails, and `!c.IsInstalled()` comes before the provider lookup. On any machine where your harness is not installed — including CI, which installs no agents — this test passes without ever reaching the provider check, and it would keep passing if you deleted that check entirely. The codex test it is modeled on says as much in a comment at `internal/clients/codex/codex_test.go:113`.
+Be clear about what that test does and does not prove. `Replay` returns `nil` at the first check that fails, and `!c.IsInstalled()` comes before the provider lookup. On any machine where your harness is not installed — including CI, which installs no agents — this test passes without ever reaching the provider check, and it would keep passing if you deleted that check entirely. The codex test it is modeled on says as much in a comment at `internal/clients/codex/codex_test.go:214`.
 
 If you want real coverage of the staleness logic, test the parts that do not depend on the binary being present. `providerMatches` and `fqnModels` are both unexported and directly callable, and between them they decide three of the four checks:
 
 ```go
 func TestReplayStalenessChecks(t *testing.T) {
 	prov := config.ProviderInfo{
-		ID:            "openai",
-		Models:        []string{"gpt-5"},
-		Compatibility: map[string]bool{compatKey: true},
+		ID:                 "openai",
+		Models:             []string{"gpt-5"},
+		SupportedEndpoints: map[string]bool{<INSERT_ENDPOINT_CONST>: true},
 	}
 	if !providerMatches(prov) {
-		t.Error("provider with our compat key should match")
+		t.Error("provider serving our endpoint should match")
 	}
 	if providerMatches(config.ProviderInfo{
-		Compatibility: map[string]bool{"something_else": true},
+		SupportedEndpoints: map[string]bool{"/unknown": true},
 	}) {
-		t.Error("provider without our compat key should not match")
+		t.Error("provider not serving our endpoint should not match")
 	}
 	if got := fqnModels(prov); len(got) != 1 || got[0] != "openai/gpt-5" {
 		t.Errorf("fqnModels = %v, want [openai/gpt-5]", got)
@@ -850,13 +914,16 @@ Then open `cmd/aperture/main.go` and add your package to the side-effect import 
 	_ "github.com/tailscale/aperture-cli/internal/clients/codex"
 	_ "github.com/tailscale/aperture-cli/internal/clients/copilot"
 	_ "github.com/tailscale/aperture-cli/internal/clients/gemini"
+	_ "github.com/tailscale/aperture-cli/internal/clients/hermes"
 	_ "github.com/tailscale/aperture-cli/internal/clients/nimbus"
+	_ "github.com/tailscale/aperture-cli/internal/clients/omp"
 	_ "github.com/tailscale/aperture-cli/internal/clients/opencode"
+	_ "github.com/tailscale/aperture-cli/internal/clients/pi"
 ```
 
 Alphabetical order is not a style preference here, it is what gofmt enforces. gofmt sorts the paths within an import block, so appending your line at the end leaves the file unformatted and fails the CI formatting gate described below. If you are unsure where the line goes, put it anywhere and run `gofmt -w cmd/aperture/main.go` to have it moved for you.
 
-The blank identifier import exists purely to run your `init()`, which calls `clients.Register`. Registration order is display order in the menu, per the comment at `internal/clients/registry.go:78`, and registration order follows the order of the imports in this block. That means your client's position in the menu is decided by where your package name sorts alphabetically, and you cannot change it by moving the import line: gofmt will sort it straight back, and leaving it out of order fails CI. Your client will appear between the packages that alphabetically surround it. If a client ever genuinely needs a different position, that calls for an explicit ordering mechanism in `internal/clients`, not a hand-ordered import block.
+The blank identifier import exists purely to run your `init()`, which calls `clients.Register`. Registration order is display order in the menu, per the comment on `Register` at `internal/clients/registry.go:83`, and registration order follows the order of the imports in this block. That means your client's position in the menu is decided by where your package name sorts alphabetically, and you cannot change it by moving the import line: gofmt will sort it straight back, and leaving it out of order fails CI. Your client will appear between the packages that alphabetically surround it. If a client ever genuinely needs a different position, that calls for an explicit ordering mechanism in `internal/clients`, not a hand-ordered import block.
 
 From here on, a missing or misnamed interface method breaks the build rather than showing up as a missing menu row, which is exactly what you want.
 
@@ -902,15 +969,22 @@ One more silent case: the root menu skips any installed client whose `Menu()` re
 
 ### The launcher says no providers support your client
 
-Your compatibility key does not match anything the endpoint offers. Fetch the provider list directly and look at the actual keys.
+Your endpoint path does not match anything the endpoint offers. Fetch the model list directly and look at the paths it actually advertises.
 
 ```bash
-curl -s <INSERT_APERTURE_URL>/api/providers
+curl -s -H 'User-Agent: aperture-cli' <INSERT_APERTURE_URL>/v1/models |
+	python3 -c 'import json,sys; print(sorted({e for m in json.load(sys.stdin)["data"] for e in (m.get("supported_endpoints") or [])}))'
 ```
 
-Compare the `compatibility` object in that response against the key in your code, watching for typos and for singular versus plural forms. If no provider sets your key, the client is behaving correctly and the gap is on the Aperture side, so choose a different protocol your harness also speaks or configure the provider in Aperture.
+Compare that set against the constant your code passes to `SupportsEndpoint`. Because the constants are centrally defined in `internal/config/providers.go`, a typo in the path itself is a compile error rather than a silent mismatch — so the likely cause is a genuine gap rather than a spelling slip. If no provider serves your path, the client is behaving correctly, so choose a different protocol your harness also speaks or configure the provider in Aperture.
 
-If the response is empty or the request fails, the problem is connectivity rather than compatibility, and the launcher's own preflight would have shown you its setup guide before you got this far.
+If the response is empty or the request fails, the problem is connectivity rather than protocol support, and the launcher's own preflight would have shown you its setup guide before you got this far.
+
+### The install finishes but the launcher reports it failed
+
+The installer exited zero and the TUI still could not find your binary afterwards. That message comes from `installDoneMsg`, and it is usually correct: many installers print an error and exit clean. Run your `Install.Hint` by hand and check where the binary landed.
+
+If it landed somewhere real, your discovery is at fault rather than the install, so add that location to `commonBinaryPaths` as a full path to the binary. If the install genuinely failed silently and your command contains a pipe, you are missing `bash -o pipefail -c`. Do not reach for `SkipInstalledCheck` to quiet the message unless your `Run` really cannot complete an install on its own.
 
 ### The harness starts but every request fails
 
@@ -922,11 +996,13 @@ If the failure looks like an authentication error, your placeholder API key valu
 
 If the harness reads a config file, confirm the file exists and contains what you expect while the harness is running. Add a temporary `fmt.Fprintln(os.Stderr, configPath)` in `launch`, or comment out the cleanup closure so the file survives the exit, then inspect it.
 
-One case is specific to Gemini CLI and may apply to your harness too. Gemini CLI rejects base URLs that are not HTTPS with a fully-qualified domain name, so the default `http://ai` endpoint cannot work with it. The client blocks the launch with an explanation rather than letting the harness fail confusingly, in `validateHost` at `internal/clients/gemini/gemini.go:256`. If your harness validates URLs similarly, copy that approach.
+One case is specific to Gemini CLI and may apply to your harness too. Gemini CLI rejects base URLs that are not HTTPS with a fully-qualified domain name, so the default `http://ai` endpoint cannot work with it. The client blocks the launch with an explanation rather than letting the harness fail confusingly, in `validateHost` at `internal/clients/gemini/gemini.go:256`. It is called first thing in `launch`, before any binary lookup or config write. If your harness validates URLs similarly, copy that approach.
 
 ### The quick select row never appears
 
-`Replay` is returning `nil`. Work through its four checks in order. Confirm the `name` constant you compare against `LastClientName` is byte-identical to the one you pass to `RecordLaunch`, since a display name that changed between the two will never match. Confirm the binary is still installed. Confirm the recorded provider ID is still in the fetched list. Confirm the recorded model is still in `fqnModels(prov)`.
+Check the endpoint gate before your own checks, because it runs first and your `Replay` is never called when it fails. The row is suppressed if `lastEndpointUrl` in the saved state does not match the active endpoint, or if that endpoint is no longer in your configured list. Switching endpoints between sessions is therefore expected to hide the row, and so is a record written before those fields existed.
+
+If the endpoint does match, `Replay` is returning `nil`. Work through its four checks in order. Confirm the `name` constant you compare against `LastClientName` is byte-identical to the one you pass to `RecordLaunch`, since a display name that changed between the two will never match. Confirm the binary is still installed. Confirm the recorded provider ID is still in the fetched list. Confirm the recorded model is still in `fqnModels(prov)`.
 
 Read the persisted record directly to see what was actually stored. On macOS the file is here.
 
@@ -934,13 +1010,13 @@ Read the persisted record directly to see what was actually stored. On macOS the
 cat ~/Library/Application\ Support/aperture/launcher.json
 ```
 
-On Linux it is at `~/.config/aperture/launcher.json` instead, or under `$XDG_CONFIG_HOME` if you have set that. Both paths come from `os.UserConfigDir()` in `statePath` at `internal/config/state.go:19`.
+On Linux it is at `~/.config/aperture/launcher.json` instead, or under `$XDG_CONFIG_HOME` if you have set that. Both paths come from `os.UserConfigDir()` in `statePath` at `internal/config/state.go:21`.
 
 ```bash
 cat ~/.config/aperture/launcher.json
 ```
 
-Compare the `lastClientName`, `lastProviderId`, and `lastModel` values in that JSON against what your checks expect. If the file is missing entirely, `RecordLaunch` never succeeded, so confirm you are calling it inside `launch`.
+Compare the `lastClientName`, `lastProviderId`, `lastModel`, and `lastEndpointUrl` values in that JSON against what your checks expect. If the file is missing entirely, `RecordLaunch` never succeeded, so confirm you are calling it inside `launch`. If `lastEndpointUrl` is absent, the record predates endpoint tracking and will never replay; launch once more to rewrite it.
 
 ### CI fails on formatting
 
