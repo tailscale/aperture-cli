@@ -987,6 +987,46 @@ func TestConnectionPicker_RemovesInactiveConnection(t *testing.T) {
 	findItem(t, m.top().Items, "Connect via Work")
 }
 
+// The hint promises "d to remove" on every row, so it has to mean the same
+// thing the row's own page does, including on a bridge that has no endpoint.
+func TestConnectionPicker_DeleteKeyRemovesRowUnderCursor(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.endpointsMenu())
+	del, _ := findItem(t, m.top().Items, "delete")
+
+	m.setCursor(2) // Connect via Home
+	m.activate(del)
+	if got := m.g.Settings.Bridges; len(got) != 1 || got[0].Name != "Work" {
+		t.Fatalf("bridges = %+v, want Home removed", got)
+	}
+
+	m.setCursor(1) // http://ai via Work
+	del, _ = findItem(t, m.top().Items, "delete")
+	m.activate(del)
+	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0].BridgeID != "" {
+		t.Fatalf("endpoints = %+v, want the bridge endpoint removed", got)
+	}
+}
+
+func TestConnectionPicker_DeleteKeySaysWhyTheActiveRowStays(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.endpointsMenu())
+	del, _ := findItem(t, m.top().Items, "delete")
+
+	m.setCursor(0)
+	_, cmd := m.activate(del)
+	if cmd == nil {
+		t.Fatal("d on the active connection did nothing at all")
+	}
+	m.Update(cmd())
+	if m.step != stepError || !strings.Contains(m.errMsg, "active") {
+		t.Fatalf("step=%v errMsg=%q, want an explanation", m.step, m.errMsg)
+	}
+	if len(m.g.Settings.Endpoints) != 2 {
+		t.Fatalf("endpoints = %+v, want the active one kept", m.g.Settings.Endpoints)
+	}
+}
+
 func TestBridgesMenu_ConnectsThroughBridge(t *testing.T) {
 	m := pickerModel(t)
 	m.resetStack(m.bridgesMenu())

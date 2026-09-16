@@ -274,11 +274,14 @@ func (m *model) endpointsMenu() *menu.Menu {
 		Shortcut: "e",
 		Hidden:   true,
 		Action: func() menu.Result {
-			idx := m.cursor()
-			if idx < 0 || idx >= len(m.g.Settings.Endpoints) {
+			row, ok := m.connectionAtCursor()
+			if !ok {
 				return menu.Result{}
 			}
-			m.promptEditEndpoint(m.g.Settings.Endpoints[idx])
+			if !row.saved {
+				return errResult("connect through " + row.bridge.Name + " first, then its URL can be changed")
+			}
+			m.promptEditEndpoint(row.ep)
 			return menu.Result{}
 		},
 	})
@@ -288,23 +291,11 @@ func (m *model) endpointsMenu() *menu.Menu {
 		Shortcut: "d",
 		Hidden:   true,
 		Action: func() menu.Result {
-			idx := m.cursor()
-			if idx < 0 || idx >= len(m.g.Settings.Endpoints) || len(m.g.Settings.Endpoints) <= 1 {
+			row, ok := m.connectionAtCursor()
+			if !ok {
 				return menu.Result{}
 			}
-			if idx == 0 {
-				return errResult("switch to another endpoint before removing the active endpoint")
-			}
-			removed := m.g.Settings.Endpoints[idx]
-			if err := m.g.RemoveEndpoint(idx); err != nil {
-				return errResult(err.Error())
-			}
-			if m.failedEndpoint != nil && sameEndpoint(*m.failedEndpoint, removed) {
-				m.clearEndpointFailure()
-				m.resetStack(m.rootMenu())
-				return menu.Result{}
-			}
-			return menu.Result{Replace: m.endpointsMenu()}
+			return m.removeConnectionRow(row)
 		},
 	})
 
@@ -359,6 +350,19 @@ func (m *model) connectionRows() []connectionRow {
 		})
 	}
 	return rows
+}
+
+// connectionAtCursor resolves the picker row the cursor is on. The hidden "e"
+// and "d" aliases act through it rather than indexing Settings.Endpoints, so
+// they see the same rows the user does: a bridge with no endpoint is a row too,
+// and indexing past the endpoints made those keys silently do nothing.
+func (m *model) connectionAtCursor() (connectionRow, bool) {
+	rows := m.connectionRows()
+	idx := m.cursor()
+	if idx < 0 || idx >= len(rows) {
+		return connectionRow{}, false
+	}
+	return rows[idx], true
 }
 
 func (m *model) connectionLabel(row connectionRow) string {
@@ -455,19 +459,13 @@ func (m *model) connectionMenu(row connectionRow) *menu.Menu {
 	case row.saved:
 		items = append(items, menu.MenuItem{
 			Label:  "Remove connection",
-			Action: func() menu.Result { return m.removeConnection(row.ep) },
+			Action: func() menu.Result { return m.removeConnectionRow(row) },
 		})
 	default:
 		items = append(items, menu.MenuItem{
 			Label:       "Remove bridge",
 			Description: row.bridge.ID,
-			Action: func() menu.Result {
-				if err := m.g.RemoveBridge(row.bridge.ID); err != nil {
-					return errResult(err.Error())
-				}
-				m.refreshEndpointsMenu()
-				return menu.Result{Cmd: tea.ClearScreen}
-			},
+			Action:      func() menu.Result { return m.removeConnectionRow(row) },
 		})
 	}
 
@@ -475,6 +473,24 @@ func (m *model) connectionMenu(row connectionRow) *menu.Menu {
 		Title: title,
 		Items: items,
 		Hint:  "Enter to select · Esc to go back",
+	}
+}
+
+// removeConnectionRow deletes what a picker row stands for: the endpoint, or
+// the bridge itself when no endpoint points at it yet. Shared by the row's page
+// and the "d" key, which have to agree on what removing a row means.
+func (m *model) removeConnectionRow(row connectionRow) menu.Result {
+	switch {
+	case row.active:
+		return errResult("connect to another endpoint before removing the active one")
+	case row.saved:
+		return m.removeConnection(row.ep)
+	default:
+		if err := m.g.RemoveBridge(row.bridge.ID); err != nil {
+			return errResult(err.Error())
+		}
+		m.refreshEndpointsMenu()
+		return menu.Result{Cmd: tea.ClearScreen}
 	}
 }
 
