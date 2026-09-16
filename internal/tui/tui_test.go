@@ -63,16 +63,17 @@ func TestRootMenu_ShowsInstalledClients(t *testing.T) {
 
 	m := &model{g: &config.Global{}}
 	root := m.rootMenu()
-	// Installed clients + hidden shortcut items (settings + install-agents).
-	// Visible count: A, C (2). Plus a hidden Settings and hidden Install agents.
-	visible := 0
+	// Installed clients + the connection row, then hidden shortcut items
+	// (settings + install-agents). Visible count: A, C, Aperture connection.
+	var visible []string
 	for _, it := range root.Items {
 		if !it.Hidden {
-			visible++
+			visible = append(visible, it.Label)
 		}
 	}
-	if visible != 2 {
-		t.Errorf("visible items = %d, want 2", visible)
+	want := []string{"A", "C", "Aperture connection"}
+	if !slices.Equal(visible, want) {
+		t.Errorf("visible items = %v, want %v", visible, want)
 	}
 }
 
@@ -823,6 +824,175 @@ func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 	if got := m.g.Settings.Endpoints; len(got) != 1 || !sameEndpoint(got[0], want) {
 		t.Fatalf("endpoints = %+v, want the row rewritten to %+v", got, want)
 	}
+	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
+	}
+}
+
+// pickerModel is a launcher connected directly to the default location with
+// two bridges configured: one already used by an endpoint, one not used at all.
+// This is the state the picker exists for, where autoconnect succeeds and the
+// bridges are otherwise unreachable.
+func pickerModel(t *testing.T) *model {
+	t.Helper()
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	return &model{
+		g: &config.Global{
+			ApertureHost: config.DefaultLocation,
+			Settings: config.Settings{
+				Bridges: []config.Bridge{
+					{ID: "bridge-aaaaaa", Name: "Work", Tailnet: "corp.example.com"},
+					{ID: "bridge-bbbbbb", Name: "Home"},
+				},
+				Endpoints: []config.Endpoint{
+					{URL: config.DefaultLocation},
+					{URL: config.DefaultLocation, BridgeID: "bridge-aaaaaa"},
+				},
+			},
+		},
+		step:      stepMenu,
+		connected: true,
+	}
+}
+
+func findItem(t *testing.T, items []menu.MenuItem, label string) (int, menu.MenuItem) {
+	t.Helper()
+	for i, it := range items {
+		if strings.Contains(it.Label, label) {
+			return i, it
+		}
+	}
+	var labels []string
+	for _, it := range items {
+		if !it.Hidden {
+			labels = append(labels, it.Label)
+		}
+	}
+	t.Fatalf("no item matching %q in %v", label, labels)
+	return 0, menu.MenuItem{}
+}
+
+func TestRootMenu_OpensConnectionPicker(t *testing.T) {
+	withFakeClients(t, []clients.Client{&fakeClient{name: "A", installed: true}})
+	m := pickerModel(t)
+	m.resetStack(m.rootMenu())
+
+	idx, _ := findItem(t, m.top().Items, "Aperture connection")
+	m.activate(idx)
+	if got := m.top().Title; got != endpointsTitle {
+		t.Fatalf("menu title = %q, want %q", got, endpointsTitle)
+	}
+}
+
+func TestConnectionPicker_ListsBridgesAndTailnets(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.endpointsMenu())
+
+	var rows []string
+	for _, it := range m.top().Items {
+		if !it.Hidden {
+			rows = append(rows, ansi.Strip(it.Label)+"|"+it.Description)
+		}
+	}
+	want := []string{
+		"http://ai (direct) (active)|",
+		"http://ai via Work|tailnet corp.example.com",
+		"Connect via Home|tailnet not known yet",
+		"Add a connection|",
+	}
+	if !slices.Equal(rows, want) {
+		t.Fatalf("picker rows =\n%v\nwant\n%v", rows, want)
+	}
+}
+
+func TestConnectionPicker_ConnectsViaUnusedBridge(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.endpointsMenu())
+
+	idx, _ := findItem(t, m.top().Items, "Connect via Home")
+	m.activate(idx)
+	connect, _ := findItem(t, m.top().Items, "Connect")
+	m.activate(connect)
+
+	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: "bridge-bbbbbb"}
+	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
+	}
+	if !m.endpointConfigured(want) {
+		t.Errorf("endpoints = %+v, want the bridge endpoint saved for retry", m.g.Settings.Endpoints)
+	}
+}
+
+func TestConnectionPicker_SwitchTailnetConfirmsThenReconnects(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.endpointsMenu())
+
+	idx, _ := findItem(t, m.top().Items, "via Work")
+	m.activate(idx)
+	switchIdx, _ := findItem(t, m.top().Items, "Switch tailnet")
+	m.activate(switchIdx)
+
+	if !strings.Contains(m.top().Preamble, "corp.example.com") {
+		t.Errorf("confirm preamble = %q, want the tailnet being left", m.top().Preamble)
+	}
+	yes, _ := findItem(t, m.top().Items, "Switch tailnet")
+	m.activate(yes)
+
+	if m.act == nil || m.act.endpoint.BridgeID != "bridge-aaaaaa" {
+		t.Fatalf("activation = %+v, want a reconnect through the bridge", m.act)
+	}
+	// The bridge has left that tailnet whether or not the new login completes.
+	if got := m.g.Settings.Bridges[0].Tailnet; got != "" {
+		t.Errorf("recorded tailnet = %q, want it cleared by the switch", got)
+	}
+}
+
+func TestConnectionPicker_DirectEndpointHasNoTailnetSwitch(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.endpointsMenu())
+
+	m.activate(0)
+	for _, it := range m.top().Items {
+		if strings.Contains(it.Label, "Switch tailnet") {
+			t.Fatal("direct endpoint offers a tailnet switch")
+		}
+	}
+	// The active connection cannot be removed out from under itself.
+	_, remove := findItem(t, m.top().Items, "Remove connection")
+	if !remove.Disabled {
+		t.Error("active connection offers Remove")
+	}
+}
+
+func TestConnectionPicker_RemovesInactiveConnection(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.endpointsMenu())
+
+	idx, _ := findItem(t, m.top().Items, "via Work")
+	m.activate(idx)
+	remove, _ := findItem(t, m.top().Items, "Remove connection")
+	m.activate(remove)
+
+	if len(m.g.Settings.Endpoints) != 1 {
+		t.Fatalf("endpoints = %+v, want only the active one left", m.g.Settings.Endpoints)
+	}
+	if got := m.top().Title; got != endpointsTitle {
+		t.Fatalf("menu title = %q, want to be back on %q", got, endpointsTitle)
+	}
+	// Work has no endpoint now, so it comes back as a bridge row.
+	findItem(t, m.top().Items, "Connect via Work")
+}
+
+func TestBridgesMenu_ConnectsThroughBridge(t *testing.T) {
+	m := pickerModel(t)
+	m.resetStack(m.bridgesMenu())
+
+	idx, _ := findItem(t, m.top().Items, "Home")
+	m.activate(idx)
+
+	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: "bridge-bbbbbb"}
 	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
 		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
 	}

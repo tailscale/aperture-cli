@@ -243,13 +243,15 @@ func fetchProvidersContext(ctx context.Context, host string, timeout time.Durati
 }
 
 func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
-	return m.activateEndpoint(ep, false)
+	return m.activateEndpoint(ep, false, false)
 }
 
 // activateEndpoint starts a cancellable attempt to connect to ep. ephemeral
 // marks an endpoint this flow just wrote to settings on the user's behalf, so
 // cancelling or overriding the attempt can take it back out again.
-func (m *model) activateEndpoint(ep config.Endpoint, ephemeral bool) tea.Cmd {
+// switchTailnet logs the bridge out before connecting, so the attempt starts
+// from a login prompt rather than the tailnet the node is already on.
+func (m *model) activateEndpoint(ep config.Endpoint, ephemeral, switchTailnet bool) tea.Cmd {
 	m.stopActivation()
 	m.step = stepPreflight
 	m.preflightErr = ""
@@ -300,9 +302,20 @@ func (m *model) activateEndpoint(ep config.Endpoint, ephemeral bool) tea.Cmd {
 	act.logCh = ch
 	act.logCtx = ctx
 	act.label = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
+	if switchTailnet {
+		act.label = "Switching bridge " + bridge.Name + " to a different tailnet ..."
+	}
 	bridgeLogf := bridgeLogSink(ctx, ch)
 	activate := func() tea.Msg {
 		defer cancel()
+		// Inside the attempt, so it shares the attempt's cancellation and log
+		// sink: the new login link is what the user needs on screen, and Esc
+		// has to reach a logout that stalls on the old tailnet.
+		if switchTailnet {
+			if err := m.bridgeManager.SwitchTailnet(ctx, bridge, bridgeLogf); err != nil {
+				return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
+			}
+		}
 		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, bridgeLogf)
 		if err != nil {
 			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
@@ -314,6 +327,21 @@ func (m *model) activateEndpoint(ep config.Endpoint, ephemeral bool) tea.Cmd {
 		return endpointActivationResult{id: act.id, endpoint: ep, host: localURL, providers: provs, err: err}
 	}
 	return tea.Batch(activate, waitBridgeLog(ctx, ch))
+}
+
+// recordBridgeTailnet saves the tailnet a bridge just connected through, so
+// the connection picker can name it on a later run before the bridge is
+// started again. A failed write is not worth interrupting a connection that
+// worked: the picker falls back to saying the tailnet is not known yet.
+func (m *model) recordBridgeTailnet(ep config.Endpoint) {
+	if ep.BridgeID == "" {
+		return
+	}
+	name := m.bridgeManager.Tailnet(ep.BridgeID)
+	if name == "" {
+		return
+	}
+	_ = m.g.SetBridgeTailnet(ep.BridgeID, name)
 }
 
 // stopActivation ends the in-flight attempt without touching settings. The
@@ -420,7 +448,7 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	return m, m.activateEndpoint(next, ephemeral)
+	return m, m.activateEndpoint(next, ephemeral, false)
 }
 
 func bridgeLogSink(ctx context.Context, ch chan<- string) func(string) {
@@ -534,6 +562,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		m.recordBridgeTailnet(msg.endpoint)
 		m.g.ApertureHost = msg.host
 		m.g.Providers = msg.providers
 		m.connected = true
