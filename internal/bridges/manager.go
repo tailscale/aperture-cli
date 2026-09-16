@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -23,7 +24,11 @@ type Manager struct {
 	mu sync.Mutex
 
 	debug bool
-	nodes map[string]*nodeRuntime
+	// peerWait bounds how long a dial waits for the target to appear in the
+	// node's peer map before giving up and resolving it the way tsnet would.
+	peerWait         time.Duration
+	peerWaitInterval time.Duration
+	nodes            map[string]*nodeRuntime
 	// tailnets is the network each running node logged in to, keyed by bridge
 	// ID. Read back by the TUI to label a bridge with the tailnet it reaches.
 	tailnets map[string]string
@@ -32,8 +37,8 @@ type Manager struct {
 }
 
 const (
-	bridgeDNSRetryWindow   = 5 * time.Second
-	bridgeDNSRetryInterval = 250 * time.Millisecond
+	bridgePeerWaitWindow   = 5 * time.Second
+	bridgePeerWaitInterval = 250 * time.Millisecond
 )
 
 type nodeRuntime struct {
@@ -94,9 +99,11 @@ func (n *tsnetNode) Close() error {
 // backend logs are also emitted to the supplied activation log sink.
 func NewManager(debug bool) *Manager {
 	m := &Manager{
-		debug:    debug,
-		nodes:    make(map[string]*nodeRuntime),
-		tailnets: make(map[string]string),
+		debug:            debug,
+		peerWait:         bridgePeerWaitWindow,
+		peerWaitInterval: bridgePeerWaitInterval,
+		nodes:            make(map[string]*nodeRuntime),
+		tailnets:         make(map[string]string),
 	}
 	m.newNode = func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 		s := &tsnet.Server{
@@ -156,7 +163,7 @@ func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL 
 		return proxy.localURL, nil
 	}
 
-	proxy, err := startProxy(rt.node, target, logf, m.debug)
+	proxy, err := m.startProxy(rt.node, target, logf)
 	if err != nil {
 		return "", err
 	}
@@ -351,7 +358,8 @@ func parseTarget(raw string) (*url.URL, error) {
 	return target, nil
 }
 
-func startProxy(node tailnetNode, target *url.URL, logf func(string), debug bool) (*proxyRuntime, error) {
+func (m *Manager) startProxy(node tailnetNode, target *url.URL, logf func(string)) (*proxyRuntime, error) {
+	debug := m.debug
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -363,13 +371,14 @@ func startProxy(node tailnetNode, target *url.URL, logf func(string), debug bool
 		if debug {
 			logf(fmt.Sprintf("Bridge dialing network=%s address=%s", network, address))
 		}
-		conn, attempts, err := dialWithDNSRetry(
+		conn, attempts, err := dialViaNode(
 			ctx,
-			node.DialContext,
+			node,
 			network,
 			address,
-			bridgeDNSRetryWindow,
-			bridgeDNSRetryInterval,
+			logf,
+			m.peerWait,
+			m.peerWaitInterval,
 		)
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if err != nil {
@@ -408,47 +417,134 @@ func startProxy(node tailnetNode, target *url.URL, logf func(string), debug bool
 
 type bridgeDialFunc func(context.Context, string, string) (net.Conn, error)
 
-// dialWithDNSRetry gives an embedded tsnet node a short window to receive the
-// target's peer map after Up reports Running. Until that map arrives, tsnet's
-// MagicDNS lookup falls through to the host resolver and returns a DNSError.
-// Non-DNS failures are returned immediately.
-func dialWithDNSRetry(
+// dialViaNode dials address over the bridge's node, resolving a name against
+// the node's own peer map first and dialing the IP it finds.
+//
+// Handing the name straight to tsnet is what made a first connection hang for
+// 30s: until the node's netmap lands, tsnet's resolver falls through to the
+// host resolver, and on a machine that is itself on a tailnet that answers
+// with a same-named node on the *host's* tailnet. tsnet then sees an address
+// it has no route for and system-dials it, so the bridge either blackholes
+// until the fetch times out or, worse, proxies to the wrong tailnet's node.
+// Resolving through the node cannot leave the bridge's tailnet, and waiting
+// for the peer to appear is the same wait the old DNS retry was aiming at.
+func dialViaNode(
 	ctx context.Context,
-	dial bridgeDialFunc,
+	node tailnetNode,
 	network, address string,
-	retryWindow, retryInterval time.Duration,
+	logf func(string),
+	peerWaitWindow, peerWaitInterval time.Duration,
 ) (net.Conn, int, error) {
-	deadline := time.Now().Add(retryWindow)
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, 0, err
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		conn, err := node.DialContext(ctx, network, address)
+		return conn, 1, err
+	}
+
+	ip, attempts, err := waitForPeerAddr(ctx, node, host, peerWaitWindow, peerWaitInterval)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, attempts, err
+		}
+		// Not every target is a tailnet node: a subnet router or the tailnet's
+		// own DNS can serve it. Those only resolve the way tsnet resolves, so
+		// fall through and say so, since this is the path that can leave the
+		// tailnet.
+		logf(fmt.Sprintf("Bridge target %s is not a node on this bridge's tailnet (%v); resolving it the usual way.", host, err))
+		conn, derr := node.DialContext(ctx, network, address)
+		return conn, attempts, derr
+	}
+
+	conn, err := node.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	return conn, attempts, err
+}
+
+// waitForPeerAddr polls the node's status until host shows up as a peer. A node
+// that just came up reports Running before its peer map arrives, so the first
+// look usually misses.
+func waitForPeerAddr(
+	ctx context.Context,
+	node tailnetNode,
+	host string,
+	window, interval time.Duration,
+) (netip.Addr, int, error) {
+	deadline := time.Now().Add(window)
 	attempts := 0
 	for {
-		conn, err := dial(ctx, network, address)
+		status, err := node.Status(ctx)
 		attempts++
 		if err == nil {
-			return conn, attempts, nil
+			if ip, ok := peerAddr(status, host); ok {
+				return ip, attempts, nil
+			}
+			err = errors.New("not in this node's peer map")
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, attempts, ctxErr
-		}
-		var dnsErr *net.DNSError
-		if !errors.As(err, &dnsErr) || retryWindow <= 0 || retryInterval <= 0 {
-			return nil, attempts, err
+			return netip.Addr{}, attempts, ctxErr
 		}
 
 		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return nil, attempts, err
+		if remaining <= 0 || interval <= 0 {
+			return netip.Addr{}, attempts, err
 		}
-		if retryInterval > remaining {
-			retryInterval = remaining
+		if interval > remaining {
+			interval = remaining
 		}
-		timer := time.NewTimer(retryInterval)
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, attempts, ctx.Err()
+			return netip.Addr{}, attempts, ctx.Err()
 		case <-timer.C:
 		}
 	}
+}
+
+// peerAddr returns the tailnet address the node has for host, matching either a
+// peer's full MagicDNS name or its first label, the short form endpoint URLs
+// usually carry.
+func peerAddr(status *ipnstate.Status, host string) (netip.Addr, bool) {
+	if status == nil {
+		return netip.Addr{}, false
+	}
+	want := strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, peer := range status.Peer {
+		if peer == nil || !magicDNSNameMatches(peer.DNSName, want) {
+			continue
+		}
+		if ip, ok := preferIPv4(peer.TailscaleIPs); ok {
+			return ip, true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+func magicDNSNameMatches(dnsName, host string) bool {
+	name := strings.ToLower(strings.TrimSuffix(dnsName, "."))
+	if name == "" {
+		return false
+	}
+	if name == host {
+		return true
+	}
+	label, _, _ := strings.Cut(name, ".")
+	return label == host
+}
+
+func preferIPv4(addrs []netip.Addr) (netip.Addr, bool) {
+	var fallback netip.Addr
+	for _, addr := range addrs {
+		if addr.Is4() {
+			return addr, true
+		}
+		if !fallback.IsValid() {
+			fallback = addr
+		}
+	}
+	return fallback, fallback.IsValid()
 }
 
 func logBridgeStatus(logf func(string), status *ipnstate.Status, target *url.URL) {

@@ -9,17 +9,20 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tailscale/aperture-cli/internal/config"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/key"
 )
 
 type fakeNode struct {
 	backendAddr string
 	status      *ipnstate.Status
+	statusFn    func() (*ipnstate.Status, error)
 	upErr       error
 	statusErr   error
 	dialErr     error
@@ -28,6 +31,9 @@ type fakeNode struct {
 	up          int
 	loggedOut   int
 	closed      bool
+
+	mu     sync.Mutex
+	dialed []string
 }
 
 func (n *fakeNode) Up(context.Context) (*ipnstate.Status, error) {
@@ -36,10 +42,16 @@ func (n *fakeNode) Up(context.Context) (*ipnstate.Status, error) {
 }
 
 func (n *fakeNode) Status(context.Context) (*ipnstate.Status, error) {
+	if n.statusFn != nil {
+		return n.statusFn()
+	}
 	return n.status, n.statusErr
 }
 
-func (n *fakeNode) DialContext(ctx context.Context, network, _ string) (net.Conn, error) {
+func (n *fakeNode) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	n.mu.Lock()
+	n.dialed = append(n.dialed, address)
+	n.mu.Unlock()
 	if n.dialFn != nil {
 		return n.dialFn(ctx, network, n.backendAddr)
 	}
@@ -48,6 +60,28 @@ func (n *fakeNode) DialContext(ctx context.Context, network, _ string) (net.Conn
 	}
 	var d net.Dialer
 	return d.DialContext(ctx, network, n.backendAddr)
+}
+
+func (n *fakeNode) dialedAddrs() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]string(nil), n.dialed...)
+}
+
+// tailnetStatus is a node status that knows one peer, the shape every dial
+// through a bridge depends on.
+func tailnetStatus(dnsName string, addrs ...string) *ipnstate.Status {
+	ips := make([]netip.Addr, 0, len(addrs))
+	for _, addr := range addrs {
+		ips = append(ips, netip.MustParseAddr(addr))
+	}
+	return &ipnstate.Status{
+		BackendState: "Running",
+		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1")},
+		Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+			key.NewNode().Public(): {DNSName: dnsName, TailscaleIPs: ips},
+		},
+	}
 }
 
 func TestActivateDebugDiagnostics(t *testing.T) {
@@ -63,6 +97,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 	}
 	node := &fakeNode{status: status, dialErr: errors.New("lookup aperture on 127.0.0.53:53: no such host")}
 	m := NewManager(true)
+	m.peerWait, m.peerWaitInterval = 5*time.Millisecond, time.Millisecond
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
@@ -135,6 +170,12 @@ func TestActivateNormalLoggingOmitsDebugDiagnostics(t *testing.T) {
 		BackendState: "Running",
 		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1")},
 		Self:         &ipnstate.PeerStatus{DNSName: "aperture-cli.example.ts.net."},
+		Peer: map[key.NodePublic]*ipnstate.PeerStatus{
+			key.NewNode().Public(): {
+				DNSName:      "aperture.example.ts.net.",
+				TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.2")},
+			},
+		},
 		CurrentTailnet: &ipnstate.TailnetStatus{
 			Name:            "example.com",
 			MagicDNSSuffix:  "example.ts.net",
@@ -177,34 +218,26 @@ func TestActivateNormalLoggingOmitsDebugDiagnostics(t *testing.T) {
 	}
 }
 
-func TestActivateRetriesDNSWhilePeerMapArrives(t *testing.T) {
+// TestActivateWaitsForPeerMapBeforeDialing covers the first-connection hang: a
+// node reports Running before its peer map lands, and dialing the target's name
+// in that window escapes to the host resolver.
+func TestActivateWaitsForPeerMapBeforeDialing(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer backend.Close()
 
-	var attempts atomic.Int32
-	node := &fakeNode{
-		backendAddr: strings.TrimPrefix(backend.URL, "http://"),
-		status: &ipnstate.Status{
-			BackendState: "Running",
-			TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1")},
-		},
-	}
-	node.dialFn = func(ctx context.Context, network, address string) (net.Conn, error) {
-		if attempts.Add(1) == 1 {
-			return nil, &net.DNSError{
-				Err:         "server misbehaving",
-				Name:        "ai",
-				Server:      "127.0.0.53:53",
-				IsTemporary: true,
-			}
+	var polls atomic.Int32
+	node := &fakeNode{backendAddr: strings.TrimPrefix(backend.URL, "http://")}
+	node.statusFn = func() (*ipnstate.Status, error) {
+		if polls.Add(1) < 3 {
+			return &ipnstate.Status{BackendState: "Running"}, nil
 		}
-		var d net.Dialer
-		return d.DialContext(ctx, network, address)
+		return tailnetStatus("ai.example.ts.net.", "100.64.0.2"), nil
 	}
 
 	m := NewManager(true)
+	m.peerWaitInterval = time.Millisecond
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
@@ -229,103 +262,182 @@ func TestActivateRetriesDNSWhilePeerMapArrives(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
-	if got := attempts.Load(); got != 2 {
-		t.Fatalf("dial attempts = %d, want 2", got)
+	if got := node.dialedAddrs(); len(got) != 1 || got[0] != "100.64.0.2:80" {
+		t.Fatalf("dialed %v, want one dial to 100.64.0.2:80", got)
 	}
-	if got := strings.Join(logs, "\n"); !strings.Contains(got, "attempts=2") {
-		t.Fatalf("logs missing recovered dial attempt count:\n%s", got)
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "remote=") {
+		t.Fatalf("logs missing the connected dial:\n%s", got)
 	}
 }
 
-func TestDialWithDNSRetry(t *testing.T) {
-	t.Run("recovers when embedded DNS receives the target", func(t *testing.T) {
-		backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-		defer backend.Close()
+func TestDialViaNode(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+	backendAddr := backend.Listener.Addr().String()
+	discard := func(string) {}
 
-		attempts := 0
-		dial := func(ctx context.Context, network, address string) (net.Conn, error) {
-			attempts++
-			if attempts == 1 {
-				return nil, &net.DNSError{
-					Err:         "server misbehaving",
-					Name:        "ai",
-					Server:      "127.0.0.53:53",
-					IsTemporary: true,
-				}
-			}
-			var d net.Dialer
-			return d.DialContext(ctx, network, strings.TrimPrefix(backend.URL, "http://"))
-		}
+	t.Run("dials the address the node's peer map gives", func(t *testing.T) {
+		node := &fakeNode{backendAddr: backendAddr, status: tailnetStatus("ai.example.ts.net.", "100.64.0.2")}
 
-		conn, gotAttempts, err := dialWithDNSRetry(
-			context.Background(), dial, "tcp", "ai:80", time.Second, time.Millisecond,
+		conn, attempts, err := dialViaNode(
+			context.Background(), node, "tcp", "ai:80", discard, time.Second, time.Millisecond,
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 		conn.Close()
-		if gotAttempts != 2 {
-			t.Fatalf("attempts = %d, want 2", gotAttempts)
+		if attempts != 1 {
+			t.Errorf("status polls = %d, want 1", attempts)
+		}
+		if got := node.dialedAddrs(); len(got) != 1 || got[0] != "100.64.0.2:80" {
+			t.Errorf("dialed %v, want [100.64.0.2:80]", got)
 		}
 	})
 
-	t.Run("stops when the retry window expires", func(t *testing.T) {
-		wantErr := &net.DNSError{Err: "server misbehaving", Name: "ai"}
-		attempts := 0
-		dial := func(context.Context, string, string) (net.Conn, error) {
-			attempts++
-			return nil, wantErr
+	t.Run("waits for the peer map to arrive", func(t *testing.T) {
+		var polls int
+		node := &fakeNode{backendAddr: backendAddr}
+		node.statusFn = func() (*ipnstate.Status, error) {
+			polls++
+			if polls < 3 {
+				return &ipnstate.Status{BackendState: "Running"}, nil
+			}
+			return tailnetStatus("ai.example.ts.net.", "100.64.0.2"), nil
 		}
 
-		_, gotAttempts, err := dialWithDNSRetry(
-			context.Background(), dial, "tcp", "ai:80", 5*time.Millisecond, time.Hour,
+		conn, attempts, err := dialViaNode(
+			context.Background(), node, "tcp", "ai:80", discard, time.Second, time.Millisecond,
 		)
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("error = %v, want %v", err, wantErr)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if gotAttempts < 2 || gotAttempts != attempts {
-			t.Fatalf("attempts = %d/%d, want at least 2 matching attempts", gotAttempts, attempts)
+		conn.Close()
+		if attempts != 3 {
+			t.Errorf("status polls = %d, want 3", attempts)
+		}
+		if got := node.dialedAddrs(); len(got) != 1 || got[0] != "100.64.0.2:80" {
+			t.Errorf("dialed %v, want [100.64.0.2:80], never the bare name", got)
 		}
 	})
 
-	t.Run("does not retry non-DNS failures", func(t *testing.T) {
-		wantErr := errors.New("connection refused")
-		attempts := 0
-		dial := func(context.Context, string, string) (net.Conn, error) {
-			attempts++
-			return nil, wantErr
-		}
+	t.Run("falls back to the name when the target is not a peer", func(t *testing.T) {
+		node := &fakeNode{backendAddr: backendAddr, status: tailnetStatus("other.example.ts.net.", "100.64.0.3")}
+		var logs []string
 
-		_, gotAttempts, err := dialWithDNSRetry(
-			context.Background(), dial, "tcp", "ai:80", time.Second, time.Millisecond,
+		conn, _, err := dialViaNode(
+			context.Background(), node, "tcp", "ai:80",
+			func(line string) { logs = append(logs, line) },
+			5*time.Millisecond, time.Millisecond,
 		)
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("error = %v, want %v", err, wantErr)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if gotAttempts != 1 || attempts != 1 {
-			t.Fatalf("attempts = %d/%d, want 1/1", gotAttempts, attempts)
+		conn.Close()
+		if got := node.dialedAddrs(); len(got) != 1 || got[0] != "ai:80" {
+			t.Errorf("dialed %v, want [ai:80]", got)
+		}
+		if got := strings.Join(logs, "\n"); !strings.Contains(got, "not a node on this bridge's tailnet") {
+			t.Errorf("logs do not say the target left the tailnet's DNS:\n%s", got)
+		}
+	})
+
+	t.Run("dials an IP target without asking for status", func(t *testing.T) {
+		node := &fakeNode{backendAddr: backendAddr, statusFn: func() (*ipnstate.Status, error) {
+			t.Error("status polled for an address that needs no resolving")
+			return nil, nil
+		}}
+
+		conn, _, err := dialViaNode(
+			context.Background(), node, "tcp", "100.64.0.2:80", discard, time.Second, time.Millisecond,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+		if got := node.dialedAddrs(); len(got) != 1 || got[0] != "100.64.0.2:80" {
+			t.Errorf("dialed %v, want [100.64.0.2:80]", got)
 		}
 	})
 
 	t.Run("stops when activation is canceled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		attempts := 0
-		dial := func(context.Context, string, string) (net.Conn, error) {
-			attempts++
+		node := &fakeNode{backendAddr: backendAddr}
+		node.statusFn = func() (*ipnstate.Status, error) {
 			cancel()
-			return nil, &net.DNSError{Err: "server misbehaving", Name: "ai"}
+			return &ipnstate.Status{BackendState: "Running"}, nil
 		}
 
-		_, gotAttempts, err := dialWithDNSRetry(
-			ctx, dial, "tcp", "ai:80", time.Second, time.Second,
-		)
+		_, attempts, err := dialViaNode(ctx, node, "tcp", "ai:80", discard, time.Second, time.Millisecond)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context canceled", err)
 		}
-		if gotAttempts != 1 || attempts != 1 {
-			t.Fatalf("attempts = %d/%d, want 1/1", gotAttempts, attempts)
+		if attempts != 1 {
+			t.Errorf("status polls = %d, want 1", attempts)
+		}
+		if got := node.dialedAddrs(); len(got) != 0 {
+			t.Errorf("dialed %v after cancellation, want nothing", got)
 		}
 	})
+}
+
+func TestPeerAddr(t *testing.T) {
+	tests := []struct {
+		name   string
+		status *ipnstate.Status
+		host   string
+		want   string
+		wantOK bool
+	}{
+		{
+			name:   "short name matches the first label",
+			status: tailnetStatus("ai.example.ts.net.", "100.64.0.2"),
+			host:   "ai",
+			want:   "100.64.0.2",
+			wantOK: true,
+		},
+		{
+			name:   "full MagicDNS name matches",
+			status: tailnetStatus("ai.example.ts.net.", "100.64.0.2"),
+			host:   "AI.example.ts.net",
+			want:   "100.64.0.2",
+			wantOK: true,
+		},
+		{
+			name:   "IPv4 wins over IPv6",
+			status: tailnetStatus("ai.example.ts.net.", "fd7a:115c:a1e0::2", "100.64.0.2"),
+			host:   "ai",
+			want:   "100.64.0.2",
+			wantOK: true,
+		},
+		{
+			name:   "IPv6-only peer still resolves",
+			status: tailnetStatus("ai.example.ts.net.", "fd7a:115c:a1e0::2"),
+			host:   "ai",
+			want:   "fd7a:115c:a1e0::2",
+			wantOK: true,
+		},
+		{
+			name:   "another tailnet's node is not a match",
+			status: tailnetStatus("other.example.ts.net.", "100.64.0.3"),
+			host:   "ai",
+		},
+		{
+			name: "no status at all",
+			host: "ai",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := peerAddr(tt.status, tt.host)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && got.String() != tt.want {
+				t.Errorf("addr = %s, want %s", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestActivateRecordsTailnet(t *testing.T) {
@@ -432,7 +544,10 @@ func activate(t *testing.T, backend *httptest.Server) activatedFixture {
 	var f activatedFixture
 	f.manager = NewManager(false)
 	f.manager.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
-		f.node = &fakeNode{backendAddr: backend.Listener.Addr().String()}
+		f.node = &fakeNode{
+			backendAddr: backend.Listener.Addr().String(),
+			status:      tailnetStatus("aperture.tailnet.", "100.64.0.2"),
+		}
 		return f.node
 	}
 
