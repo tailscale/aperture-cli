@@ -836,3 +836,52 @@ func TestInstallUninstall(t *testing.T) {
 		})
 	}
 }
+
+// TestWriteProviderExtension_SweepsOrphans covers the file a crashed or
+// killed launch leaves behind. The cleanup function never runs in that case,
+// and every stranded file embeds the tailnet hostname.
+func TestWriteProviderExtension_SweepsOrphans(t *testing.T) {
+	isolateConfigDir(t)
+
+	dir, err := config.ClientConfigDir(noYolo.ConfigDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stale []string
+	for _, suffix := range []string{"stale1", "stale2"} {
+		path := filepath.Join(dir, "tmp_aperture_provider_"+suffix+".js")
+		if err := os.WriteFile(path, []byte("// orphan\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stale = append(stale, path)
+	}
+	// A file that is not ours must survive the sweep.
+	keep := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(keep, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5"}}
+	path, cleanup, err := writeProviderExtension(noYolo, testHost, p, backendByIDOrFatal(t, "openai_responses"))
+	if err != nil {
+		t.Fatalf("writeProviderExtension: %v", err)
+	}
+	defer cleanup()
+
+	for _, s := range stale {
+		if _, err := os.Stat(s); !os.IsNotExist(err) {
+			t.Errorf("orphaned extension %q survived the sweep", filepath.Base(s))
+		}
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("the sweep removed an unrelated file: %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, extensionGlob))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(matches, []string{path}) {
+		t.Errorf("extensions in the config dir = %v, want only %v", matches, []string{path})
+	}
+}

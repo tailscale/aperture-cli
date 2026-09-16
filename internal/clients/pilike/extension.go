@@ -3,6 +3,7 @@ package pilike
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -134,8 +135,33 @@ func extensionSource(v Variant, providerID string, prov provider) (string, error
 		"}\n", nil
 }
 
+// extensionGlob matches every extension this package has ever written into a
+// client config directory. os.CreateTemp fills the * with a unique suffix.
+const extensionGlob = "tmp_aperture_provider_*.js"
+
+// sweepOrphanedExtensions removes extensions left behind by earlier launches.
+// The cleanup function returned by writeProviderExtension only runs when the
+// child exits normally, so a crash, a kill, or a panic strands the file, and
+// each one embeds the tailnet hostname.
+//
+// Removing a file that a running launch is still using is safe: the harness
+// reads the extension once at startup and never reopens it, so unlinking it
+// afterwards does not affect that process. Removal errors are ignored for the
+// same reason they are unlikely to matter — a file another process holds open
+// is not a reason to fail this launch.
+func sweepOrphanedExtensions(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, extensionGlob))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
 // writeProviderExtension writes the per-launch extension and returns its
-// path plus a cleanup function that removes the file.
+// path plus a cleanup function that removes the file. Extensions stranded by
+// an earlier launch are swept first; see sweepOrphanedExtensions.
 //
 // Routing the harness through an extension rather than its own models.json is
 // deliberate. The harness reads models.json from the directory named by
@@ -153,7 +179,8 @@ func writeProviderExtension(v Variant, apertureHost string, p config.ProviderInf
 	if err != nil {
 		return "", nil, err
 	}
-	f, err := os.CreateTemp(dir, "tmp_aperture_provider_*.js")
+	sweepOrphanedExtensions(dir)
+	f, err := os.CreateTemp(dir, extensionGlob)
 	if err != nil {
 		return "", nil, err
 	}
