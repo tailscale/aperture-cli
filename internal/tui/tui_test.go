@@ -427,11 +427,14 @@ func TestPreflightFailure_ShowsSetupGuide(t *testing.T) {
 func TestEndpointActivationFailure_ShowsSetupGuide(t *testing.T) {
 	withFakeTailscale(t, tsConnected)
 	withFakeClients(t, nil)
+	ep := config.Endpoint{URL: "http://ai"}
 	m := &model{
 		g: &config.Global{ApertureHost: "http://ai"},
 	}
+	m.activateEndpointCmd(ep)
 	m.Update(endpointActivationResult{
-		endpoint: config.Endpoint{URL: "http://ai"},
+		id:       m.act.id,
+		endpoint: ep,
 		err:      fmt.Errorf("timeout"),
 	})
 	if !m.forcedToEndpoint {
@@ -525,7 +528,7 @@ func TestEndpointBridgeMenu_AddsFirstBridgeInline(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	m := &model{
 		g: &config.Global{Settings: config.Settings{
-			Endpoints: []config.Endpoint{{URL: "http://ai"}},
+			Endpoints: []config.Endpoint{{URL: "http://other"}},
 		}},
 		step: stepMenu,
 	}
@@ -545,20 +548,250 @@ func TestEndpointBridgeMenu_AddsFirstBridgeInline(t *testing.T) {
 	if m.step != stepInput || m.inputOnSave == nil {
 		t.Fatal("Add Bridge did not prompt for a name")
 	}
-	if cmd := m.inputOnSave("Work Bridge"); cmd != nil {
-		if msg := cmd(); msg != nil {
-			t.Fatalf("adding bridge returned %T: %v", msg, msg)
-		}
+	cmd := m.inputOnSave("Work Bridge")
+	if cmd == nil {
+		t.Fatal("naming the bridge did not start a connection")
 	}
 
 	if len(m.g.Settings.Bridges) != 1 || m.g.Settings.Bridges[0].Name != "Work Bridge" {
 		t.Fatalf("bridges = %+v", m.g.Settings.Bridges)
 	}
+	bridgeID := m.g.Settings.Bridges[0].ID
 	if top := m.top(); top.Title != "Choose a bridge" || len(top.Items) != 2 || top.Items[0].Label != "Work Bridge" || top.Items[1].Label != "Add Bridge" {
 		t.Fatalf("bridge chooser was not refreshed: %+v", top)
 	}
-	if m.step != stepInput || m.inputTitle != "Add Bridge Endpoint:" {
-		t.Fatalf("adding bridge did not continue to endpoint URL: step=%v title=%q", m.step, m.inputTitle)
+	// The user is never asked for a URL: discovery guesses the well-known
+	// Aperture location through the new bridge.
+	if m.step != stepPreflight {
+		t.Fatalf("step = %v, want stepPreflight", m.step)
+	}
+	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridgeID}
+	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+		t.Fatalf("activation = %+v, want %+v", m.act, want)
+	}
+	if !m.act.ephemeral {
+		t.Error("guessed endpoint is not marked ephemeral, so abandoning it would leave it behind")
+	}
+	if !m.endpointConfigured(want) {
+		t.Fatalf("guessed endpoint was not saved: %+v", m.g.Settings.Endpoints)
+	}
+	if got := m.g.ActiveEndpoint().URL; got != "http://other" {
+		t.Errorf("active endpoint = %q, want the previous one until discovery verifies", got)
+	}
+}
+
+func TestEndpointBridgeMenu_ConnectsExistingBridgeWithoutPrompting(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	m := &model{
+		g: &config.Global{Settings: config.Settings{
+			Bridges:   []config.Bridge{bridge},
+			Endpoints: []config.Endpoint{{URL: "http://other"}},
+		}},
+		step: stepMenu,
+	}
+	m.resetStack(m.endpointBridgeMenu())
+
+	res := m.top().Items[0].Action()
+	if res.Cmd == nil {
+		t.Fatal("selecting a bridge did not start a connection")
+	}
+	if m.step == stepInput {
+		t.Fatal("selecting a bridge prompted for a URL")
+	}
+	if m.step != stepPreflight {
+		t.Fatalf("step = %v, want stepPreflight", m.step)
+	}
+	if m.act == nil || m.act.endpoint.URL != config.DefaultLocation || m.act.endpoint.BridgeID != bridge.ID {
+		t.Fatalf("activation = %+v, want %s via %s", m.act, config.DefaultLocation, bridge.ID)
+	}
+	if !m.act.overridable() {
+		t.Error("bridge discovery should accept a typed URL while it runs")
+	}
+}
+
+func TestPreflightOverrideReplacesGuessedEndpoint(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	previous := config.Endpoint{URL: "http://other"}
+	m := &model{
+		g: &config.Global{Settings: config.Settings{
+			Bridges:   []config.Bridge{bridge},
+			Endpoints: []config.Endpoint{previous},
+		}},
+		step: stepMenu,
+	}
+	m.resetStack(m.endpointBridgeMenu())
+	m.top().Items[0].Action()
+
+	guessed := m.act
+	// Typing the real URL must not wait for the guess to fail. The stray
+	// character and backspace keep the inline editor honest.
+	for _, r := range "aperture.example.ts.netX" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if guessed.cancel != nil {
+		t.Error("guessed attempt was not cancelled")
+	}
+	want := config.Endpoint{URL: "http://aperture.example.ts.net", BridgeID: bridge.ID}
+	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+		t.Fatalf("activation = %+v, want %+v", m.act, want)
+	}
+	if m.act.id == guessed.id {
+		t.Error("override reused the cancelled attempt's id, so its stale result would be applied")
+	}
+	// The guess is replaced, not accumulated, and the working endpoint stays.
+	if got := m.g.Settings.Endpoints; len(got) != 2 || !sameEndpoint(got[0], previous) || !sameEndpoint(got[1], want) {
+		t.Fatalf("endpoints = %+v, want the previous one plus the typed one", got)
+	}
+}
+
+func TestPreflightOverrideRejectsBadURLWithoutStoppingTheAttempt(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	m := &model{
+		g: &config.Global{Settings: config.Settings{
+			Bridges:   []config.Bridge{bridge},
+			Endpoints: []config.Endpoint{{URL: "http://other"}},
+		}},
+		step: stepMenu,
+	}
+	m.resetStack(m.endpointBridgeMenu())
+	m.top().Items[0].Action()
+	running := m.act
+
+	for _, r := range "ftp://nope" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.act != running || running.cancel == nil {
+		t.Fatal("a rejected URL stopped the running attempt")
+	}
+	if running.override.err == "" {
+		t.Error("rejected URL reported no error to the user")
+	}
+	if !strings.Contains(m.View(), running.override.err) {
+		t.Error("connect screen does not show why the typed URL was rejected")
+	}
+}
+
+func TestTextFieldTakesTypedAndPastedTextOnly(t *testing.T) {
+	var f textField
+	f.insert(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	// A pasted URL arrives as one message carrying every rune.
+	f.insert(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ttp://ai"), Paste: true})
+	f.insert(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	// Named keys and chords carry no text: their String() would otherwise
+	// land in the field as "up" and "x".
+	f.insert(tea.KeyMsg{Type: tea.KeyUp})
+	f.insert(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x"), Alt: true})
+	f.insert(tea.KeyMsg{Type: tea.KeyEnter})
+	if f.value != "http://ai " {
+		t.Errorf("value = %q, want %q", f.value, "http://ai ")
+	}
+
+	f.backspace()
+	if f.value != "http://ai" {
+		t.Errorf("value after backspace = %q", f.value)
+	}
+}
+
+func TestPreflightEscapeAbandonsDiscovery(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	previous := config.Endpoint{URL: "http://other"}
+	m := &model{
+		g: &config.Global{Settings: config.Settings{
+			Bridges:   []config.Bridge{bridge},
+			Endpoints: []config.Endpoint{previous},
+		}},
+		step: stepMenu,
+	}
+	m.resetStack(m.endpointBridgeMenu())
+	m.top().Items[0].Action()
+	guessed := m.act
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if guessed.cancel != nil {
+		t.Error("Esc did not cancel the attempt")
+	}
+	if m.step != stepMenu || m.top().Title != "Choose a bridge" {
+		t.Fatalf("Esc did not return to the bridge chooser: step=%v top=%+v", m.step, m.top())
+	}
+	if got := m.g.Settings.Endpoints; len(got) != 1 || !sameEndpoint(got[0], previous) {
+		t.Fatalf("endpoints = %+v, want the abandoned guess removed", got)
+	}
+	// A late result from the abandoned attempt must not take over the screen.
+	m.Update(endpointActivationResult{id: guessed.id, endpoint: guessed.endpoint, err: fmt.Errorf("too late")})
+	if m.step != stepMenu || m.top().Title != "Choose a bridge" {
+		t.Fatalf("stale result was applied: step=%v top=%+v", m.step, m.top())
+	}
+}
+
+func TestPreflightEscapeAtStartupShowsSetupGuide(t *testing.T) {
+	withFakeTailscale(t, tsConnected)
+	m := &model{g: &config.Global{
+		ApertureHost: "http://ai",
+		Settings:     config.Settings{Endpoints: []config.Endpoint{{URL: "http://ai"}}},
+	}}
+	m.Init()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.step != stepMenu || m.top() == nil || m.top().Title != setupGuideTitle {
+		t.Fatalf("Esc at startup left nowhere to go: step=%v top=%+v", m.step, m.top())
+	}
+}
+
+func TestSetupGuideEditPrefillsFailedURL(t *testing.T) {
+	withFakeTailscale(t, tsConnected)
+	target := config.Endpoint{URL: "http://aperture.example.ts.net"}
+	m := &model{
+		g:              &config.Global{ApertureHost: target.URL},
+		failedEndpoint: &target,
+	}
+	guide := m.setupGuideMenu()
+	for _, it := range guide.Items {
+		if it.Label != "Edit endpoint URL" {
+			continue
+		}
+		it.Action()
+		if m.input.value != target.URL {
+			t.Fatalf("edit field = %q, want the failed URL %q", m.input.value, target.URL)
+		}
+		return
+	}
+	t.Fatal("Edit endpoint URL item not found")
+}
+
+func TestSetupGuideExplainsDefaultLocationGuess(t *testing.T) {
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	target := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridge.ID}
+	m := &model{
+		g: &config.Global{
+			ApertureHost: config.DefaultLocation,
+			Settings: config.Settings{
+				Bridges:   []config.Bridge{bridge},
+				Endpoints: []config.Endpoint{target},
+			},
+		},
+		failedEndpoint: &target,
+	}
+	if got := m.setupGuideMenu().Preamble; !strings.Contains(got, "default Aperture location") {
+		t.Errorf("preamble does not explain the guessed URL: %q", got)
 	}
 }
 
@@ -596,13 +829,12 @@ func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 		step:      stepMenu,
 		connected: true,
 	}
-	chooser := m.endpointBridgeMenu()
-	chooser.Items[0].Action()
-	want := config.Endpoint{URL: "http://new", BridgeID: bridge.ID}
-	cmd := m.inputOnSave(want.URL)
-	if cmd == nil {
-		t.Fatal("saving bridge endpoint did not begin activation")
+	m.resetStack(m.endpointBridgeMenu())
+	res := m.top().Items[0].Action()
+	if res.Cmd == nil {
+		t.Fatal("selecting the bridge did not begin activation")
 	}
+	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridge.ID}
 	if got := m.g.ActiveEndpoint(); !sameEndpoint(got, old) {
 		t.Fatalf("active endpoint changed before activation: %+v", got)
 	}
@@ -610,7 +842,7 @@ func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 		t.Fatalf("candidate endpoint was not saved: %+v", m.g.Settings.Endpoints)
 	}
 
-	msg := cmd()
+	msg := res.Cmd()
 	result, ok := msg.(endpointActivationResult)
 	if !ok {
 		t.Fatalf("activation message = %T", msg)

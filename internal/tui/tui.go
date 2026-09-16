@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -81,23 +83,90 @@ type model struct {
 	// Input step state.
 	inputTitle  string
 	inputPrompt string
-	inputValue  string
+	input       textField
 	inputOnSave func(value string) tea.Cmd
 
 	// Error screen state.
 	errMsg string
 
 	// Preflight state.
+	act              *activation
+	activationSeq    int
 	preflightErr     string
 	forcedToEndpoint bool // true when preflight failure dropped user on endpoints menu
-	preflightLabel   string
-	bridgeLogCh      chan string
-	bridgeLogCtx     context.Context
 	bridgeLogs       []string
-	bridgeCancel     context.CancelFunc
 	failedEndpoint   *config.Endpoint
 	connected        bool
 }
+
+// activation is the connection attempt currently on screen. It owns the
+// attempt's identity and cancellation handle, and the URL the user can type
+// over the top of it while it runs; the log tail it produces stays on the
+// model because the failure screen still renders it after the attempt ends.
+//
+// cancel is nil for attempts that cannot be interrupted (the post-launch
+// re-check), which is what makes Esc and the inline override inert there.
+type activation struct {
+	id       int
+	endpoint config.Endpoint
+	label    string
+	cancel   context.CancelFunc
+	// ephemeral records that this flow is what put endpoint into settings,
+	// so abandoning or overriding the attempt takes it back out instead of
+	// leaving an endpoint nobody chose.
+	ephemeral bool
+	logCh     chan string
+	logCtx    context.Context
+	// override is the inline "different Aperture URL" editor shown while a
+	// bridge attempt runs.
+	override textField
+}
+
+// cancelable reports whether Esc can interrupt this attempt.
+func (a *activation) cancelable() bool { return a != nil && a.cancel != nil }
+
+// overridable reports whether the attempt accepts a typed URL in place of the
+// one being probed. Only bridge attempts start from a guessed URL.
+func (a *activation) overridable() bool { return a.cancelable() && a.endpoint.BridgeID != "" }
+
+// textField is the shared single-line editor behind the add-endpoint input
+// step and the inline URL override on the connect screen.
+type textField struct {
+	value string
+	err   string
+}
+
+// insert appends the text a key press carries. A typed character arrives as
+// one rune and a pasted URL as many in a single message; both are text, and
+// dropping the paste would leave the user retyping an endpoint by hand. Named
+// keys and Alt chords carry no text and are ignored, as are control runes:
+// matching on the key's String() would append "up" when someone presses Up.
+func (f *textField) insert(msg tea.KeyMsg) {
+	if msg.Alt || (msg.Type != tea.KeyRunes && msg.Type != tea.KeySpace) {
+		return
+	}
+	if len(msg.Runes) == 0 {
+		return
+	}
+	for _, r := range msg.Runes {
+		if unicode.IsControl(r) {
+			return
+		}
+	}
+	f.value += string(msg.Runes)
+	f.err = ""
+}
+
+func (f *textField) backspace() {
+	if f.value == "" {
+		return
+	}
+	_, size := utf8.DecodeLastRuneInString(f.value)
+	f.value = f.value[:len(f.value)-size]
+	f.err = ""
+}
+
+func (f *textField) reset() { *f = textField{} }
 
 func (m *model) Init() tea.Cmd {
 	return m.activateEndpointCmd(m.g.ActiveEndpoint())
@@ -111,6 +180,10 @@ type preflightResult struct {
 }
 
 type endpointActivationResult struct {
+	// id identifies the attempt this result belongs to. A result whose id no
+	// longer matches the current attempt is stale: the user cancelled it or
+	// typed a different URL over it, and its outcome must not be applied.
+	id        int
 	endpoint  config.Endpoint
 	host      string
 	providers []config.ProviderInfo
@@ -170,38 +243,52 @@ func fetchProvidersContext(ctx context.Context, host string, timeout time.Durati
 }
 
 func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
+	return m.activateEndpoint(ep, false)
+}
+
+// activateEndpoint starts a cancellable attempt to connect to ep. ephemeral
+// marks an endpoint this flow just wrote to settings on the user's behalf, so
+// cancelling or overriding the attempt can take it back out again.
+func (m *model) activateEndpoint(ep config.Endpoint, ephemeral bool) tea.Cmd {
+	m.stopActivation()
 	m.step = stepPreflight
 	m.preflightErr = ""
 	m.bridgeLogs = nil
-	m.bridgeLogCh = nil
-	m.bridgeLogCtx = nil
-	if m.bridgeCancel != nil {
-		m.bridgeCancel()
-		m.bridgeCancel = nil
-	}
 
-	if ep.BridgeID == "" {
-		m.preflightLabel = "Checking " + ep.URL + " ..."
-		return func() tea.Msg {
-			provs, err := fetchProviders(ep.URL)
-			return endpointActivationResult{endpoint: ep, host: ep.URL, providers: provs, err: err}
-		}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.activationSeq++
+	act := &activation{
+		id:        m.activationSeq,
+		endpoint:  ep,
+		label:     "Checking " + ep.URL + " ...",
+		cancel:    cancel,
+		ephemeral: ephemeral,
 	}
+	m.act = act
 
 	bridge, ok := m.g.Bridge(ep.BridgeID)
-	if !ok {
-		m.preflightLabel = "Checking " + ep.URL + " ..."
+	switch {
+	case ep.BridgeID == "":
 		return func() tea.Msg {
+			defer cancel()
+			provs, err := fetchProvidersContext(ctx, ep.URL, providerFetchTimeout)
+			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, providers: provs, err: err}
+		}
+	case !ok:
+		return func() tea.Msg {
+			defer cancel()
 			return endpointActivationResult{
+				id:       act.id,
 				endpoint: ep,
 				host:     ep.URL,
 				err:      fmt.Errorf("bridge %s is not configured", ep.BridgeID),
 			}
 		}
-	}
-	if m.bridgeManager == nil {
+	case m.bridgeManager == nil:
 		return func() tea.Msg {
+			defer cancel()
 			return endpointActivationResult{
+				id:       act.id,
 				endpoint: ep,
 				host:     ep.URL,
 				err:      fmt.Errorf("bridge manager is not configured"),
@@ -210,25 +297,130 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 	}
 
 	ch := make(chan string, 32)
-	ctx, cancel := context.WithCancel(context.Background())
-	m.bridgeLogCh = ch
-	m.bridgeLogCtx = ctx
-	m.bridgeCancel = cancel
-	m.preflightLabel = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
+	act.logCh = ch
+	act.logCtx = ctx
+	act.label = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
 	bridgeLogf := bridgeLogSink(ctx, ch)
 	activate := func() tea.Msg {
 		defer cancel()
 		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, bridgeLogf)
 		if err != nil {
-			return endpointActivationResult{endpoint: ep, host: ep.URL, err: err}
+			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
 		}
 		provs, err := fetchProvidersContext(ctx, localURL, bridgeProviderFetchTimeout)
 		if err != nil {
 			err = fmt.Errorf("bridge %s could not reach %s: %w", bridge.Name, ep.URL, err)
 		}
-		return endpointActivationResult{endpoint: ep, host: localURL, providers: provs, err: err}
+		return endpointActivationResult{id: act.id, endpoint: ep, host: localURL, providers: provs, err: err}
 	}
 	return tea.Batch(activate, waitBridgeLog(ctx, ch))
+}
+
+// stopActivation ends the in-flight attempt without touching settings. The
+// attempt's own goroutine still delivers a result; the id check in Update
+// discards it.
+func (m *model) stopActivation() {
+	act := m.act
+	if act == nil {
+		return
+	}
+	if act.cancel != nil {
+		act.cancel()
+		act.cancel = nil
+	}
+	act.logCh = nil
+	act.logCtx = nil
+}
+
+// discardActivation stops the in-flight attempt and removes the endpoint this
+// flow added for it, so an abandoned connection leaves nothing behind.
+func (m *model) discardActivation() error {
+	act := m.act
+	if act == nil {
+		return nil
+	}
+	m.stopActivation()
+	if !act.ephemeral {
+		return nil
+	}
+	act.ephemeral = false
+	return m.removeEndpoint(act.endpoint)
+}
+
+// removeEndpoint deletes ep from settings. The active endpoint at index 0 is
+// left alone: it is the connection the user falls back to.
+func (m *model) removeEndpoint(ep config.Endpoint) error {
+	for i, existing := range m.g.Settings.Endpoints {
+		if i == 0 || !sameEndpoint(existing, ep) {
+			continue
+		}
+		return m.g.RemoveEndpoint(i)
+	}
+	return nil
+}
+
+// cancelActivation abandons the attempt on screen and returns to the menu the
+// user started it from. At startup there is no such menu, so the setup guide
+// takes its place.
+func (m *model) cancelActivation() (tea.Model, tea.Cmd) {
+	act := m.act
+	if act == nil {
+		return m, nil
+	}
+	endpoint := act.endpoint
+	if err := m.discardActivation(); err != nil {
+		m.errMsg = "could not remove endpoint: " + err.Error()
+		m.step = stepError
+		return m, nil
+	}
+	m.act = nil
+	m.step = stepMenu
+	if len(m.stack) == 0 {
+		m.preflightErr = "connection cancelled"
+		m.forcedToEndpoint = true
+		m.failedEndpoint = &endpoint
+		m.resetStack(m.setupGuideMenu())
+	}
+	return m, tea.ClearScreen
+}
+
+// overrideActivationURL swaps the URL being probed for one the user typed,
+// without waiting for the guess to time out.
+func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
+	act := m.act
+	if act == nil {
+		return m, nil
+	}
+	next, err := config.ParseEndpoint(value, act.endpoint.BridgeID)
+	if err != nil {
+		// Keep the running attempt: the typo costs nothing, and the guess
+		// may still land while the user fixes it.
+		act.override.err = err.Error()
+		return m, nil
+	}
+	if sameEndpoint(next, act.endpoint) {
+		act.override.reset()
+		return m, nil
+	}
+	m.stopActivation()
+
+	ephemeral := !m.endpointConfigured(next)
+	if act.ephemeral {
+		// Replace rather than add: the guessed endpoint was never reachable
+		// and nobody asked for it.
+		if err := m.g.ReplaceEndpoint(act.endpoint, next); err != nil {
+			m.errMsg = err.Error()
+			m.step = stepError
+			return m, nil
+		}
+	} else if ephemeral {
+		if err := m.g.UpsertEndpoint(next); err != nil {
+			m.errMsg = err.Error()
+			m.step = stepError
+			return m, nil
+		}
+	}
+	return m, m.activateEndpoint(next, ephemeral)
 }
 
 func bridgeLogSink(ctx context.Context, ch chan<- string) func(string) {
@@ -270,7 +462,10 @@ func waitBridgeLog(ctx context.Context, ch chan string) tea.Cmd {
 }
 
 func (m *model) quitCmd() tea.Cmd {
-	cancel := m.bridgeCancel
+	var cancel context.CancelFunc
+	if m.act != nil {
+		cancel = m.act.cancel
+	}
 	bridgeManager := m.bridgeManager
 	return func() tea.Msg {
 		if cancel != nil {
@@ -311,7 +506,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case endpointActivationResult:
-		m.bridgeCancel = nil
+		if m.act == nil || msg.id != m.act.id {
+			// Cancelled or overridden: a newer attempt owns the screen.
+			return m, nil
+		}
+		m.act.cancel = nil
 		if msg.err != nil {
 			if sameEndpoint(msg.endpoint, m.g.ActiveEndpoint()) {
 				m.connected = false
@@ -346,19 +545,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case bridgeLogMsg:
-		if m.bridgeLogCh != msg.ch {
+		if m.act == nil || m.act.logCh != msg.ch {
 			return m, nil
 		}
 		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, msg.line)
-		if m.bridgeLogCh != nil {
-			return m, waitBridgeLog(m.bridgeLogCtx, m.bridgeLogCh)
-		}
-		return m, nil
+		return m, waitBridgeLog(m.act.logCtx, m.act.logCh)
 
 	case bridgeLogDoneMsg:
-		if m.bridgeLogCh == msg.ch {
-			m.bridgeLogCh = nil
-			m.bridgeLogCtx = nil
+		if m.act != nil && m.act.logCh == msg.ch {
+			m.act.logCh = nil
+			m.act.logCtx = nil
 		}
 		return m, nil
 
@@ -376,7 +572,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// agent was running.
 		m.popToRoot()
 		m.step = stepPreflight
-		m.preflightLabel = "Checking " + m.g.ApertureHost + " ..."
+		// No cancel handle: this re-check owns the screen until it answers.
+		m.act = &activation{label: "Checking " + m.g.ApertureHost + " ..."}
 		return m, runPreflight(m.g.ApertureHost)
 
 	case menu.InstallDoneMsg:
@@ -409,10 +606,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.step {
 		case stepPreflight:
-			if msg.String() == "ctrl+c" {
-				return m, m.quitCmd()
-			}
-			return m, nil
+			return m.updatePreflight(msg)
 		case stepError:
 			switch msg.String() {
 			case "ctrl+c", "q":
@@ -617,48 +811,95 @@ func (m *model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.quitCmd()
 	case "esc":
 		m.step = stepMenu
-		m.inputValue = ""
+		m.input.reset()
 		return m, nil
 	case "enter":
-		v := strings.TrimSpace(m.inputValue)
+		v := strings.TrimSpace(m.input.value)
 		if v == "" {
 			return m, nil
 		}
 		fn := m.inputOnSave
 		m.step = stepMenu
-		m.inputValue = ""
+		m.input.reset()
 		if fn != nil {
 			return m, fn(v)
 		}
 		return m, nil
 	case "backspace":
-		if len(m.inputValue) > 0 {
-			m.inputValue = m.inputValue[:len(m.inputValue)-1]
-		}
+		m.input.backspace()
 		return m, nil
 	default:
-		s := msg.String()
-		if len(s) == 1 {
-			m.inputValue += s
-		}
+		m.input.insert(msg)
 		return m, nil
 	}
+}
+
+// updatePreflight handles keys while a connection attempt is on screen. A
+// bridge attempt starts from a guessed URL, so the user can type the real one
+// over it instead of waiting for the guess to fail.
+func (m *model) updatePreflight(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m, m.quitCmd()
+	}
+	if !m.act.cancelable() {
+		return m, nil
+	}
+	if msg.String() == "esc" {
+		return m.cancelActivation()
+	}
+	if !m.act.overridable() {
+		return m, nil
+	}
+	switch msg.String() {
+	case "enter":
+		v := strings.TrimSpace(m.act.override.value)
+		if v == "" {
+			return m, nil
+		}
+		return m.overrideActivationURL(v)
+	case "backspace":
+		m.act.override.backspace()
+		return m, nil
+	default:
+		m.act.override.insert(msg)
+		return m, nil
+	}
+}
+
+func (m *model) viewPreflight() string {
+	label := "Checking " + m.g.ApertureHost + " ..."
+	if m.act != nil && m.act.label != "" {
+		label = m.act.label
+	}
+	var sb strings.Builder
+	sb.WriteString(m.wrapText("", dotYellow+" "+label) + "\n")
+	for _, line := range m.bridgeLogs {
+		sb.WriteString(dimStyle.Render(m.wrapText("  ", line)))
+		sb.WriteString("\n")
+	}
+	switch {
+	case m.act.overridable():
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render(m.wrapText("  ", "Different Aperture URL? Type it to connect there instead.")))
+		sb.WriteString("\n")
+		sb.WriteString("  > " + m.act.override.value + "█\n")
+		if m.act.override.err != "" {
+			sb.WriteString(errorStyle.Render(m.wrapText("  ", m.act.override.err)))
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render("Enter to switch · Esc to cancel\n"))
+	case m.act.cancelable():
+		sb.WriteString("\n")
+		sb.WriteString(dimStyle.Render("Esc to cancel\n"))
+	}
+	return sb.String()
 }
 
 func (m *model) View() string {
 	switch m.step {
 	case stepPreflight:
-		label := m.preflightLabel
-		if label == "" {
-			label = "Checking " + m.g.ApertureHost + " ..."
-		}
-		var sb strings.Builder
-		sb.WriteString(m.wrapText("", dotYellow+" "+label) + "\n")
-		for _, line := range m.bridgeLogs {
-			sb.WriteString(dimStyle.Render(m.wrapText("  ", line)))
-			sb.WriteString("\n")
-		}
-		return sb.String()
+		return m.viewPreflight()
 	case stepError:
 		var sb strings.Builder
 		sb.WriteString(errorStyle.Render("Error"))
@@ -674,7 +915,7 @@ func (m *model) View() string {
 		if m.inputPrompt != "" {
 			sb.WriteString("  " + m.inputPrompt + "\n")
 		}
-		sb.WriteString("  > " + m.inputValue + "█\n")
+		sb.WriteString("  > " + m.input.value + "█\n")
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Enter to save · Esc to cancel\n"))
 		return sb.String()
@@ -1008,13 +1249,14 @@ func (m *model) refreshMenuByTitle(title string, next *menu.Menu) {
 
 // --- Input step helpers ---
 
-// promptForInput sets up the single-line text input step. onSave is invoked
-// with the entered value when the user presses Enter.
-func (m *model) promptForInput(title, prompt string, onSave func(value string) tea.Cmd) {
+// promptForInput sets up the single-line text input step. initial is the
+// editable starting value, empty for a blank field. onSave is invoked with the
+// entered value when the user presses Enter.
+func (m *model) promptForInput(title, prompt, initial string, onSave func(value string) tea.Cmd) {
 	m.step = stepInput
 	m.inputTitle = title
 	m.inputPrompt = prompt
-	m.inputValue = ""
+	m.input = textField{value: initial}
 	m.inputOnSave = onSave
 }
 

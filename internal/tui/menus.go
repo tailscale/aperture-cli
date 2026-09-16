@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 
@@ -135,18 +134,6 @@ func sameEndpoint(a, b config.Endpoint) bool {
 	return a.URL == b.URL && a.BridgeID == b.BridgeID
 }
 
-func endpointFromInput(value, bridgeID string) (config.Endpoint, error) {
-	value = strings.TrimSpace(value)
-	if !strings.Contains(value, "://") {
-		value = "http://" + value
-	}
-	u, err := url.ParseRequestURI(value)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return config.Endpoint{}, fmt.Errorf("endpoint URL must be an absolute http or https URL")
-	}
-	return config.Endpoint{URL: strings.TrimRight(value, "/"), BridgeID: bridgeID}, nil
-}
-
 func simpleErrorCmd(err error) tea.Cmd {
 	return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 }
@@ -204,7 +191,7 @@ func (m *model) bridgesMenu() *menu.Menu {
 		Shortcut: "a",
 		Hidden:   true,
 		Action: func() menu.Result {
-			m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
 				if _, err := m.g.AddBridge(v); err != nil {
 					return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 				}
@@ -320,6 +307,10 @@ func (m *model) setupGuideMenu() *menu.Menu {
 		}
 		preamble = "Could not reach Aperture at " + target.URL + " through bridge " + bridgeName + ".\n\n" +
 			"The bridge uses an embedded Tailscale node; this machine does not need Tailscale installed or running."
+		if target.URL == config.DefaultLocation {
+			preamble += "\n\n" + config.DefaultLocation + " is the default Aperture location. " +
+				"If yours answers on a different hostname, edit the endpoint URL below."
+		}
 	} else {
 		switch checkTailscale() {
 		case tsNotInstalled:
@@ -348,8 +339,8 @@ func (m *model) setupGuideMenu() *menu.Menu {
 		{
 			Label: "Edit endpoint URL",
 			Action: func() menu.Result {
-				m.promptForInput("Edit Endpoint:", "Current: "+target.URL, func(v string) tea.Cmd {
-					next, err := endpointFromInput(v, target.BridgeID)
+				m.promptForInput("Edit Endpoint:", "URL", target.URL, func(v string) tea.Cmd {
+					next, err := config.ParseEndpoint(v, target.BridgeID)
 					if err != nil {
 						return simpleErrorCmd(err)
 					}
@@ -427,8 +418,8 @@ func (m *model) addEndpointConnectionMenu() *menu.Menu {
 			{
 				Label: "Direct",
 				Action: func() menu.Result {
-					m.promptForInput("Add Direct Endpoint:", "URL", func(v string) tea.Cmd {
-						ep, err := endpointFromInput(v, "")
+					m.promptForInput("Add Direct Endpoint:", "URL", "", func(v string) tea.Cmd {
+						ep, err := config.ParseEndpoint(v, "")
 						if err != nil {
 							return simpleErrorCmd(err)
 						}
@@ -462,23 +453,19 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 		items = append(items, menu.MenuItem{
 			Label:       p.Name,
 			Description: p.ID,
-			Action: func() menu.Result {
-				m.promptForBridgeEndpoint(p)
-				return menu.Result{}
-			},
+			Action:      func() menu.Result { return menu.Result{Cmd: m.connectBridgeCmd(p)} },
 		})
 	}
 	items = append(items, menu.MenuItem{
 		Label: "Add Bridge",
 		Action: func() menu.Result {
-			m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
 				bridge, err := m.g.AddBridge(v)
 				if err != nil {
 					return simpleErrorCmd(err)
 				}
 				m.refreshMenuByTitle("Choose a bridge", m.endpointBridgeMenu())
-				m.promptForBridgeEndpoint(bridge)
-				return nil
+				return m.connectBridgeCmd(bridge)
 			})
 			return menu.Result{}
 		},
@@ -486,21 +473,23 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 	return &menu.Menu{
 		Title: "Choose a bridge",
 		Items: items,
-		Hint:  "Enter to select or add · Esc to go back",
+		Hint:  "Enter to connect or add · Esc to go back",
 	}
 }
 
-func (m *model) promptForBridgeEndpoint(bridge config.Bridge) {
-	m.promptForInput("Add Bridge Endpoint:", "URL", func(v string) tea.Cmd {
-		ep, err := endpointFromInput(v, bridge.ID)
-		if err != nil {
-			return simpleErrorCmd(err)
-		}
+// connectBridgeCmd starts discovery through bridge: probe the well-known
+// Aperture location, the same guess a direct connection starts from, instead
+// of demanding a URL the user may not know. The connect screen takes a
+// different URL while the guess runs, so knowing it costs no waiting.
+func (m *model) connectBridgeCmd(bridge config.Bridge) tea.Cmd {
+	ep := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridge.ID}
+	ephemeral := !m.endpointConfigured(ep)
+	if ephemeral {
 		if err := m.g.UpsertEndpoint(ep); err != nil {
 			return simpleErrorCmd(err)
 		}
-		return m.activateEndpointCmd(ep)
-	})
+	}
+	return m.activateEndpoint(ep, ephemeral)
 }
 
 func (m *model) endpointLabel(ep config.Endpoint) string {
