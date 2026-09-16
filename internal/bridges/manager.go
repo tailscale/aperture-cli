@@ -24,6 +24,9 @@ type Manager struct {
 
 	debug bool
 	nodes map[string]*nodeRuntime
+	// tailnets is the network each running node logged in to, keyed by bridge
+	// ID. Read back by the TUI to label a bridge with the tailnet it reaches.
+	tailnets map[string]string
 
 	newNode func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode
 }
@@ -48,6 +51,7 @@ type tailnetNode interface {
 	Up(context.Context) (*ipnstate.Status, error)
 	Status(context.Context) (*ipnstate.Status, error)
 	DialContext(context.Context, string, string) (net.Conn, error)
+	Logout(context.Context) error
 	Close() error
 }
 
@@ -71,6 +75,17 @@ func (n *tsnetNode) DialContext(ctx context.Context, network, address string) (n
 	return n.server.Dial(ctx, network, address)
 }
 
+// Logout drops the node's tailnet credentials. The node must be running: the
+// login state lives behind its in-process LocalAPI, so logging out is how the
+// node leaves the tailnet it is on rather than reusing it on the next start.
+func (n *tsnetNode) Logout(ctx context.Context) error {
+	lc, err := n.server.LocalClient()
+	if err != nil {
+		return err
+	}
+	return lc.Logout(ctx)
+}
+
 func (n *tsnetNode) Close() error {
 	return n.server.Close()
 }
@@ -79,8 +94,9 @@ func (n *tsnetNode) Close() error {
 // backend logs are also emitted to the supplied activation log sink.
 func NewManager(debug bool) *Manager {
 	m := &Manager{
-		debug: debug,
-		nodes: make(map[string]*nodeRuntime),
+		debug:    debug,
+		nodes:    make(map[string]*nodeRuntime),
+		tailnets: make(map[string]string),
 	}
 	m.newNode = func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 		s := &tsnet.Server{
@@ -113,47 +129,9 @@ func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL 
 		return "", err
 	}
 
-	m.mu.Lock()
-	rt := m.nodes[bridge.ID]
-	needUp := false
-	if rt == nil {
-		stateDir, err := config.BridgeStateDir(bridge.ID)
-		if err != nil {
-			m.mu.Unlock()
-			return "", err
-		}
-		userLogf := func(format string, args ...any) {
-			logf(fmt.Sprintf(format, args...))
-		}
-		debugLogf := func(format string, args ...any) {
-			if m.debug {
-				logf(fmt.Sprintf(format, args...))
-			}
-		}
-		node := m.newNode(bridge, stateDir, userLogf, debugLogf)
-		rt = &nodeRuntime{
-			node:    node,
-			proxies: make(map[string]*proxyRuntime),
-		}
-		m.nodes[bridge.ID] = rt
-		needUp = true
-	}
-	m.mu.Unlock()
-
-	var status *ipnstate.Status
-	if needUp {
-		logf("Starting bridge " + bridge.Name + " (" + bridge.ID + ")")
-		var err error
-		status, err = rt.node.Up(ctx)
-		if err != nil {
-			m.mu.Lock()
-			if m.nodes[bridge.ID] == rt {
-				delete(m.nodes, bridge.ID)
-			}
-			m.mu.Unlock()
-			return "", errors.Join(err, rt.node.Close())
-		}
-		logf("Bridge connected.")
+	rt, status, err := m.runningNode(ctx, bridge, logf)
+	if err != nil {
+		return "", err
 	}
 	if m.debug {
 		// Up deliberately returns status without peers. Ask the in-process
@@ -187,6 +165,121 @@ func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL 
 	return proxy.localURL, nil
 }
 
+// runningNode returns the bridge's node, starting it if this is the first use.
+// status is the login status Up reported, and is nil for a node that was
+// already running. Callers hold no lock.
+func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, logf func(string)) (*nodeRuntime, *ipnstate.Status, error) {
+	m.mu.Lock()
+	rt := m.nodes[bridge.ID]
+	if rt != nil {
+		m.mu.Unlock()
+		return rt, nil, nil
+	}
+	stateDir, err := config.BridgeStateDir(bridge.ID)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, nil, err
+	}
+	userLogf := func(format string, args ...any) {
+		logf(fmt.Sprintf(format, args...))
+	}
+	debugLogf := func(format string, args ...any) {
+		if m.debug {
+			logf(fmt.Sprintf(format, args...))
+		}
+	}
+	rt = &nodeRuntime{
+		node:    m.newNode(bridge, stateDir, userLogf, debugLogf),
+		proxies: make(map[string]*proxyRuntime),
+	}
+	m.nodes[bridge.ID] = rt
+	m.mu.Unlock()
+
+	logf("Starting bridge " + bridge.Name + " (" + bridge.ID + ")")
+	status, err := rt.node.Up(ctx)
+	if err != nil {
+		m.mu.Lock()
+		if m.nodes[bridge.ID] == rt {
+			delete(m.nodes, bridge.ID)
+		}
+		m.mu.Unlock()
+		return nil, nil, errors.Join(err, rt.node.Close())
+	}
+	logf("Bridge connected.")
+
+	// Up returns the login status, so the tailnet this bridge reaches costs no
+	// extra call. The connection picker names it on rows the user has not
+	// connected to yet.
+	if status != nil && status.CurrentTailnet != nil && status.CurrentTailnet.Name != "" {
+		m.mu.Lock()
+		if m.tailnets == nil {
+			m.tailnets = make(map[string]string)
+		}
+		m.tailnets[bridge.ID] = status.CurrentTailnet.Name
+		m.mu.Unlock()
+	}
+	return rt, status, nil
+}
+
+// Tailnet returns the network the bridge's node logged in to during this
+// session, or "" when it has not been started or reported one.
+func (m *Manager) Tailnet(bridgeID string) string {
+	if m == nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.tailnets[bridgeID]
+}
+
+// SwitchTailnet logs the bridge out of the tailnet it is on and discards its
+// node, so the next Activate starts a fresh one and asks for a new login.
+//
+// The node has to be running to be logged out: its credentials live behind the
+// in-process LocalAPI, and closing the node without logging out would reuse
+// them on the next start. A node that was never started this session is
+// therefore brought up on the old tailnet first, which is also what leaves the
+// device removed from it rather than orphaned.
+func (m *Manager) SwitchTailnet(ctx context.Context, bridge config.Bridge, logf func(string)) error {
+	if m == nil {
+		return fmt.Errorf("bridge manager is not configured")
+	}
+	if err := validateBridgeID(bridge.ID); err != nil {
+		return err
+	}
+	if logf == nil {
+		logf = func(string) {}
+	}
+	rt, _, err := m.runningNode(ctx, bridge, logf)
+	if err != nil {
+		return err
+	}
+
+	logf("Logging bridge " + bridge.Name + " out of its tailnet ...")
+	logoutErr := rt.node.Logout(ctx)
+
+	// Under the lock, as in Close: an Activate that took rt before the delete
+	// may still be adding a proxy to it.
+	m.mu.Lock()
+	if m.nodes[bridge.ID] == rt {
+		delete(m.nodes, bridge.ID)
+	}
+	delete(m.tailnets, bridge.ID)
+	errs := []error{logoutErr}
+	for key, proxy := range rt.proxies {
+		errs = append(errs, closeProxy(proxy))
+		delete(rt.proxies, key)
+	}
+	errs = append(errs, rt.node.Close())
+	m.mu.Unlock()
+
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	logf("Bridge logged out. Log in to the tailnet you want next.")
+	return nil
+}
+
 // Close shuts down all active reverse proxies and tsnet nodes.
 func (m *Manager) Close() error {
 	if m == nil {
@@ -198,18 +291,28 @@ func (m *Manager) Close() error {
 	var errs []error
 	for id, rt := range m.nodes {
 		for key, proxy := range rt.proxies {
-			if err := proxy.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errs = append(errs, err)
-			}
-			if err := proxy.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				errs = append(errs, err)
-			}
+			errs = append(errs, closeProxy(proxy))
 			delete(rt.proxies, key)
 		}
 		if err := rt.node.Close(); err != nil {
 			errs = append(errs, err)
 		}
 		delete(m.nodes, id)
+		delete(m.tailnets, id)
+	}
+	return errors.Join(errs...)
+}
+
+// closeProxy shuts down one localhost reverse proxy. An already-closed server
+// or listener is not a failure: Close and SwitchTailnet can both reach the
+// same proxy.
+func closeProxy(proxy *proxyRuntime) error {
+	var errs []error
+	if err := proxy.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		errs = append(errs, err)
+	}
+	if err := proxy.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }

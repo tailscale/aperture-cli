@@ -24,7 +24,9 @@ type fakeNode struct {
 	statusErr   error
 	dialErr     error
 	dialFn      bridgeDialFunc
+	logoutErr   error
 	up          int
+	loggedOut   int
 	closed      bool
 }
 
@@ -324,6 +326,91 @@ func TestDialWithDNSRetry(t *testing.T) {
 			t.Fatalf("attempts = %d/%d, want 1/1", gotAttempts, attempts)
 		}
 	})
+}
+
+func TestActivateRecordsTailnet(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+
+	m := NewManager(false)
+	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+		return &fakeNode{
+			backendAddr: backend.Listener.Addr().String(),
+			status:      &ipnstate.Status{CurrentTailnet: &ipnstate.TailnetStatus{Name: "corp.example.com"}},
+		}
+	}
+	defer m.Close()
+
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	if _, err := m.Activate(context.Background(), bridge, "http://aperture.tailnet", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Tailnet(bridge.ID); got != "corp.example.com" {
+		t.Errorf("Tailnet = %q, want corp.example.com", got)
+	}
+}
+
+// TestSwitchTailnet covers what makes a switch a switch: the node is logged out
+// rather than just restarted, so the next connection has to ask for a login.
+func TestSwitchTailnet(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+
+	f := activate(t, backend)
+	defer f.manager.Close()
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	f.manager.tailnets[bridge.ID] = "corp.example.com"
+	first := f.node
+
+	if err := f.manager.SwitchTailnet(context.Background(), bridge, nil); err != nil {
+		t.Fatal(err)
+	}
+	if first.loggedOut != 1 {
+		t.Errorf("logouts = %d, want 1", first.loggedOut)
+	}
+	if !first.closed {
+		t.Error("node was not closed")
+	}
+	if got := f.manager.Tailnet(bridge.ID); got != "" {
+		t.Errorf("Tailnet = %q, want empty after a switch", got)
+	}
+	if _, err := http.Get(f.localURL + "/"); err == nil {
+		t.Error("proxy still serving after the bridge was logged out")
+	}
+
+	var replacement *fakeNode
+	f.manager.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+		replacement = &fakeNode{backendAddr: backend.Listener.Addr().String()}
+		return replacement
+	}
+	if _, err := f.manager.Activate(context.Background(), bridge, "http://aperture.tailnet", nil); err != nil {
+		t.Fatal(err)
+	}
+	if replacement == nil {
+		t.Fatal("Activate reused the logged-out node")
+	}
+	if replacement.up != 1 {
+		t.Errorf("replacement node Up calls = %d, want 1", replacement.up)
+	}
+}
+
+func TestSwitchTailnetReportsLogoutFailure(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+
+	f := activate(t, backend)
+	defer f.manager.Close()
+	f.node.logoutErr = errors.New("not logged in")
+
+	err := f.manager.SwitchTailnet(context.Background(), config.Bridge{ID: "bridge-abcdef", Name: "Work"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("err = %v, want it to name the logout failure", err)
+	}
+}
+
+func (n *fakeNode) Logout(context.Context) error {
+	n.loggedOut++
+	return n.logoutErr
 }
 
 func (n *fakeNode) Close() error {
