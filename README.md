@@ -83,5 +83,3 @@ make clean   # remove built binary
 ## Contributing
 
 To add a new coding agent, see [docs/adding-a-client.md](./docs/adding-a-client.md).
-
-Agent-facing skills for this repo live in [.agents/skills/](./.agents/skills/).
