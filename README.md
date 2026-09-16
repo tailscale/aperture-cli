@@ -60,6 +60,8 @@ To use bridge mode:
 
 If your Aperture answers on a different hostname, type it on the connect screen while the default is being tried. That cancels the attempt and connects to what you typed. Esc abandons the attempt and leaves your current endpoint alone.
 
+`http://ai` can also answer and still be the wrong Aperture, which is what happens when the bridge joins a tailnet that already has a host called `ai`. Press `e` on `Aperture Endpoints` to point the selected endpoint somewhere else; it keeps the bridge it is reached through and reconnects.
+
 If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active. Select a configured endpoint from `Aperture Endpoints` to switch to it.
 
 ### Flags

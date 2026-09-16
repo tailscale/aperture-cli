@@ -777,6 +777,57 @@ func TestSetupGuideEditPrefillsFailedURL(t *testing.T) {
 	t.Fatal("Edit endpoint URL item not found")
 }
 
+// A guessed URL that answers is not necessarily the Aperture the user wanted:
+// on a tailnet that already has a host called "ai", both a direct connection
+// and a new bridge land there and succeed, and nothing fails to open the setup
+// guide's editor. The endpoints menu has to be able to retarget a working
+// endpoint, or that first success is the only one reachable.
+func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	connected := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridge.ID}
+	m := &model{
+		g: &config.Global{
+			ApertureHost: connected.URL,
+			Settings: config.Settings{
+				Bridges:   []config.Bridge{bridge},
+				Endpoints: []config.Endpoint{connected},
+			},
+		},
+		step:      stepMenu,
+		connected: true,
+	}
+	m.resetStack(m.endpointsMenu())
+
+	edit := -1
+	for i, it := range m.top().Items {
+		if it.Shortcut == "e" {
+			edit = i
+			break
+		}
+	}
+	if edit < 0 {
+		t.Fatal("endpoints menu offers no way to edit an endpoint URL")
+	}
+	m.setCursor(0)
+	m.activate(edit)
+	if m.step != stepInput || m.input.value != connected.URL {
+		t.Fatalf("edit field: step=%v value=%q, want stepInput prefilled with %q", m.step, m.input.value, connected.URL)
+	}
+
+	m.inputOnSave("http://aperture.example.ts.net")
+
+	want := config.Endpoint{URL: "http://aperture.example.ts.net", BridgeID: bridge.ID}
+	if got := m.g.Settings.Endpoints; len(got) != 1 || !sameEndpoint(got[0], want) {
+		t.Fatalf("endpoints = %+v, want the row rewritten to %+v", got, want)
+	}
+	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
+	}
+}
+
 func TestSetupGuideExplainsDefaultLocationGuess(t *testing.T) {
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	target := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridge.ID}

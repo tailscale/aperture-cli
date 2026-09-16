@@ -247,6 +247,20 @@ func (m *model) endpointsMenu() *menu.Menu {
 		Hidden:   true,
 		Action:   func() menu.Result { return menu.Result{Next: m.addEndpointConnectionMenu()} },
 	})
+	// Hidden: "e" retargets the row under the cursor. Surfaced via the footer hint.
+	items = append(items, menu.MenuItem{
+		Label:    "edit",
+		Shortcut: "e",
+		Hidden:   true,
+		Action: func() menu.Result {
+			idx := m.cursor()
+			if idx < 0 || idx >= len(m.g.Settings.Endpoints) {
+				return menu.Result{}
+			}
+			m.promptEditEndpoint(m.g.Settings.Endpoints[idx])
+			return menu.Result{}
+		},
+	})
 	// Hidden: "d" deletes the row under the cursor.
 	items = append(items, menu.MenuItem{
 		Label:    "delete",
@@ -276,7 +290,7 @@ func (m *model) endpointsMenu() *menu.Menu {
 	return &menu.Menu{
 		Title: endpointsTitle,
 		Items: items,
-		Hint:  "Enter to select · d to remove · a to add · Esc to go back",
+		Hint:  "Enter to select · e to edit · d to remove · a to add · Esc to go back",
 		OnBack: func() tea.Cmd {
 			if len(m.stack) <= 1 {
 				if m.forcedToEndpoint {
@@ -339,17 +353,7 @@ func (m *model) setupGuideMenu() *menu.Menu {
 		{
 			Label: "Edit endpoint URL",
 			Action: func() menu.Result {
-				m.promptForInput("Edit Endpoint:", "URL", target.URL, func(v string) tea.Cmd {
-					next, err := config.ParseEndpoint(v, target.BridgeID)
-					if err != nil {
-						return simpleErrorCmd(err)
-					}
-					if err := m.g.ReplaceEndpoint(target, next); err != nil {
-						return simpleErrorCmd(err)
-					}
-					m.failedEndpoint = &next
-					return m.activateEndpointCmd(next)
-				})
+				m.promptEditEndpoint(target)
 				return menu.Result{}
 			},
 		},
@@ -403,6 +407,29 @@ func (m *model) setupGuideMenu() *menu.Menu {
 		Hint:     "Enter to select · Esc to go back",
 		OnBack:   onBack,
 	}
+}
+
+// promptEditEndpoint edits ep's URL in place and connects to what the user
+// typed, keeping whichever bridge ep is reached through. It is the only way to
+// retarget an endpoint that connects successfully: the guessed default answers
+// on any tailnet with a host called "ai", and a success shows neither the
+// connect screen's inline override nor the setup guide's editor.
+func (m *model) promptEditEndpoint(ep config.Endpoint) {
+	m.promptForInput("Edit Endpoint:", "URL", ep.URL, func(v string) tea.Cmd {
+		next, err := config.ParseEndpoint(v, ep.BridgeID)
+		if err != nil {
+			return simpleErrorCmd(err)
+		}
+		if err := m.g.ReplaceEndpoint(ep, next); err != nil {
+			return simpleErrorCmd(err)
+		}
+		// Follow the rename, so a failure screen already showing ep keeps
+		// naming the endpoint the user is now trying.
+		if m.failedEndpoint != nil && sameEndpoint(*m.failedEndpoint, ep) {
+			m.failedEndpoint = &next
+		}
+		return m.activateEndpointCmd(next)
+	})
 }
 
 func (m *model) clearEndpointFailure() {
