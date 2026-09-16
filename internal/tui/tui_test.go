@@ -1105,7 +1105,7 @@ func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 		t.Fatalf("candidate endpoint was not saved: %+v", m.g.Settings.Endpoints)
 	}
 
-	msg := res.Cmd()
+	msg := activationResult(t, res.Cmd)
 	result, ok := msg.(endpointActivationResult)
 	if !ok {
 		t.Fatalf("activation message = %T", msg)
@@ -1154,13 +1154,50 @@ func TestDirectEndpointIsPromotedOnlyAfterModelsSucceed(t *testing.T) {
 	if got := m.g.ActiveEndpoint(); !sameEndpoint(got, old) {
 		t.Fatalf("active endpoint changed before /v1/models: %+v", got)
 	}
-	activation := cmd()
-	m.Update(activation)
+	m.Update(activationResult(t, cmd))
 	if got := m.g.ActiveEndpoint(); got.URL != srv.URL {
 		t.Fatalf("active endpoint = %+v, want %q", got, srv.URL)
 	}
 	if m.g.ApertureHost != srv.URL || len(m.g.Providers) != 1 || m.g.Providers[0].ID != "anthropic" {
 		t.Fatalf("successful activation state: host=%q providers=%+v", m.g.ApertureHost, m.g.Providers)
+	}
+}
+
+// activationResult runs what activateEndpoint returned and hands back the
+// attempt's own message. What it returns is a batch: the attempt, a bridge log
+// pump for bridge attempts, and the one-second repaint tick, with the attempt
+// itself always first.
+func activationResult(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("no activation command")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		return activationResult(t, batch[0])
+	}
+	return msg
+}
+
+func TestActivationTickRunsOnlyWhileConnecting(t *testing.T) {
+	m := &model{g: &config.Global{}, step: stepPreflight, act: &activation{id: 3, started: time.Now().Add(-12 * time.Second)}}
+
+	if _, cmd := m.Update(activationTickMsg{id: 3}); cmd == nil {
+		t.Error("connect screen stopped counting while the attempt was still running")
+	}
+	if _, cmd := m.Update(activationTickMsg{id: 2}); cmd != nil {
+		t.Error("a superseded attempt kept ticking")
+	}
+	m.step = stepMenu
+	if _, cmd := m.Update(activationTickMsg{id: 3}); cmd != nil {
+		t.Error("ticks continued after the attempt left the screen")
+	}
+
+	if got := activationElapsed(m.act); got != " (12s)" {
+		t.Errorf("elapsed = %q, want %q", got, " (12s)")
+	}
+	if got := activationElapsed(&activation{started: time.Now()}); got != "" {
+		t.Errorf("elapsed on a fresh attempt = %q, want empty", got)
 	}
 }
 

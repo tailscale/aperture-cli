@@ -110,6 +110,7 @@ type activation struct {
 	id       int
 	endpoint config.Endpoint
 	label    string
+	started  time.Time
 	cancel   context.CancelFunc
 	// ephemeral records that this flow is what put endpoint into settings,
 	// so abandoning or overriding the attempt takes it back out instead of
@@ -213,6 +214,16 @@ func openURLCmd(id int, url string) tea.Cmd {
 	return func() tea.Msg { return browserOpenMsg{id: id, err: openURL(url)} }
 }
 
+// activationTickMsg repaints the connect screen once a second so a slow
+// attempt is visibly still running. Bringing a bridge up and then asking
+// Aperture for its models can take tens of seconds during which nothing is
+// logged, and a frozen screen is indistinguishable from a hang.
+type activationTickMsg struct{ id int }
+
+func activationTick(id int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return activationTickMsg{id: id} })
+}
+
 type quitMsg struct{ Err error }
 
 func runPreflight(host string) tea.Cmd {
@@ -270,6 +281,11 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 // switchTailnet logs the bridge out before connecting, so the attempt starts
 // from a login prompt rather than the tailnet the node is already on.
 func (m *model) activateEndpoint(ep config.Endpoint, ephemeral, switchTailnet bool) tea.Cmd {
+	cmd := m.beginActivation(ep, ephemeral, switchTailnet)
+	return tea.Batch(cmd, activationTick(m.act.id))
+}
+
+func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet bool) tea.Cmd {
 	m.stopActivation()
 	m.step = stepPreflight
 	m.preflightErr = ""
@@ -281,6 +297,7 @@ func (m *model) activateEndpoint(ep config.Endpoint, ephemeral, switchTailnet bo
 		id:        m.activationSeq,
 		endpoint:  ep,
 		label:     "Checking " + ep.URL + " ...",
+		started:   time.Now(),
 		cancel:    cancel,
 		ephemeral: ephemeral,
 	}
@@ -338,6 +355,10 @@ func (m *model) activateEndpoint(ep config.Endpoint, ephemeral, switchTailnet bo
 		if err != nil {
 			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
 		}
+		// The request below is the longest silent stretch of the whole
+		// attempt: the bridge is up, so tsnet has stopped logging, and
+		// nothing else names the host being waited on.
+		bridgeLogf("Asking " + ep.URL + " for its models ...")
 		provs, err := fetchProvidersContext(ctx, localURL, bridgeProviderFetchTimeout)
 		if err != nil {
 			err = fmt.Errorf("bridge %s could not reach %s: %w", bridge.Name, ep.URL, err)
@@ -607,6 +628,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, msg.line)
 		return m, next
 
+	case activationTickMsg:
+		if m.step != stepPreflight || m.act == nil || m.act.id != msg.id {
+			return m, nil
+		}
+		return m, activationTick(msg.id)
+
 	case browserOpenMsg:
 		// Only the failure is worth a line: a browser that opened is on the
 		// user's screen, and the link itself is already in the log tail.
@@ -638,8 +665,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popToRoot()
 		m.step = stepPreflight
 		// No cancel handle: this re-check owns the screen until it answers.
-		m.act = &activation{label: "Checking " + m.g.ApertureHost + " ..."}
-		return m, runPreflight(m.g.ApertureHost)
+		m.activationSeq++
+		m.act = &activation{id: m.activationSeq, label: "Checking " + m.g.ApertureHost + " ...", started: time.Now()}
+		return m, tea.Batch(runPreflight(m.g.ApertureHost), activationTick(m.act.id))
 
 	case menu.InstallDoneMsg:
 		if msg.Err != nil {
@@ -938,13 +966,25 @@ func (m *model) updatePreflight(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// activationElapsed counts the attempt up on screen. It starts at 2s so a
+// connection that answers immediately does not flash a counter.
+func activationElapsed(act *activation) string {
+	if act == nil || act.started.IsZero() {
+		return ""
+	}
+	if secs := int(time.Since(act.started).Seconds()); secs >= 2 {
+		return fmt.Sprintf(" (%ds)", secs)
+	}
+	return ""
+}
+
 func (m *model) viewPreflight() string {
 	label := "Checking " + m.g.ApertureHost + " ..."
 	if m.act != nil && m.act.label != "" {
 		label = m.act.label
 	}
 	var sb strings.Builder
-	sb.WriteString(m.wrapText("", dotYellow+" "+label) + "\n")
+	sb.WriteString(m.wrapText("", dotYellow+" "+label+activationElapsed(m.act)) + "\n")
 	for _, line := range m.bridgeLogs {
 		sb.WriteString(dimStyle.Render(m.wrapText("  ", line)))
 		sb.WriteString("\n")
