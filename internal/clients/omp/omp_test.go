@@ -1,152 +1,63 @@
 package omp
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
-	"github.com/tailscale/aperture-cli/internal/config"
+	"github.com/tailscale/aperture-cli/internal/clients/pilike"
 )
 
-const testHost = "http://ai.example.com"
+// The shared behavior is tested in internal/clients/pilike. What is left here
+// is only what Oh My Pi itself decides.
 
-func backendByIDOrFatal(t *testing.T, id string) backend {
-	t.Helper()
-	b, ok := backendByID(id)
-	if !ok {
-		t.Fatalf("no backend with id %q", id)
+func TestVariantIdentity(t *testing.T) {
+	c := &pilike.Client{V: variant}
+	// Name is persisted as LaunchState.LastClientName; changing it
+	// invalidates every recorded Oh My Pi launch.
+	if got := c.Name(); got != "Oh My Pi" {
+		t.Errorf("Name = %q, want Oh My Pi", got)
 	}
-	return b
+	if got := c.BinaryName(); got != "omp" {
+		t.Errorf("BinaryName = %q, want omp", got)
+	}
+	if variant.ConfigDir != "omp" {
+		t.Errorf("ConfigDir = %q, want omp", variant.ConfigDir)
+	}
 }
 
-func TestBackendBaseURL(t *testing.T) {
-	cases := map[string]string{
-		"openai_responses": testHost + "/v1",
-		"anthropic":        testHost,
-		"openai_chat":      testHost + "/v1",
-		"vertex":           testHost + "/v1/projects/_aperture_auto_vertex_project_id_/locations/_aperture_auto_vertex_region_/publishers/google",
+func TestCommonBinaryPaths(t *testing.T) {
+	paths := commonBinaryPaths()
+	if len(paths) == 0 {
+		t.Fatal("commonBinaryPaths is empty")
 	}
-	for id, want := range cases {
-		if got := backendByIDOrFatal(t, id).baseURL(testHost + "/"); got != want {
-			t.Errorf("%s baseURL = %q, want %q", id, got, want)
+	// CommonPaths must be full paths to the binary, not directories:
+	// FindBinary stats each entry directly.
+	for _, p := range paths {
+		if filepath.Base(p) != "omp" {
+			t.Errorf("CommonPaths entry %q does not end in the binary name", p)
+		}
+		if !filepath.IsAbs(p) {
+			t.Errorf("CommonPaths entry %q is not absolute", p)
 		}
 	}
 }
 
-func TestBuildProvider(t *testing.T) {
-	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5.6-sol"}}
-	got := buildProvider(testHost, p, backendByIDOrFatal(t, "openai_responses"))
-	if got.BaseURL != testHost+"/v1" || got.API != "openai-responses" || got.APIKey != "not-needed" {
-		t.Errorf("buildProvider = %+v", got)
+func TestInstallUninstallCommands(t *testing.T) {
+	const wantInstall = "bun install -g @oh-my-pi/pi-coding-agent"
+	if variant.InstallCmd != wantInstall {
+		t.Errorf("InstallCmd = %q, want %q", variant.InstallCmd, wantInstall)
 	}
-	if len(got.Models) != 1 || got.Models[0].ID != "gpt-5.6-sol" || got.Models[0].MaxTokens == 0 || len(got.Models[0].Input) == 0 {
-		t.Errorf("models = %+v", got.Models)
-	}
-}
-
-func TestExtensionSource(t *testing.T) {
-	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5.6-sol"}}
-	src, err := extensionSource(p.ID, buildProvider(testHost, p, backendByIDOrFatal(t, "openai_responses")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"export default function", "pi.registerProvider(", `"aperture-openai-api"`, `"openai-responses"`} {
-		if !strings.Contains(src, want) {
-			t.Errorf("extension missing %q:\n%s", want, src)
-		}
-	}
-	if strings.Contains(src, "null") {
-		t.Errorf("extension contains null:\n%s", src)
+	wantUninstall := []string{"bun", "uninstall", "-g", "@oh-my-pi/pi-coding-agent"}
+	if !slices.Equal(variant.UninstallArgv, wantUninstall) {
+		t.Errorf("UninstallArgv = %v, want %v", variant.UninstallArgv, wantUninstall)
 	}
 }
 
-func TestWriteProviderExtension(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
-	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5.6-sol"}}
-	path, cleanup, err := writeProviderExtension(testHost, p, backendByIDOrFatal(t, "openai_responses"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("perm = %o, want 600", info.Mode().Perm())
-	}
-	cleanup()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("extension still exists after cleanup")
-	}
-}
-
-func TestBuildArgs(t *testing.T) {
-	want := []string{"-e", "/tmp/ext.js", "--model", "aperture-openai-api/gpt-5.6-sol", "--auto-approve"}
-	got := buildArgs("/tmp/ext.js", "openai-api", "openai-api/gpt-5.6-sol", true)
-	if !slices.Equal(got, want) {
-		t.Errorf("buildArgs = %v, want %v", got, want)
-	}
-	if got := buildArgs("/tmp/ext.js", "openai-api", "", false); !slices.Equal(got, []string{"-e", "/tmp/ext.js"}) {
-		t.Errorf("buildArgs without model = %v", got)
-	}
-}
-
-func TestBackendsFor(t *testing.T) {
-	p := config.ProviderInfo{SupportedEndpoints: map[string]bool{
-		config.EndpointOpenAIResponses:   true,
-		config.EndpointAnthropicMessages: true,
-		config.EndpointOpenAIChat:        true,
-		config.EndpointVertexClaude:      true,
-	}}
-	got := backendsFor(p)
-	ids := make([]string, len(got))
-	for i, b := range got {
-		ids[i] = b.id
-	}
-	want := []string{"openai_responses", "anthropic", "openai_chat", "vertex"}
-	if !slices.Equal(ids, want) {
-		t.Errorf("backendsFor = %v, want %v", ids, want)
-	}
-}
-
-func TestCompatibleProviders(t *testing.T) {
-	provs := []config.ProviderInfo{
-		{ID: "match", Models: []string{"model"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
-		{ID: "empty", SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}},
-		{ID: "other", Models: []string{"model"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}},
-	}
-	got := compatibleProviders(provs)
-	if len(got) != 1 || got[0].ID != "match" {
-		t.Errorf("compatibleProviders = %+v", got)
-	}
-}
-
-func TestResolveReplay(t *testing.T) {
-	p := config.ProviderInfo{ID: "openai-api", Models: []string{"gpt-5.6-sol"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
-	g := &config.Global{
-		Providers:  []config.ProviderInfo{p},
-		LastLaunch: config.LaunchState{LastClientName: name, LastBackendType: "openai_responses", LastProviderID: p.ID, LastModel: "openai-api/gpt-5.6-sol"},
-	}
-	_, _, model, ok := resolveReplay(g)
-	if !ok || model != "openai-api/gpt-5.6-sol" {
-		t.Fatalf("resolveReplay = %q, %v", model, ok)
-	}
-	g.LastLaunch.LastModel = "openai-api/stale"
-	if _, _, _, ok := resolveReplay(g); ok {
-		t.Error("resolveReplay accepted a stale model")
-	}
-}
-
-func TestInstallUninstall(t *testing.T) {
-	c := &Client{}
-	if got := c.Install(&config.Global{}); got.Hint != installCmd || got.Run == nil {
-		t.Errorf("Install = %+v", got)
-	}
-	if got := c.Uninstall(); got.Hint != uninstallCmd || got.Run == nil {
-		t.Errorf("Uninstall = %+v", got)
+// TestYoloArgs pins the one place OMP diverges from Pi on permissions.
+// --auto-approve is a real approval bypass here, unlike Pi's --approve.
+func TestYoloArgs(t *testing.T) {
+	if want := []string{"--auto-approve"}; !slices.Equal(variant.YoloArgs, want) {
+		t.Errorf("YoloArgs = %v, want %v", variant.YoloArgs, want)
 	}
 }

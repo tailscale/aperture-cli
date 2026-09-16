@@ -1,4 +1,4 @@
-package pi
+package pilike
 
 import (
 	"encoding/json"
@@ -8,74 +8,77 @@ import (
 	"github.com/tailscale/aperture-cli/internal/config"
 )
 
-// piProvider is the provider-config form accepted by pi's
+// provider is the provider-config form accepted by the harness's
 // pi.registerProvider(id, config) extension API. Field names match pi's
 // documented models.json / registerProvider schema.
-type piProvider struct {
-	Name    string    `json:"name"`
-	BaseURL string    `json:"baseUrl"`
-	APIKey  string    `json:"apiKey"`
-	API     string    `json:"api"`
-	Models  []piModel `json:"models"`
+type provider struct {
+	Name    string  `json:"name"`
+	BaseURL string  `json:"baseUrl"`
+	APIKey  string  `json:"apiKey"`
+	API     string  `json:"api"`
+	Models  []model `json:"models"`
 }
 
-// piModel is one entry in a provider's model list.
+// model is one entry in a provider's model list.
 //
 // Every field must be populated. Unlike the models.json path, which fills in
 // defaults for a partial model definition, a provider registered from an
 // extension is used as given: an omitted maxTokens reaches the endpoint as a
 // literal null and Anthropic rejects the request with "max_tokens: expected
-// number, received null". An omitted input list crashes pi outright, because
-// its --list-models formatter dereferences it without a nil check.
+// number, received null". An omitted input list crashes the harness outright,
+// because its --list-models formatter dereferences it without a nil check.
 //
 // reasoning stays false because GET /v1/models reports no thinking
-// capability, and claiming it makes pi send parameters the model may reject.
-type piModel struct {
+// capability, and claiming it makes the harness send parameters the model may
+// reject.
+type model struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	Reasoning     bool     `json:"reasoning"`
 	Input         []string `json:"input"`
 	ContextWindow int      `json:"contextWindow"`
 	MaxTokens     int      `json:"maxTokens"`
-	Cost          piCost   `json:"cost"`
+	Cost          cost     `json:"cost"`
 }
 
 // Aperture's provider list carries no token metadata, so every model gets
-// pi's own documented defaults rather than invented per-model numbers. Users
-// who need different limits can override them per model in models.json,
-// which pi composes above an extension-registered provider.
+// the harness's own documented defaults rather than invented per-model
+// numbers. Users who need different limits can override them per model in
+// models.json, which the harness composes above an extension-registered
+// provider.
 const (
 	defaultContextWindow = 128000
 	defaultMaxTokens     = 16384
 )
 
-// piCost is pi's per-million-token rate block. Aperture reports no pricing,
-// so every rate is zero.
-type piCost struct {
+// cost is the harness's per-million-token rate block. Aperture reports no
+// pricing, so every rate is zero.
+type cost struct {
 	Input      float64 `json:"input"`
 	Output     float64 `json:"output"`
 	CacheRead  float64 `json:"cacheRead"`
 	CacheWrite float64 `json:"cacheWrite"`
 }
 
-// piProviderID namespaces the Aperture provider ID so registering it can
-// never overwrite one of pi's built-in providers (pi merges a registration
-// into a same-named built-in, which would silently retarget the user's own
-// "anthropic" or "openai" models at Aperture).
-func piProviderID(providerID string) string {
+// namespacedProviderID namespaces the Aperture provider ID so registering it
+// can never overwrite one of the harness's built-in providers (the harness
+// merges a registration into a same-named built-in, which would silently
+// retarget the user's own "anthropic" or "openai" models at Aperture).
+func namespacedProviderID(providerID string) string {
 	return "aperture-" + providerID
 }
 
-// piModelRef is the "provider/model" reference pi's --model flag expects,
-// built from the namespaced provider ID and a bare model ID.
-func piModelRef(providerID, model string) string {
-	return piProviderID(providerID) + "/" + stripProviderPrefix(model)
+// modelRef is the "provider/model" reference the harness's --model flag
+// expects, built from the namespaced provider ID and a bare model ID.
+func modelRef(providerID, m string) string {
+	return namespacedProviderID(providerID) + "/" + stripProviderPrefix(m)
 }
 
-// baseURL returns the endpoint pi should call for this backend. The suffix
-// differs per wire protocol: OpenAI-style APIs are rooted at /v1, Anthropic
-// takes the bare host because pi appends /v1/messages itself, and Vertex
-// needs the project-scoped publisher path that Aperture's router matches.
+// baseURL returns the endpoint the harness should call for this backend. The
+// suffix differs per wire protocol: OpenAI-style APIs are rooted at /v1,
+// Anthropic takes the bare host because the harness appends /v1/messages
+// itself, and Vertex needs the project-scoped publisher path that Aperture's
+// router matches.
 func (b backend) baseURL(apertureHost string) string {
 	host := strings.TrimRight(apertureHost, "/")
 	switch b.id {
@@ -90,12 +93,12 @@ func (b backend) baseURL(apertureHost string) string {
 	}
 }
 
-// buildProvider assembles the pi provider config for one Aperture provider
-// routed over the given backend.
-func buildProvider(apertureHost string, p config.ProviderInfo, b backend) piProvider {
-	models := make([]piModel, len(p.Models))
+// buildProvider assembles the harness's provider config for one Aperture
+// provider routed over the given backend.
+func buildProvider(apertureHost string, p config.ProviderInfo, b backend) provider {
+	models := make([]model, len(p.Models))
 	for i, m := range p.Models {
-		models[i] = piModel{
+		models[i] = model{
 			ID:            m,
 			Name:          m,
 			Input:         []string{"text"},
@@ -104,7 +107,7 @@ func buildProvider(apertureHost string, p config.ProviderInfo, b backend) piProv
 			MaxTokens:     defaultMaxTokens,
 		}
 	}
-	return piProvider{
+	return provider{
 		Name:    "Aperture (" + p.ID + ")",
 		BaseURL: b.baseURL(apertureHost),
 		APIKey:  "not-needed",
@@ -113,11 +116,11 @@ func buildProvider(apertureHost string, p config.ProviderInfo, b backend) piProv
 	}
 }
 
-// extensionSource renders the JavaScript extension pi loads with -e. The
-// provider config is emitted as marshaled JSON so no value needs hand
+// extensionSource renders the JavaScript extension the harness loads with -e.
+// The provider config is emitted as marshaled JSON so no value needs hand
 // escaping.
-func extensionSource(providerID string, prov piProvider) (string, error) {
-	id, err := json.Marshal(piProviderID(providerID))
+func extensionSource(v Variant, providerID string, prov provider) (string, error) {
+	id, err := json.Marshal(namespacedProviderID(providerID))
 	if err != nil {
 		return "", err
 	}
@@ -125,29 +128,28 @@ func extensionSource(providerID string, prov piProvider) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "// Generated by aperture-cli. Rewritten on every launch and removed\n" +
-		"// when the agent exits; safe to delete.\n" +
+	return v.ExtensionHeader +
 		"export default function (pi) {\n" +
 		"  pi.registerProvider(" + string(id) + ", " + string(cfg) + ");\n" +
 		"}\n", nil
 }
 
-// writeProviderExtension writes the per-launch pi extension and returns its
+// writeProviderExtension writes the per-launch extension and returns its
 // path plus a cleanup function that removes the file.
 //
-// Routing pi through an extension rather than its own models.json is
-// deliberate. pi reads models.json from the directory named by
+// Routing the harness through an extension rather than its own models.json is
+// deliberate. The harness reads models.json from the directory named by
 // PI_CODING_AGENT_DIR, but that same directory also roots settings.json,
 // auth.json, sessions, themes, and extensions. Redirecting it would hide the
 // user's saved logins, settings, and session history — breaking --continue
 // and --resume — so instead we inject the provider for one run and leave
-// ~/.pi/agent untouched.
-func writeProviderExtension(apertureHost string, p config.ProviderInfo, b backend) (string, func(), error) {
-	src, err := extensionSource(p.ID, buildProvider(apertureHost, p, b))
+// the harness's own config directory untouched.
+func writeProviderExtension(v Variant, apertureHost string, p config.ProviderInfo, b backend) (string, func(), error) {
+	src, err := extensionSource(v, p.ID, buildProvider(apertureHost, p, b))
 	if err != nil {
 		return "", nil, err
 	}
-	dir, err := config.ClientConfigDir("pi")
+	dir, err := config.ClientConfigDir(v.ConfigDir)
 	if err != nil {
 		return "", nil, err
 	}
