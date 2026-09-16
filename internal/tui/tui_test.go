@@ -1213,6 +1213,64 @@ func TestAppendBridgeLogRetainsDiagnosticsOverTsnetNoise(t *testing.T) {
 	}
 }
 
+func TestAuthURLFromLog(t *testing.T) {
+	const tsnetLine = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: https://login.tailscale.com/a/17bceb7b0129ba"
+	for _, tt := range []struct {
+		line string
+		want string
+	}{
+		{tsnetLine, "https://login.tailscale.com/a/17bceb7b0129ba"},
+		{"magicsock: home is derp-1", ""},
+		{"or go to: http://evil.example.com", ""},
+		{"or go to: --version", ""},
+		{"or go to: https://login.tailscale.com/a/x --flag", ""},
+	} {
+		if got := authURLFromLog(tt.line); got != tt.want {
+			t.Errorf("authURLFromLog(%q) = %q, want %q", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
+	const tsnetLine = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: https://login.tailscale.com/a/17bceb7b0129ba"
+
+	ch := make(chan string, 1)
+	// Cancelled: waitBridgeLog then answers immediately, so a repeat log line
+	// can be distinguished from one that also dispatched a browser open
+	// without running the open itself.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m := &model{
+		g:   &config.Global{},
+		act: &activation{id: 7, logCh: ch, logCtx: ctx},
+	}
+
+	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: tsnetLine})
+	if _, ok := cmd().(tea.BatchMsg); !ok {
+		t.Fatalf("first auth URL did not dispatch a browser open")
+	}
+	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: tsnetLine})
+	if _, ok := cmd().(tea.BatchMsg); ok {
+		t.Errorf("repeated auth URL dispatched a second browser open")
+	}
+
+	if len(m.bridgeLogs) != 1 {
+		t.Fatalf("bridge logs = %q, want one line", m.bridgeLogs)
+	}
+	if want := bridgeAuthLogPrefix + "https://login.tailscale.com/a/17bceb7b0129ba"; m.bridgeLogs[0] != want {
+		t.Errorf("log line = %q, want %q", m.bridgeLogs[0], want)
+	}
+
+	m.Update(browserOpenMsg{id: 7, err: errors.New("exec: \"xdg-open\": not found")})
+	if len(m.bridgeLogs) != 2 || !strings.Contains(m.bridgeLogs[1], "Open the link above") {
+		t.Errorf("failed open did not tell the user to use the link: %q", m.bridgeLogs)
+	}
+	m.Update(browserOpenMsg{id: 6, err: errors.New("stale")})
+	if len(m.bridgeLogs) != 2 {
+		t.Errorf("a stale attempt's open failure was shown: %q", m.bridgeLogs)
+	}
+}
+
 func TestFetchProvidersIncludesErrorResponseBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bridge proxy error: lookup aperture", http.StatusBadGateway)

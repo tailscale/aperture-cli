@@ -117,6 +117,11 @@ type activation struct {
 	ephemeral bool
 	logCh     chan string
 	logCtx    context.Context
+	// authURL is the Tailscale login link already surfaced for this attempt.
+	// tsnet reprints its line every few seconds, so this is what keeps the
+	// log tail from filling with one repeated URL and the browser from being
+	// opened again on each repeat.
+	authURL string
 	// override is the inline "different Aperture URL" editor shown while a
 	// bridge attempt runs.
 	override textField
@@ -195,6 +200,19 @@ type bridgeLogMsg struct {
 	line string
 }
 type bridgeLogDoneMsg struct{ ch chan string }
+
+// browserOpenMsg reports whether the desktop opener for a bridge login link
+// started. id ties it to the attempt that asked, so a cancelled attempt's
+// failure does not print over the next one.
+type browserOpenMsg struct {
+	id  int
+	err error
+}
+
+func openURLCmd(id int, url string) tea.Cmd {
+	return func() tea.Msg { return browserOpenMsg{id: id, err: openURL(url)} }
+}
+
 type quitMsg struct{ Err error }
 
 func runPreflight(host string) tea.Cmd {
@@ -577,8 +595,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.act == nil || m.act.logCh != msg.ch {
 			return m, nil
 		}
+		next := waitBridgeLog(m.act.logCtx, m.act.logCh)
+		if url := authURLFromLog(msg.line); url != "" {
+			if url == m.act.authURL {
+				return m, next // tsnet reprinting the same link
+			}
+			m.act.authURL = url
+			m.bridgeLogs = appendBridgeLog(m.bridgeLogs, bridgeAuthLogPrefix+url)
+			return m, tea.Batch(next, openURLCmd(m.act.id, url))
+		}
 		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, msg.line)
-		return m, waitBridgeLog(m.act.logCtx, m.act.logCh)
+		return m, next
+
+	case browserOpenMsg:
+		// Only the failure is worth a line: a browser that opened is on the
+		// user's screen, and the link itself is already in the log tail.
+		if m.act == nil || m.act.id != msg.id || msg.err == nil {
+			return m, nil
+		}
+		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, "Could not open a browser here ("+msg.err.Error()+"). Open the link above to authorize.")
+		return m, nil
 
 	case bridgeLogDoneMsg:
 		if m.act != nil && m.act.logCh == msg.ch {
@@ -674,8 +710,15 @@ func appendBridgeLog(logs []string, line string) []string {
 	return logs
 }
 
+// bridgeAuthLogPrefix labels the login link on the connect screen. It is also
+// an importantBridgeLog prefix: the link is the one line the user must act on,
+// and tsnet's own chatter would otherwise push it off the tail.
+const bridgeAuthLogPrefix = "Authorize this bridge in your browser: "
+
 func importantBridgeLog(line string) bool {
 	for _, prefix := range []string{
+		bridgeAuthLogPrefix,
+		"Could not open a browser here",
 		"Bridge network:",
 		"Bridge health:",
 		"Bridge target ",
