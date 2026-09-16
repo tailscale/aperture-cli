@@ -55,8 +55,10 @@ To use bridge mode:
 
 1. Open `Settings`, then open `Aperture Endpoints` and press `a` to add an endpoint.
 2. Choose `Bridge`, then select an existing bridge or choose `Add Bridge`.
-3. Enter the Aperture URL and follow the Tailscale login prompt for the bridge.
+3. Follow the Tailscale login prompt for the bridge. No URL is asked for: the bridge looks for Aperture at `http://ai`, the same location a direct connection starts from.
 4. Aperture CLI verifies `/v1/models`, makes the endpoint active, and returns to the agent menu.
+
+If your Aperture answers on a different hostname, type it on the connect screen while the default is being tried. That cancels the attempt and connects to what you typed. Esc abandons the attempt and leaves your current endpoint alone.
 
 If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active. Select a configured endpoint from `Aperture Endpoints` to switch to it.
 
