@@ -195,6 +195,26 @@ func (g *Global) AddBridge(name string) (Bridge, error) {
 	return p, nil
 }
 
+// SetBridgeTailnet records the tailnet a bridge logged in to and persists it.
+// An unknown bridge is not an error: the user may have deleted it while the
+// connection that reported the name was still coming up.
+func (g *Global) SetBridgeTailnet(id, tailnet string) error {
+	for i, p := range g.Settings.Bridges {
+		if p.ID != id || p.Tailnet == tailnet {
+			continue
+		}
+		next := g.Settings
+		next.Bridges = append([]Bridge(nil), g.Settings.Bridges...)
+		next.Bridges[i].Tailnet = tailnet
+		if err := SaveSettings(next); err != nil {
+			return err
+		}
+		g.Settings = next
+		return nil
+	}
+	return nil
+}
+
 // RemoveBridge deletes a bridge if no endpoint still references it.
 func (g *Global) RemoveBridge(id string) error {
 	for _, ep := range g.Settings.Endpoints {

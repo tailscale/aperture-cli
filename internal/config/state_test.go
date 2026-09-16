@@ -258,6 +258,30 @@ func TestGlobal_ReplaceEndpointDeduplicates(t *testing.T) {
 	}
 }
 
+func TestGlobal_SetBridgeTailnetPersists(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	g := &config.Global{Settings: config.Settings{
+		Bridges: []config.Bridge{{ID: "bridge-abcdef", Name: "Work"}},
+	}}
+	if err := g.SetBridgeTailnet("bridge-abcdef", "corp.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetBridgeTailnet("bridge-missing", "other.example.com"); err != nil {
+		t.Fatalf("unknown bridge: %v", err)
+	}
+
+	got, err := config.LoadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Bridges) != 1 || got.Bridges[0].Tailnet != "corp.example.com" {
+		t.Fatalf("bridges = %+v", got.Bridges)
+	}
+}
+
 func TestBridgeStateDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

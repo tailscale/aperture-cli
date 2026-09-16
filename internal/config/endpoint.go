@@ -22,6 +22,10 @@ type Endpoint struct {
 type Bridge struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Tailnet is the network the node logged in to, recorded after a
+	// successful connection so the connection picker can say which tailnet a
+	// bridge reaches before it is started again.
+	Tailnet string `json:"tailnet,omitempty"`
 }
 
 // ParseEndpoint turns user input into an Endpoint reached over bridgeID, which
