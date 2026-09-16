@@ -53,16 +53,26 @@ This is useful on machines where installing Tailscale is not practical, where Ap
 
 To use bridge mode:
 
-1. Open `Settings`, then open `Aperture Endpoints` and press `a` to add an endpoint.
-2. Choose `Bridge`, then select an existing bridge or choose `Add Bridge`.
+1. Choose `Aperture connection` on the agent menu (also reachable as `Settings`, then `Aperture Endpoints`).
+2. Choose `Add a connection`, then `Bridge`, then an existing bridge or `Add Bridge`.
 3. Follow the Tailscale login prompt for the bridge. No URL is asked for: the bridge looks for Aperture at `http://ai`, the same location a direct connection starts from.
 4. Aperture CLI verifies `/v1/models`, makes the endpoint active, and returns to the agent menu.
 
 If your Aperture answers on a different hostname, type it on the connect screen while the default is being tried. That cancels the attempt and connects to what you typed. Esc abandons the attempt and leaves your current endpoint alone.
 
-`http://ai` can also answer and still be the wrong Aperture, which is what happens when the bridge joins a tailnet that already has a host called `ai`. Press `e` on `Aperture Endpoints` to point the selected endpoint somewhere else; it keeps the bridge it is reached through and reconnects.
+### Choosing a connection
 
-If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active. Select a configured endpoint from `Aperture Endpoints` to switch to it.
+`Aperture connection` lists everything this launcher can reach: each saved endpoint, and each bridge that has no endpoint yet, labelled with the tailnet it reaches. That is the screen to use when the launcher connected on its own and you wanted the other bridge.
+
+Selecting a row opens it. From there you can connect to it, change its URL, switch its tailnet, or remove it.
+
+`http://ai` can answer and still be the wrong Aperture, which is what happens when the bridge joins a tailnet that already has a host called `ai`. `Change URL` points the connection somewhere else; it keeps the bridge it is reached through and reconnects.
+
+### Switching tailnets
+
+A bridge is on one tailnet at a time. `Switch tailnet` logs it out, which removes its node from that tailnet, then prints a new login link: open it and pick the tailnet you want. Use a second bridge instead if you want to keep both logins and choose between them.
+
+If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active.
 
 ### Flags
 
