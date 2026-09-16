@@ -51,16 +51,7 @@ func (m *model) rootMenu() *menu.Menu {
 		items = append(items, it)
 	}
 
-	// Visible, because picking which Aperture to talk to is not a setting: with
-	// a reachable default the launcher connects on its own, and a second bridge
-	// or tailnet is otherwise unreachable from here.
-	items = append(items, menu.MenuItem{
-		Label:       "Aperture connection",
-		Description: "switch endpoint, bridge or tailnet",
-		Action:      func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
-	})
-
-	hints := []string{"[s] Settings"}
+	hints := []string{"[c] Change connection", "[s] Settings"}
 	if len(uninstalled) > 0 {
 		hints = append(hints, "[i] Install agents")
 	}
@@ -68,6 +59,15 @@ func (m *model) rootMenu() *menu.Menu {
 
 	// Shortcut-only items (hidden so they don't take a number but are
 	// activated via their Shortcut key).
+	// Listed before Settings in the hints: with a reachable default the
+	// launcher connects on its own, and a second bridge or tailnet is
+	// otherwise unreachable from here.
+	items = append(items, menu.MenuItem{
+		Label:    "Change connection",
+		Shortcut: "c",
+		Hidden:   true,
+		Action:   func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
+	})
 	items = append(items, menu.MenuItem{
 		Label:    "Settings",
 		Shortcut: "s",

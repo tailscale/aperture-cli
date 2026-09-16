@@ -63,15 +63,15 @@ func TestRootMenu_ShowsInstalledClients(t *testing.T) {
 
 	m := &model{g: &config.Global{}}
 	root := m.rootMenu()
-	// Installed clients + the connection row, then hidden shortcut items
-	// (settings + install-agents). Visible count: A, C, Aperture connection.
+	// Installed clients only: change-connection, settings and install-agents
+	// are hidden shortcut rows advertised in the hint.
 	var visible []string
 	for _, it := range root.Items {
 		if !it.Hidden {
 			visible = append(visible, it.Label)
 		}
 	}
-	want := []string{"A", "C", "Aperture connection"}
+	want := []string{"A", "C"}
 	if !slices.Equal(visible, want) {
 		t.Errorf("visible items = %v, want %v", visible, want)
 	}
@@ -879,8 +879,10 @@ func TestRootMenu_OpensConnectionPicker(t *testing.T) {
 	m := pickerModel(t)
 	m.resetStack(m.rootMenu())
 
-	idx, _ := findItem(t, m.top().Items, "Aperture connection")
-	m.activate(idx)
+	if !strings.Contains(m.top().Hint, "[c] Change connection") {
+		t.Errorf("root hint = %q, want it to advertise the picker", m.top().Hint)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if got := m.top().Title; got != endpointsTitle {
 		t.Fatalf("menu title = %q, want %q", got, endpointsTitle)
 	}

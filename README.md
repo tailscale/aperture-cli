@@ -53,7 +53,7 @@ This is useful on machines where installing Tailscale is not practical, where Ap
 
 To use bridge mode:
 
-1. Choose `Aperture connection` on the agent menu (also reachable as `Settings`, then `Aperture Endpoints`).
+1. Press `c` on the agent menu for `Change connection` (the same screen as `Settings`, then `Aperture Endpoints`).
 2. Choose `Add a connection`, then `Bridge`, then an existing bridge or `Add Bridge`.
 3. Follow the Tailscale login prompt for the bridge. No URL is asked for: the bridge looks for Aperture at `http://ai`, the same location a direct connection starts from.
 4. Aperture CLI verifies `/v1/models`, makes the endpoint active, and returns to the agent menu.
@@ -62,7 +62,7 @@ If your Aperture answers on a different hostname, type it on the connect screen 
 
 ### Choosing a connection
 
-`Aperture connection` lists everything this launcher can reach: each saved endpoint, and each bridge that has no endpoint yet, labelled with the tailnet it reaches. That is the screen to use when the launcher connected on its own and you wanted the other bridge.
+`Change connection` lists everything this launcher can reach: each saved endpoint, and each bridge that has no endpoint yet, labelled with the tailnet it reaches. That is the screen to use when the launcher connected on its own and you wanted the other bridge.
 
 Selecting a row opens it. From there you can connect to it, change its URL, switch its tailnet, or remove it.
 
