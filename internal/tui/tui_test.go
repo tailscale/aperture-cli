@@ -1202,10 +1202,31 @@ func TestActivationTickRunsOnlyWhileConnecting(t *testing.T) {
 	}
 }
 
+// TestBridgeLogSinkStampsElapsed covers the one thing a bridge log has to
+// answer after a slow connection: which phase the wait was in. Without the
+// stamp, "waiting for a login link" and "Bridge connected" are adjacent lines
+// whether the gap between them was 200ms or 29s.
+func TestBridgeLogSinkStampsElapsed(t *testing.T) {
+	ch := make(chan bridgeLine, 1)
+	logf := bridgeLogSink(context.Background(), ch, time.Now().Add(-12500*time.Millisecond))
+	logf("  Bridge connected.  ")
+
+	line := <-ch
+	if line.text != "Bridge connected." {
+		t.Errorf("text = %q, want it trimmed", line.text)
+	}
+	if line.elapsed < 12*time.Second {
+		t.Errorf("elapsed = %s, want it measured from the attempt's start", line.elapsed)
+	}
+	if want := "+12.5s  Bridge connected."; line.String() != want {
+		t.Errorf("rendered = %q, want %q", line.String(), want)
+	}
+}
+
 func TestBridgeLogSinkIgnoresLateLogsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan string, 1)
-	logf := bridgeLogSink(ctx, ch)
+	ch := make(chan bridgeLine, 1)
+	logf := bridgeLogSink(ctx, ch, time.Now())
 
 	cancel()
 	close(ch)
@@ -1216,8 +1237,8 @@ func TestBridgeLogSinkIgnoresLateLogsAfterCancellation(t *testing.T) {
 
 func TestWaitBridgeLogDrainsBufferedLogBeforeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan string, 1)
-	ch <- "final dial error"
+	ch := make(chan bridgeLine, 1)
+	ch <- bridgeLine{text: "final dial error"}
 	cancel()
 
 	msg := waitBridgeLog(ctx, ch)()
@@ -1225,25 +1246,28 @@ func TestWaitBridgeLogDrainsBufferedLogBeforeCancellation(t *testing.T) {
 	if !ok {
 		t.Fatalf("message = %T, want bridgeLogMsg", msg)
 	}
-	if logMsg.line != "final dial error" {
-		t.Errorf("line = %q, want final dial error", logMsg.line)
+	if logMsg.line.text != "final dial error" {
+		t.Errorf("line = %q, want final dial error", logMsg.line.text)
 	}
 }
 
 func TestAppendBridgeLogRetainsDiagnosticsOverTsnetNoise(t *testing.T) {
-	logs := []string{
-		`Bridge network: state=Running tailnet="example.com" peers=598`,
-		`Bridge target is visible: requested="aperture.example.ts.net"`,
+	logs := []bridgeLine{
+		{text: `Bridge network: state=Running tailnet="example.com" peers=598`},
+		{text: `Bridge target is visible: requested="aperture.example.ts.net"`},
 	}
 	for i := range bridgeLogLimit + 10 {
-		logs = appendBridgeLog(logs, fmt.Sprintf("magicsock: noisy line %d", i))
+		logs = appendBridgeLog(logs, bridgeLine{text: fmt.Sprintf("magicsock: noisy line %d", i)})
 	}
-	logs = appendBridgeLog(logs, "Bridge dial failed: lookup failed")
+	logs = appendBridgeLog(logs, bridgeLine{text: "Bridge dial failed: lookup failed"})
 
 	if len(logs) != bridgeLogLimit {
 		t.Fatalf("len(logs) = %d, want %d", len(logs), bridgeLogLimit)
 	}
-	got := strings.Join(logs, "\n")
+	var got string
+	for _, line := range logs {
+		got += line.text + "\n"
+	}
 	for _, want := range []string{"Bridge network:", "Bridge target is visible:", "Bridge dial failed:"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("logs lost %q:\n%s", want, got)
@@ -1299,7 +1323,7 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 	}
 	t.Cleanup(func() { openURL = orig })
 
-	ch := make(chan string, 1)
+	ch := make(chan bridgeLine, 1)
 	// Cancelled: waitBridgeLog then answers immediately, so running the batch
 	// does not block on a log line that will never come.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1310,12 +1334,12 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 		act:   &activation{id: 7, logCh: ch, logCtx: ctx},
 	}
 
-	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: tsnetLine})
+	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{text: tsnetLine}})
 	runCmd(t, cmd)
 	if len(opened) != 1 || opened[0] != testAuthURL {
 		t.Fatalf("browser opens = %q, want one at %q", opened, testAuthURL)
 	}
-	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: tsnetLine})
+	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{text: tsnetLine}})
 	runCmd(t, cmd)
 	if len(opened) != 1 {
 		t.Errorf("repeated auth URL opened the browser again: %q", opened)
@@ -1332,7 +1356,7 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 	}
 
 	m.Update(browserOpenMsg{id: 7, err: errors.New("exec: \"xdg-open\": not found")})
-	if len(m.bridgeLogs) != 1 || !strings.Contains(m.bridgeLogs[0], "Use the link below") {
+	if len(m.bridgeLogs) != 1 || !strings.Contains(m.bridgeLogs[0].text, "Use the link below") {
 		t.Errorf("failed open did not tell the user to use the link: %q", m.bridgeLogs)
 	}
 	m.Update(browserOpenMsg{id: 6, err: errors.New("stale")})
@@ -1529,8 +1553,8 @@ func TestFailureViewWrapsDiagnostics(t *testing.T) {
 		width:            50,
 		forcedToEndpoint: true,
 		preflightErr:     "bridge Work Bridge could not reach endpoint: lookup aperture.example.ts.net on 127.0.0.53:53: no such host",
-		bridgeLogs: []string{
-			`Bridge network: state=Running tailnet="example.com" dns_suffix="example.ts.net" peers=597`,
+		bridgeLogs: []bridgeLine{
+			{text: `Bridge network: state=Running tailnet="example.com" dns_suffix="example.ts.net" peers=597`},
 		},
 	}
 	m.resetStack(m.setupGuideMenu())

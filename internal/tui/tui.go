@@ -98,7 +98,7 @@ type model struct {
 	activationSeq    int
 	preflightErr     string
 	forcedToEndpoint bool // true when preflight failure dropped user on endpoints menu
-	bridgeLogs       []string
+	bridgeLogs       []bridgeLine
 	failedEndpoint   *config.Endpoint
 	connected        bool
 
@@ -126,7 +126,7 @@ type activation struct {
 	// so abandoning or overriding the attempt takes it back out instead of
 	// leaving an endpoint nobody chose.
 	ephemeral bool
-	logCh     chan string
+	logCh     chan bridgeLine
 	logCtx    context.Context
 	// authURL is the Tailscale login link already surfaced for this attempt.
 	// tsnet reprints its line every few seconds, so this is what keeps the
@@ -140,6 +140,12 @@ type activation struct {
 	// override is the inline "different Aperture URL" editor shown while a
 	// bridge attempt runs.
 	override textField
+}
+
+// logLine stamps a line the TUI itself produces (a browser or clipboard
+// failure) against the same clock the bridge's own lines are stamped with.
+func (a *activation) logLine(text string) bridgeLine {
+	return bridgeLine{elapsed: time.Since(a.started), text: text}
 }
 
 // cancelable reports whether Esc can interrupt this attempt.
@@ -210,11 +216,27 @@ type endpointActivationResult struct {
 	err       error
 }
 
-type bridgeLogMsg struct {
-	ch   chan string
-	line string
+// bridgeLine is one activation log line and how far into the attempt it was
+// produced. The elapsed time is the reason this is a struct and not a string:
+// a bridge that takes half a minute to come up spends that time in one of
+// three places (the control plane answering with a login link, the user in the
+// browser, the first dial), and an unstamped log cannot tell them apart. Three
+// separate fixes have now been aimed at that wait without knowing which.
+type bridgeLine struct {
+	elapsed time.Duration
+	text    string
 }
-type bridgeLogDoneMsg struct{ ch chan string }
+
+// String renders a log line the way the connect screen shows it.
+func (l bridgeLine) String() string {
+	return fmt.Sprintf("+%-6s %s", l.elapsed.Round(100*time.Millisecond), l.text)
+}
+
+type bridgeLogMsg struct {
+	ch   chan bridgeLine
+	line bridgeLine
+}
+type bridgeLogDoneMsg struct{ ch chan bridgeLine }
 
 // browserOpenMsg reports whether the desktop opener for a bridge login link
 // started. id ties it to the attempt that asked, so a cancelled attempt's
@@ -357,14 +379,14 @@ func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet boo
 		}
 	}
 
-	ch := make(chan string, 32)
+	ch := make(chan bridgeLine, 32)
 	act.logCh = ch
 	act.logCtx = ctx
 	act.label = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
 	if switchTailnet {
 		act.label = "Switching bridge " + bridge.Name + " to a different tailnet ..."
 	}
-	bridgeLogf := bridgeLogSink(ctx, ch)
+	bridgeLogf := bridgeLogSink(ctx, ch, act.started)
 	activate := func() tea.Msg {
 		defer cancel()
 		// Inside the attempt, so it shares the attempt's cancellation and log
@@ -514,12 +536,16 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 	return m, m.activateEndpoint(next, ephemeral, false)
 }
 
-func bridgeLogSink(ctx context.Context, ch chan<- string) func(string) {
-	return func(line string) {
-		line = strings.TrimSpace(line)
-		if line == "" {
+func bridgeLogSink(ctx context.Context, ch chan<- bridgeLine, started time.Time) func(string) {
+	return func(text string) {
+		text = strings.TrimSpace(text)
+		if text == "" {
 			return
 		}
+		// Stamped here rather than where the message is handled: a burst of
+		// tsnet logs queues in the channel, and a stamp read after the queue
+		// would attribute the queueing delay to the wrong line.
+		line := bridgeLine{elapsed: time.Since(started), text: text}
 		select {
 		case <-ctx.Done():
 			return
@@ -533,7 +559,7 @@ func bridgeLogSink(ctx context.Context, ch chan<- string) func(string) {
 	}
 }
 
-func waitBridgeLog(ctx context.Context, ch chan string) tea.Cmd {
+func waitBridgeLog(ctx context.Context, ch chan bridgeLine) tea.Cmd {
 	return func() tea.Msg {
 		// Drain anything already logged before observing cancellation. This
 		// preserves the final dial/proxy error when preflight cancels the log
@@ -667,7 +693,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		next := waitBridgeLog(m.act.logCtx, m.act.logCh)
-		if url := authURLFromLog(msg.line); url != "" {
+		if url := authURLFromLog(msg.line.text); url != "" {
 			if url == m.act.authURL {
 				return m, next // tsnet reprinting the same link
 			}
@@ -695,7 +721,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.act == nil || m.act.id != msg.id || msg.err == nil {
 			return m, nil
 		}
-		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, "Could not open a browser here ("+msg.err.Error()+"). Use the link below to authorize.")
+		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, m.act.logLine("Could not open a browser here ("+msg.err.Error()+"). Use the link below to authorize."))
 		return m, nil
 
 	case clipboardMsg:
@@ -703,7 +729,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.bridgeLogs = appendBridgeLog(m.bridgeLogs, "Could not copy the link ("+msg.err.Error()+"). Select it with the mouse instead.")
+			m.bridgeLogs = appendBridgeLog(m.bridgeLogs, m.act.logLine("Could not copy the link ("+msg.err.Error()+"). Select it with the mouse instead."))
 			return m, nil
 		}
 		m.act.copied = true
@@ -792,12 +818,12 @@ const bridgeLogLimit = 12
 // diagnostics produced by aperture-cli itself. Verbose tsnet messages can be
 // frequent enough to otherwise evict the network identity, target visibility,
 // and dial failure that -debug is intended to expose.
-func appendBridgeLog(logs []string, line string) []string {
+func appendBridgeLog(logs []bridgeLine, line bridgeLine) []bridgeLine {
 	logs = append(logs, line)
 	for len(logs) > bridgeLogLimit {
 		drop := 0
 		for i, line := range logs {
-			if !importantBridgeLog(line) {
+			if !importantBridgeLog(line.text) {
 				drop = i
 				break
 			}
@@ -1110,7 +1136,7 @@ func (m *model) viewPreflight() string {
 	var sb strings.Builder
 	sb.WriteString(m.wrapText("", dotYellow+" "+label+activationElapsed(m.act)) + "\n")
 	for _, line := range m.bridgeLogs {
-		sb.WriteString(dimStyle.Render(m.wrapText("  ", line)))
+		sb.WriteString(dimStyle.Render(m.wrapText("  ", line.String())))
 		sb.WriteString("\n")
 	}
 	switch {
@@ -1387,7 +1413,7 @@ func (m *model) menuHeader(top *menu.Menu) string {
 		}
 		if m.g.Debug {
 			for _, line := range m.bridgeLogs {
-				header += dimStyle.Render(m.wrapText("  ", line)) + "\n"
+				header += dimStyle.Render(m.wrapText("  ", line.String())) + "\n"
 			}
 		}
 		return header + "\n"
