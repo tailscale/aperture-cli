@@ -2,8 +2,13 @@
 
 ## Design
 
-This project is being taken toward domain-driven design. New work that
-introduces or reshapes a domain concept is modelled before it is written.
+Domain-driven design is the primary design paradigm for this project. New work
+that introduces or reshapes a domain concept is modelled before it is written.
+
+The domain model, the data model and the contracts are one first step, not
+three stages. A domain model without its contracts is a description; contracts
+without a model have nothing to be complete about. Define them together, before
+the code, and let each correct the other.
 
 - Bounded contexts are sized by language, not by responsibility. Splitting a
   context because two halves feel like different jobs is the usual mistake;
@@ -23,14 +28,11 @@ Artifacts, written before the code:
   relationships, ambiguous terms.
 - `docs/specs/<context>-domain-model.md` — one section per object, with
   fields, behaviours, invariants, states and relationships.
-- `docs/specs/<context>-contracts.md` — every domain event to 100%, and every
-  aggregate transition traced through them. A contract this project does not
-  have (there is no service API and no relational store) is recorded as absent
-  with its reason, never left blank.
+- `docs/specs/<context>-contracts.md` — the API, the domain events and the data
+  model, each to 100% and cross-checked against each other, so every aggregate
+  transition can be traced through all three. A contract this project does not
+  have is recorded as absent with its reason, never left blank.
 - `docs/adr/NNNN-<slug>.md` — the decision and the forcing reason.
-
-The discipline is the `ddd` plugin's `domain-driven-design` and
-`defining-contracts` skills; these paths are the project's, not the tool's.
 
 Mermaid diagrams in those files are rendered before the commit that adds them.
 
