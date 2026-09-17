@@ -984,8 +984,18 @@ func TestConnectionPicker_RemovesInactiveConnection(t *testing.T) {
 	if got := m.top().Title; got != endpointsTitle {
 		t.Fatalf("menu title = %q, want to be back on %q", got, endpointsTitle)
 	}
-	// Work has no endpoint now, so it comes back as a bridge row.
-	findItem(t, m.top().Items, "Connect via Work")
+	// Work used to come back as a bare bridge row here, which read as the row
+	// moving to the bottom rather than being removed and took a second press
+	// to clear. Removing the connection removes the bridge it was the last
+	// endpoint for.
+	for _, it := range m.top().Items {
+		if strings.Contains(it.Label, "Work") {
+			t.Errorf("Work still on the picker as %q", it.Label)
+		}
+	}
+	if len(m.g.Settings.Bridges) != 1 || m.g.Settings.Bridges[0].Name != "Home" {
+		t.Errorf("bridges = %+v, want only Home", m.g.Settings.Bridges)
+	}
 }
 
 // The hint promises "d to remove" on every row, so it has to mean the same
@@ -1654,6 +1664,68 @@ func TestBridgeLogSinkNeverDropsTheLoginLink(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("the login link never arrived; a full buffer swallowed it")
+		}
+	}
+}
+
+// TestRemoveConnectionRowTakesTheBridgeWithIt covers what one press of "d" is
+// supposed to mean. A bridge-backed endpoint is one row on the picker, but it
+// is two objects in settings, and removing only the endpoint left the bridge
+// behind to be re-listed as a bare "Connect via" row at the bottom. The row
+// read as having moved rather than gone, and clearing it took a second press.
+func TestRemoveConnectionRowTakesTheBridgeWithIt(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := &model{g: &config.Global{Settings: config.Settings{
+		Endpoints: []config.Endpoint{
+			{URL: "http://active"},
+			{URL: "http://ai", BridgeID: "b1"},
+		},
+		Bridges: []config.Bridge{{ID: "b1", Name: "work"}},
+	}}}
+
+	rows := m.connectionRows()
+	if len(rows) != 2 {
+		t.Fatalf("connectionRows() = %d rows, want 2", len(rows))
+	}
+	m.removeConnectionRow(rows[1])
+
+	after := m.connectionRows()
+	if len(after) != 1 {
+		t.Fatalf("after one remove: %d rows, want 1", len(after))
+	}
+	if after[0].ep.URL != "http://active" {
+		t.Errorf("surviving row = %q, want the untouched endpoint", after[0].ep.URL)
+	}
+	if len(m.g.Settings.Bridges) != 0 {
+		t.Errorf("bridges = %+v, want the orphan gone with its endpoint", m.g.Settings.Bridges)
+	}
+}
+
+// TestRemoveConnectionRowKeepsASharedBridge is the other half: the cascade may
+// only take a bridge nothing else points at.
+func TestRemoveConnectionRowKeepsASharedBridge(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := &model{g: &config.Global{Settings: config.Settings{
+		Endpoints: []config.Endpoint{
+			{URL: "http://active"},
+			{URL: "http://ai", BridgeID: "b1"},
+			{URL: "http://other", BridgeID: "b1"},
+		},
+		Bridges: []config.Bridge{{ID: "b1", Name: "work"}},
+	}}}
+
+	m.removeConnectionRow(m.connectionRows()[1])
+
+	if len(m.g.Settings.Bridges) != 1 {
+		t.Fatalf("bridges = %+v, want the bridge kept for the other endpoint", m.g.Settings.Bridges)
+	}
+	rows := m.connectionRows()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 with no bare bridge row", len(rows))
+	}
+	for _, r := range rows {
+		if !r.saved {
+			t.Errorf("unexpected bare bridge row: %+v", r)
 		}
 	}
 }

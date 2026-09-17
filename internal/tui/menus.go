@@ -505,6 +505,9 @@ func (m *model) removeConnection(ep config.Endpoint) menu.Result {
 		if err := m.g.RemoveEndpoint(i); err != nil {
 			return errResult(err.Error())
 		}
+		if err := m.dropOrphanBridge(existing.BridgeID); err != nil {
+			return errResult(err.Error())
+		}
 		break
 	}
 	if m.failedEndpoint != nil && sameEndpoint(*m.failedEndpoint, ep) {
@@ -514,6 +517,25 @@ func (m *model) removeConnection(ep config.Endpoint) menu.Result {
 	}
 	m.refreshEndpointsMenu()
 	return menu.Result{Cmd: tea.ClearScreen}
+}
+
+// dropOrphanBridge removes a bridge once its last endpoint is gone.
+//
+// The picker shows a bridge-backed endpoint as one row, but settings hold two
+// objects, and removing only the endpoint left the bridge to be re-listed by
+// connectionRows as a bare "Connect via" row at the bottom. To the user that
+// read as the row moving instead of going, and clearing it took a second
+// press. A bridge two endpoints reach through is not an orphan and stays.
+func (m *model) dropOrphanBridge(id string) error {
+	if id == "" {
+		return nil
+	}
+	for _, ep := range m.g.Settings.Endpoints {
+		if ep.BridgeID == id {
+			return nil
+		}
+	}
+	return m.g.RemoveBridge(id)
 }
 
 // switchTailnetMenu confirms logging a bridge out. A bridge holds one tailnet
@@ -631,6 +653,9 @@ func (m *model) setupGuideMenu() *menu.Menu {
 						continue
 					}
 					if err := m.g.RemoveEndpoint(i); err != nil {
+						return errResult(err.Error())
+					}
+					if err := m.dropOrphanBridge(ep.BridgeID); err != nil {
 						return errResult(err.Error())
 					}
 					break
