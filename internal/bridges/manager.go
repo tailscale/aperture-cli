@@ -178,6 +178,11 @@ func (n *tsnetNode) WatchLogin(ctx context.Context, ev events) {
 	// so only a failure the caller did not ask for is worth a line.
 	report := func(err error) {
 		if err != nil && ctx.Err() == nil {
+			// Logged as well as noted: a watch that dies leaves the attempt
+			// sitting on whatever phase it last reported, forever and in
+			// silence, which is indistinguishable on screen from a control
+			// plane that is simply slow.
+			slog.Error("bridge login watch ended", "err", err)
 			ev.note("Could not watch the bridge's login state: " + err.Error())
 		}
 	}
@@ -240,6 +245,11 @@ func (r *loginReporter) notify(n *ipn.Notify) {
 		return
 	}
 	if n.State != nil {
+		// The raw state, not just the phase it maps to: NoState and NeedsLogin
+		// are one phase on screen on purpose, and they are the whole question
+		// in a log. NoState means control has not answered the register yet,
+		// NeedsLogin means it has and the link is the next thing due.
+		slog.Info("bridge ipn state", "state", n.State.String())
 		switch *n.State {
 		case ipn.NoState, ipn.NeedsLogin:
 			// Both, and NoState is the one that matters. A bridge that has
@@ -263,6 +273,10 @@ func (r *loginReporter) notify(n *ipn.Notify) {
 	if n.BrowseToURL != nil {
 		link, err := connection.ParseLoginLink(*n.BrowseToURL)
 		if err != nil {
+			// The URL itself, because "the control plane sent one and we threw
+			// it away" and "the control plane never sent one" are the same
+			// silence on screen and want opposite fixes.
+			slog.Error("unusable login link from the control plane", "url", *n.BrowseToURL, "err", err)
 			// Not fatal to the login: tsnet keeps printing its own copy, and
 			// the user can still finish by hand. Worth saying, because the
 			// browser is not going to open.

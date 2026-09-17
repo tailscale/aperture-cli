@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -402,6 +403,11 @@ func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet boo
 	emit := bridgeLogSink(ctx, ch, act.started)
 	activate := func() tea.Msg {
 		defer cancel()
+		// Stamps the moment the user committed to this endpoint. Without it
+		// the first bridge line is the earliest thing in the log, and the gap
+		// in front of it reads as startup cost when it is usually someone
+		// reading the menu.
+		slog.Info("activating endpoint", "url", ep.URL, "bridge", bridge.ID, "switchTailnet", switchTailnet)
 		// Inside the attempt, so it shares the attempt's cancellation and event
 		// sink: the new login link is what the user needs on screen, and Esc
 		// has to reach a logout that stalls on the old tailnet.

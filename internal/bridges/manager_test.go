@@ -964,3 +964,35 @@ func TestSinkLogsEveryEvent(t *testing.T) {
 		}
 	}
 }
+
+// TestNotifyLogsWhatTheScreenCollapses is the 43 second kill: the connect
+// screen reported "Waiting for a login link" and then nothing, which is the
+// same picture whether the register is slow, the link was thrown away, or the
+// watch died. The screen merges those on purpose. The run log must not.
+func TestNotifyLogsWhatTheScreenCollapses(t *testing.T) {
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	var lines []string
+	r := &loginReporter{ev: collect(&lines)}
+	r.notify(state(ipn.NoState))
+	r.notify(state(ipn.NeedsLogin))
+	r.notify(browse("http://evil.example.com/a/x"))
+
+	logged := buf.String()
+	// Both states, though the screen shows one phase for the pair: which one
+	// the attempt is stuck in is the difference between waiting on control and
+	// waiting on the user.
+	for _, want := range []string{ipn.NoState.String(), ipn.NeedsLogin.String()} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("run log = %q, want the raw state %q", logged, want)
+		}
+	}
+	// At Info, not behind -debug: the note this pairs with is a debug note, so
+	// without this a discarded link is invisible on the run that hit it.
+	if !strings.Contains(logged, "http://evil.example.com/a/x") {
+		t.Errorf("run log = %q, want the link that was thrown away", logged)
+	}
+}
