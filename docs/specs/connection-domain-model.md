@@ -321,6 +321,11 @@ classDiagram
 
 ## Open, not assumed
 
+- Two cross-aggregate reactions have no owning object, found by the
+  [contracts pass](connection-contracts.md): recording the tailnet a Crossing
+  joined onto its Bridge, and deciding which Gateway is current for the next
+  client launch. Both live in the TUI today, which orchestrates but should not
+  decide. Needs resolving before the events are implemented.
 - Whether a reused Crossing should replay its phases to a second Attempt or
   report a single `FindingEndpoint`. Today it reports nothing, which looks like
   a hang for as long as the peer wait takes.

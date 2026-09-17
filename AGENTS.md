@@ -23,7 +23,14 @@ Artifacts, written before the code:
   relationships, ambiguous terms.
 - `docs/specs/<context>-domain-model.md` — one section per object, with
   fields, behaviours, invariants, states and relationships.
+- `docs/specs/<context>-contracts.md` — every domain event to 100%, and every
+  aggregate transition traced through them. A contract this project does not
+  have (there is no service API and no relational store) is recorded as absent
+  with its reason, never left blank.
 - `docs/adr/NNNN-<slug>.md` — the decision and the forcing reason.
+
+The discipline is the `ddd` plugin's `domain-driven-design` and
+`defining-contracts` skills; these paths are the project's, not the tool's.
 
 Mermaid diagrams in those files are rendered before the commit that adds them.
 
