@@ -22,6 +22,7 @@ import (
 	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
+	"github.com/tailscale/aperture-cli/internal/connection"
 	"github.com/tailscale/aperture-cli/internal/menu"
 )
 
@@ -128,10 +129,13 @@ type activation struct {
 	ephemeral bool
 	logCh     chan bridgeLine
 	logCtx    context.Context
+	// phase is the wait this attempt is in, and phaseSet distinguishes "not
+	// started" from StartingMachine, which is the zero value.
+	phase    connection.Phase
+	phaseSet bool
 	// authURL is the Tailscale login link already surfaced for this attempt.
-	// tsnet reprints its line every few seconds, so this is what keeps the
-	// log tail from filling with one repeated URL and the browser from being
-	// opened again on each repeat.
+	// The control plane can re-send it on the bus, so this is what keeps the
+	// browser from being opened again on each repeat.
 	authURL string
 	// copied records that the login link reached the terminal's clipboard, so
 	// the copy button can say so. A click that does nothing visible reads as a
@@ -145,7 +149,22 @@ type activation struct {
 // logLine stamps a line the TUI itself produces (a browser or clipboard
 // failure) against the same clock the bridge's own lines are stamped with.
 func (a *activation) logLine(text string) bridgeLine {
-	return bridgeLine{elapsed: time.Since(a.started), text: text}
+	return bridgeLine{elapsed: time.Since(a.started), event: connection.Note(text)}
+}
+
+// entered records a phase the attempt moved into, and reports whether it moved.
+//
+// The attempt owns this rule, not the bridge: phases reach it from the IPN bus
+// watch and from the manager's own progress, and only something that sees both
+// can keep them in order. A phase that does not move forward is dropped rather
+// than shown, because a bus that re-notifies NeedsLogin after the link is on
+// screen would otherwise walk the user backwards through their own wait.
+func (a *activation) entered(p connection.Phase) bool {
+	if a.phaseSet && p <= a.phase {
+		return false
+	}
+	a.phase, a.phaseSet = p, true
+	return true
 }
 
 // cancelable reports whether Esc can interrupt this attempt.
@@ -216,20 +235,20 @@ type endpointActivationResult struct {
 	err       error
 }
 
-// bridgeLine is one activation log line and how far into the attempt it was
-// produced. The elapsed time is the reason this is a struct and not a string:
-// a bridge that takes half a minute to come up spends that time in one of
-// three places (the control plane answering with a login link, the user in the
-// browser, the first dial), and an unstamped log cannot tell them apart. Three
-// separate fixes have now been aimed at that wait without knowing which.
+// bridgeLine is one thing the attempt reported and how far into the attempt it
+// was reported. The elapsed time is the reason this is a struct and not a
+// string: a bridge that takes half a minute to come up spends that time in one
+// of three places (the control plane answering with a login link, the user in
+// the browser, the first dial), and an unstamped log cannot tell them apart.
+// Three separate fixes have now been aimed at that wait without knowing which.
 type bridgeLine struct {
 	elapsed time.Duration
-	text    string
+	event   connection.Event
 }
 
 // String renders a log line the way the connect screen shows it.
 func (l bridgeLine) String() string {
-	return fmt.Sprintf("+%-6s %s", l.elapsed.Round(100*time.Millisecond), l.text)
+	return fmt.Sprintf("+%-6s %s", l.elapsed.Round(100*time.Millisecond), l.event)
 }
 
 type bridgeLogMsg struct {
@@ -386,25 +405,27 @@ func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet boo
 	if switchTailnet {
 		act.label = "Switching bridge " + bridge.Name + " to a different tailnet ..."
 	}
-	bridgeLogf := bridgeLogSink(ctx, ch, act.started)
+	emit := bridgeLogSink(ctx, ch, act.started)
 	activate := func() tea.Msg {
 		defer cancel()
-		// Inside the attempt, so it shares the attempt's cancellation and log
+		// Inside the attempt, so it shares the attempt's cancellation and event
 		// sink: the new login link is what the user needs on screen, and Esc
 		// has to reach a logout that stalls on the old tailnet.
 		if switchTailnet {
-			if err := m.bridgeManager.SwitchTailnet(ctx, bridge, bridgeLogf); err != nil {
+			if err := m.bridgeManager.SwitchTailnet(ctx, bridge, emit); err != nil {
 				return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
 			}
 		}
-		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, bridgeLogf)
+		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, emit)
 		if err != nil {
 			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
 		}
 		// The request below is the longest silent stretch of the whole
 		// attempt: the bridge is up, so tsnet has stopped logging, and
-		// nothing else names the host being waited on.
-		bridgeLogf("Asking " + ep.URL + " for its models ...")
+		// nothing else names the host being waited on. The phase comes from
+		// here and not from the bridge because asking an Aperture for its
+		// models is the attempt's own work, not the bridge's.
+		emit(connection.Entered(connection.AskingForModels))
 		provs, err := fetchProvidersContext(ctx, localURL, bridgeProviderFetchTimeout)
 		if err != nil {
 			err = fmt.Errorf("bridge %s could not reach %s: %w", bridge.Name, ep.URL, err)
@@ -536,25 +557,44 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 	return m, m.activateEndpoint(next, ephemeral, false)
 }
 
-func bridgeLogSink(ctx context.Context, ch chan<- bridgeLine, started time.Time) func(string) {
-	return func(text string) {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			return
+// bridgeLogSink is where the attempt's events land on their way to the update
+// loop.
+//
+// Only diagnostics are dropped when the buffer is full. Everything else waits
+// for room, bounded by the attempt's own cancellation, because the events that
+// are not diagnostics are the ones the user cannot proceed without: this sink
+// used to drop whatever arrived on a full buffer, and under -debug the tsnet
+// backend logger shares it, so a burst of chatter could take the login link
+// with it and strand the attempt on a link nobody ever saw.
+func bridgeLogSink(ctx context.Context, ch chan<- bridgeLine, started time.Time) func(connection.Event) {
+	return func(ev connection.Event) {
+		if ev.Kind == connection.Noted {
+			ev.Text = strings.TrimSpace(ev.Text)
+			if ev.Text == "" {
+				return
+			}
 		}
 		// Stamped here rather than where the message is handled: a burst of
 		// tsnet logs queues in the channel, and a stamp read after the queue
 		// would attribute the queueing delay to the wrong line.
-		line := bridgeLine{elapsed: time.Since(started), text: text}
+		line := bridgeLine{elapsed: time.Since(started), event: ev}
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+		if ev.Droppable() {
+			// No ctx case: it was just checked, and a select that offers both
+			// picks between them at random when the send would also succeed.
+			select {
+			case ch <- line:
+			default:
+			}
+			return
+		}
 		select {
 		case <-ctx.Done():
 		case ch <- line:
-		default:
 		}
 	}
 }
@@ -693,15 +733,21 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		next := waitBridgeLog(m.act.logCtx, m.act.logCh)
-		if url := authURLFromLog(msg.line.text); url != "" {
+		switch msg.line.event.Kind {
+		case connection.LoginRequired:
+			url := msg.line.event.Link.String()
 			if url == m.act.authURL {
-				return m, next // tsnet reprinting the same link
+				return m, next // the control plane re-sent the same link
 			}
 			// Not appended to the log tail: the footer owns the link now, and
 			// two copies of a 60 character URL on one screen is noise.
 			m.act.authURL = url
 			m.act.copied = false
 			return m, tea.Batch(next, openURLCmd(m.act.id, url))
+		case connection.PhaseEntered:
+			if !m.act.entered(msg.line.event.Phase) {
+				return m, next
+			}
 		}
 		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, msg.line)
 		return m, next
@@ -823,7 +869,7 @@ func appendBridgeLog(logs []bridgeLine, line bridgeLine) []bridgeLine {
 	for len(logs) > bridgeLogLimit {
 		drop := 0
 		for i, line := range logs {
-			if !importantBridgeLog(line.text) {
+			if !line.important() {
 				drop = i
 				break
 			}
@@ -831,6 +877,13 @@ func appendBridgeLog(logs []bridgeLine, line bridgeLine) []bridgeLine {
 		logs = append(logs[:drop], logs[drop+1:]...)
 	}
 	return logs
+}
+
+// important reports whether this line survives trimming. A phase always does:
+// the phases are the record of where the time went, and evicting one to make
+// room for tsnet chatter puts a gap in exactly the thing the log is for.
+func (l bridgeLine) important() bool {
+	return l.event.Kind != connection.Noted || importantBridgeLog(l.event.Text)
 }
 
 func importantBridgeLog(line string) bool {

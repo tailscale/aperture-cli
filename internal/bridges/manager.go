@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tailscale/aperture-cli/internal/config"
+	"github.com/tailscale/aperture-cli/internal/connection"
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -58,15 +59,29 @@ type tailnetNode interface {
 	Up(context.Context) (*ipnstate.Status, error)
 	Status(context.Context) (*ipnstate.Status, error)
 	DialContext(context.Context, string, string) (net.Conn, error)
-	WatchLogin(context.Context, func(string))
+	WatchLogin(context.Context, events)
 	Logout(context.Context) error
 	Close() error
 }
 
-// AuthLogPrefix labels the login link in a bridge's activation log. Callers
-// parse it back out of the log stream to open a browser, so the text is part
-// of this package's API rather than a message that can be reworded freely.
-const AuthLogPrefix = "Authorize this bridge in your browser: "
+// events is where a bridge reports what it is doing. This package translates
+// the tailnet's vocabulary into it and never publishes anything else: a caller
+// that had to recover meaning by matching the prose in a log line was matching
+// a phrase from inside a vendored package.
+type events func(connection.Event)
+
+// sink returns a usable events, so callers that want none can pass nil.
+func sink(emit func(connection.Event)) events {
+	if emit == nil {
+		return func(connection.Event) {}
+	}
+	return emit
+}
+
+func (e events) note(text string)                 { e(connection.Note(text)) }
+func (e events) notef(format string, args ...any) { e(connection.Notef(format, args...)) }
+func (e events) enter(p connection.Phase)         { e(connection.Entered(p)) }
+func (e events) login(link connection.LoginLink)  { e(connection.Login(link)) }
 
 type tsnetNode struct {
 	server *tsnet.Server
@@ -88,7 +103,8 @@ func (n *tsnetNode) DialContext(ctx context.Context, network, address string) (n
 	return n.server.Dial(ctx, network, address)
 }
 
-// WatchLogin logs what an interactive login is waiting on, until ctx is done.
+// WatchLogin reports what an interactive login is waiting on, until ctx is
+// done.
 //
 // tsnet surfaces the login link from a five second poll loop of its own, so a
 // link that lands just after a tick stays invisible for most of that window.
@@ -96,12 +112,12 @@ func (n *tsnetNode) DialContext(ctx context.Context, network, address string) (n
 // "NeedsLogin" and got killed a few hundred milliseconds before the link would
 // have been printed. The IPN bus has the link the moment the control plane
 // answers, so watch that instead of waiting for tsnet to notice.
-func (n *tsnetNode) WatchLogin(ctx context.Context, logf func(string)) {
+func (n *tsnetNode) WatchLogin(ctx context.Context, ev events) {
 	// A cancelled watch is how this returns on every connection that works,
 	// so only a failure the caller did not ask for is worth a line.
 	report := func(err error) {
 		if err != nil && ctx.Err() == nil {
-			logf("Could not watch the bridge's login state: " + err.Error())
+			ev.note("Could not watch the bridge's login state: " + err.Error())
 		}
 	}
 
@@ -118,26 +134,76 @@ func (n *tsnetNode) WatchLogin(ctx context.Context, logf func(string)) {
 		return
 	}
 	defer watcher.Close()
-	report(reportLogin(watcher, logf))
+	report(reportLogin(watcher, ev))
 }
 
-// reportLogin logs login progress from an IPN bus watch until it ends.
-func reportLogin(watcher *local.IPNBusWatcher, logf func(string)) error {
-	announced := false
+// reportLogin translates an IPN bus watch into phases until the watch ends.
+func reportLogin(watcher *local.IPNBusWatcher, ev events) error {
+	reporter := loginReporter{ev: ev}
 	for {
 		notify, err := watcher.Next()
 		if err != nil {
 			return err
 		}
-		if notify.State != nil && *notify.State == ipn.NeedsLogin && !announced {
-			// Otherwise the wait for the control plane to answer is silent,
-			// and the only thing on screen is tsnet's "NeedsLogin".
-			announced = true
-			logf("This bridge is not logged in to a tailnet yet. Waiting for a login link ...")
+		reporter.notify(&notify)
+	}
+}
+
+// loginReporter turns IPN bus notifications into the phases a connection
+// attempt reports. It holds the phase it last reported because the bus repeats
+// states, and the anti-corruption layer is the right place to absorb that.
+//
+// The mapping is the whole point of the exercise. ipn.NeedsLogin covers two
+// waits that look identical on screen and are not the same problem: before a
+// BrowseToURL arrives the control plane has not answered yet and there is
+// nothing for the user to do, and after it arrives everything is waiting on
+// them. Reporting the backend state is what made a 29 second registration
+// indistinguishable from a user who had wandered off.
+type loginReporter struct {
+	ev    events
+	phase connection.Phase
+}
+
+func (r *loginReporter) enter(p connection.Phase) {
+	// A re-notified NeedsLogin after the link is already on screen would walk
+	// the attempt backwards through a wait the user has already left.
+	if p <= r.phase {
+		return
+	}
+	r.phase = p
+	r.ev.enter(p)
+}
+
+func (r *loginReporter) notify(n *ipn.Notify) {
+	if n == nil {
+		return
+	}
+	if n.State != nil {
+		switch *n.State {
+		case ipn.NeedsLogin:
+			r.enter(connection.AwaitingLoginLink)
+		case ipn.NeedsMachineAuth:
+			// No phase of its own: we have never seen it, and inventing a wait
+			// we cannot observe is worse than a line that says what to go and
+			// do. Promote it if this turns out to be common.
+			r.ev.note("This bridge is waiting to be approved in the tailnet's admin console.")
+		case ipn.Starting:
+			r.enter(connection.JoiningTailnet)
+		case ipn.Running:
+			r.enter(connection.FindingEndpoint)
 		}
-		if notify.BrowseToURL != nil {
-			logf(AuthLogPrefix + *notify.BrowseToURL)
+	}
+	if n.BrowseToURL != nil {
+		link, err := connection.ParseLoginLink(*n.BrowseToURL)
+		if err != nil {
+			// Not fatal to the login: tsnet keeps printing its own copy, and
+			// the user can still finish by hand. Worth saying, because the
+			// browser is not going to open.
+			r.ev.note("Ignoring an unusable login link from the control plane: " + err.Error())
+			return
 		}
+		r.enter(connection.AwaitingAuthorization)
+		r.ev.login(link)
 	}
 }
 
@@ -182,36 +248,39 @@ func NewManager(debug bool) *Manager {
 
 // Activate starts or reuses a bridge reverse proxy for remoteURL and returns
 // the localhost URL clients should use.
-func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL string, logf func(string)) (string, error) {
+func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL string, emit func(connection.Event)) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("bridge manager is not configured")
 	}
 	if err := validateBridgeID(bridge.ID); err != nil {
 		return "", err
 	}
-	if logf == nil {
-		logf = func(string) {}
-	}
+	ev := sink(emit)
 	target, err := parseTarget(remoteURL)
 	if err != nil {
 		return "", err
 	}
 
-	rt, status, err := m.runningNode(ctx, bridge, logf)
+	rt, status, err := m.runningNode(ctx, bridge, ev)
 	if err != nil {
 		return "", err
 	}
+	// Here rather than in runningNode, which SwitchTailnet also uses and which
+	// returns immediately for a node that is already up. A reused bridge skips
+	// every earlier phase and would otherwise report nothing at all while the
+	// first dial waits for the target to appear in its peer map.
+	ev.enter(connection.FindingEndpoint)
 	if m.debug {
 		// Up deliberately returns status without peers. Ask the in-process
 		// LocalAPI for full status so debug output can distinguish a DNS
 		// problem from a target that is absent from this node's netmap. Do
 		// this on reuse too, since the selected endpoint might have changed.
 		if fullStatus, err := rt.node.Status(ctx); err != nil {
-			logf("Could not read bridge network status: " + err.Error())
+			ev.note("Could not read bridge network status: " + err.Error())
 		} else {
 			status = fullStatus
 		}
-		logBridgeStatus(logf, status, target)
+		logBridgeStatus(ev, status, target)
 	}
 
 	m.mu.Lock()
@@ -224,19 +293,19 @@ func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL 
 		return proxy.localURL, nil
 	}
 
-	proxy, err := m.startProxy(rt.node, target, logf)
+	proxy, err := m.startProxy(rt.node, target, ev)
 	if err != nil {
 		return "", err
 	}
 	rt.proxies[key] = proxy
-	logf("Listening on " + proxy.localURL)
+	ev.note("Listening on " + proxy.localURL)
 	return proxy.localURL, nil
 }
 
 // runningNode returns the bridge's node, starting it if this is the first use.
 // status is the login status Up reported, and is nil for a node that was
 // already running. Callers hold no lock.
-func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, logf func(string)) (*nodeRuntime, *ipnstate.Status, error) {
+func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, ev events) (*nodeRuntime, *ipnstate.Status, error) {
 	m.mu.Lock()
 	rt := m.nodes[bridge.ID]
 	if rt != nil {
@@ -248,14 +317,21 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, logf fu
 		m.mu.Unlock()
 		return nil, nil, err
 	}
-	userLogf := func(format string, args ...any) {
-		logf(fmt.Sprintf(format, args...))
-	}
-	debugLogf := func(format string, args ...any) {
+	// Both of tsnet's loggers are diagnostics now, and neither is on unless the
+	// user asked for them. Everything the attempt waits on is read off the IPN
+	// bus, where it is a fact rather than a sentence that can be reworded
+	// upstream, so tsnet's user-facing prose has nothing left to contribute: it
+	// is mostly printAuthURLLoop reprinting a link the footer already shows,
+	// once every five seconds, and it would push the phases off the screen.
+	//
+	// A no-op rather than nil: tsnet falls back to log.Printf when UserLogf is
+	// unset, which writes over the TUI.
+	logNotes := func(format string, args ...any) {
 		if m.debug {
-			logf(fmt.Sprintf(format, args...))
+			ev.notef(format, args...)
 		}
 	}
+	userLogf, debugLogf := logNotes, logNotes
 	rt = &nodeRuntime{
 		node:    m.newNode(bridge, stateDir, userLogf, debugLogf),
 		proxies: make(map[string]*proxyRuntime),
@@ -263,14 +339,14 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, logf fu
 	m.nodes[bridge.ID] = rt
 	m.mu.Unlock()
 
-	logf("Starting bridge " + bridge.Name + " (" + bridge.ID + ")")
+	ev.enter(connection.StartingMachine)
 
 	// Up blocks until the node is Running, which for a bridge that has never
 	// logged in means blocking until the user visits a link nothing has shown
 	// them yet. The watch runs alongside it and ends with it.
 	watchCtx, stopWatch := context.WithCancel(ctx)
 	defer stopWatch()
-	go rt.node.WatchLogin(watchCtx, logf)
+	go rt.node.WatchLogin(watchCtx, ev)
 
 	status, err := rt.node.Up(ctx)
 	if err != nil {
@@ -281,7 +357,6 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, logf fu
 		m.mu.Unlock()
 		return nil, nil, errors.Join(err, rt.node.Close())
 	}
-	logf("Bridge connected.")
 
 	// Up returns the login status, so the tailnet this bridge reaches costs no
 	// extra call. The connection picker names it on rows the user has not
@@ -316,22 +391,20 @@ func (m *Manager) Tailnet(bridgeID string) string {
 // them on the next start. A node that was never started this session is
 // therefore brought up on the old tailnet first, which is also what leaves the
 // device removed from it rather than orphaned.
-func (m *Manager) SwitchTailnet(ctx context.Context, bridge config.Bridge, logf func(string)) error {
+func (m *Manager) SwitchTailnet(ctx context.Context, bridge config.Bridge, emit func(connection.Event)) error {
 	if m == nil {
 		return fmt.Errorf("bridge manager is not configured")
 	}
 	if err := validateBridgeID(bridge.ID); err != nil {
 		return err
 	}
-	if logf == nil {
-		logf = func(string) {}
-	}
-	rt, _, err := m.runningNode(ctx, bridge, logf)
+	ev := sink(emit)
+	rt, _, err := m.runningNode(ctx, bridge, ev)
 	if err != nil {
 		return err
 	}
 
-	logf("Logging bridge " + bridge.Name + " out of its tailnet ...")
+	ev.note("Logging bridge " + bridge.Name + " out of its tailnet ...")
 	logoutErr := rt.node.Logout(ctx)
 
 	// Under the lock, as in Close: an Activate that took rt before the delete
@@ -352,7 +425,7 @@ func (m *Manager) SwitchTailnet(ctx context.Context, bridge config.Bridge, logf 
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
-	logf("Bridge logged out. Log in to the tailnet you want next.")
+	ev.note("Bridge logged out. Log in to the tailnet you want next.")
 	return nil
 }
 
@@ -427,7 +500,7 @@ func parseTarget(raw string) (*url.URL, error) {
 	return target, nil
 }
 
-func (m *Manager) startProxy(node tailnetNode, target *url.URL, logf func(string)) (*proxyRuntime, error) {
+func (m *Manager) startProxy(node tailnetNode, target *url.URL, ev events) (*proxyRuntime, error) {
 	debug := m.debug
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -438,24 +511,24 @@ func (m *Manager) startProxy(node tailnetNode, target *url.URL, logf func(string
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		start := time.Now()
 		if debug {
-			logf(fmt.Sprintf("Bridge dialing network=%s address=%s", network, address))
+			ev.notef("Bridge dialing network=%s address=%s", network, address)
 		}
 		conn, attempts, err := dialViaNode(
 			ctx,
 			node,
 			network,
 			address,
-			logf,
+			ev,
 			m.peerWait,
 			m.peerWaitInterval,
 		)
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if err != nil {
-			logf(fmt.Sprintf("Bridge dial failed: network=%s address=%s attempts=%d elapsed=%s error=%T: %v", network, address, attempts, elapsed, err, err))
+			ev.notef("Bridge dial failed: network=%s address=%s attempts=%d elapsed=%s error=%T: %v", network, address, attempts, elapsed, err, err)
 			return nil, err
 		}
 		if debug {
-			logf(fmt.Sprintf("Bridge dial connected: address=%s remote=%s attempts=%d elapsed=%s", address, conn.RemoteAddr(), attempts, elapsed))
+			ev.notef("Bridge dial connected: address=%s remote=%s attempts=%d elapsed=%s", address, conn.RemoteAddr(), attempts, elapsed)
 		}
 		return conn, nil
 	}
@@ -468,7 +541,7 @@ func (m *Manager) startProxy(node tailnetNode, target *url.URL, logf func(string
 	}
 	proxy.Transport = transport
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		logf(fmt.Sprintf("Bridge proxy error: target=%s path=%s error=%T: %v", target.Redacted(), r.URL.Path, err, err))
+		ev.notef("Bridge proxy error: target=%s path=%s error=%T: %v", target.Redacted(), r.URL.Path, err, err)
 		http.Error(w, "bridge proxy error: "+err.Error(), http.StatusBadGateway)
 	}
 
@@ -501,7 +574,7 @@ func dialViaNode(
 	ctx context.Context,
 	node tailnetNode,
 	network, address string,
-	logf func(string),
+	ev events,
 	peerWaitWindow, peerWaitInterval time.Duration,
 ) (net.Conn, int, error) {
 	host, port, err := net.SplitHostPort(address)
@@ -522,7 +595,7 @@ func dialViaNode(
 		// own DNS can serve it. Those only resolve the way tsnet resolves, so
 		// fall through and say so, since this is the path that can leave the
 		// tailnet.
-		logf(fmt.Sprintf("Bridge target %s is not a node on this bridge's tailnet (%v); resolving it the usual way.", host, err))
+		ev.notef("Bridge target %s is not a node on this bridge's tailnet (%v); resolving it the usual way.", host, err)
 		conn, derr := node.DialContext(ctx, network, address)
 		return conn, attempts, derr
 	}
@@ -616,9 +689,9 @@ func preferIPv4(addrs []netip.Addr) (netip.Addr, bool) {
 	return fallback, fallback.IsValid()
 }
 
-func logBridgeStatus(logf func(string), status *ipnstate.Status, target *url.URL) {
+func logBridgeStatus(ev events, status *ipnstate.Status, target *url.URL) {
 	if status == nil {
-		logf("Bridge network status is unavailable.")
+		ev.note("Bridge network status is unavailable.")
 		return
 	}
 
@@ -633,12 +706,12 @@ func logBridgeStatus(logf func(string), status *ipnstate.Status, target *url.URL
 	if status.Self != nil {
 		selfDNS = status.Self.DNSName
 	}
-	logf(fmt.Sprintf(
+	ev.notef(
 		"Bridge network: state=%s tailnet=%q dns_suffix=%q magic_dns=%t self=%q ips=%v peers=%d",
 		status.BackendState, tailnetName, dnsSuffix, magicDNS, selfDNS, status.TailscaleIPs, len(status.Peer),
-	))
+	)
 	if len(status.Health) > 0 {
-		logf("Bridge health: " + strings.Join(status.Health, "; "))
+		ev.note("Bridge health: " + strings.Join(status.Health, "; "))
 	}
 
 	host := strings.ToLower(strings.TrimSuffix(target.Hostname(), "."))
@@ -649,12 +722,12 @@ func logBridgeStatus(logf func(string), status *ipnstate.Status, target *url.URL
 	for _, peer := range status.Peer {
 		peerDNS := strings.ToLower(strings.TrimSuffix(peer.DNSName, "."))
 		if peerDNS == host || peerDNS == expectedFQDN {
-			logf(fmt.Sprintf("Bridge target is visible: requested=%q peer=%q ips=%v", host, peer.DNSName, peer.TailscaleIPs))
+			ev.notef("Bridge target is visible: requested=%q peer=%q ips=%v", host, peer.DNSName, peer.TailscaleIPs)
 			return
 		}
 	}
-	logf(fmt.Sprintf(
+	ev.notef(
 		"Bridge target is not present among visible peers: requested=%q expected_fqdn=%q peers=%d; check the selected tailnet and grants/ACLs",
 		host, expectedFQDN, len(status.Peer),
-	))
+	)
 }

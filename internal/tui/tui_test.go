@@ -13,9 +13,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
+	"github.com/tailscale/aperture-cli/internal/connection"
 	"github.com/tailscale/aperture-cli/internal/menu"
 )
 
@@ -1208,12 +1208,12 @@ func TestActivationTickRunsOnlyWhileConnecting(t *testing.T) {
 // whether the gap between them was 200ms or 29s.
 func TestBridgeLogSinkStampsElapsed(t *testing.T) {
 	ch := make(chan bridgeLine, 1)
-	logf := bridgeLogSink(context.Background(), ch, time.Now().Add(-12500*time.Millisecond))
-	logf("  Bridge connected.  ")
+	emit := bridgeLogSink(context.Background(), ch, time.Now().Add(-12500*time.Millisecond))
+	emit(connection.Note("  Bridge connected.  "))
 
 	line := <-ch
-	if line.text != "Bridge connected." {
-		t.Errorf("text = %q, want it trimmed", line.text)
+	if line.event.Text != "Bridge connected." {
+		t.Errorf("text = %q, want it trimmed", line.event.Text)
 	}
 	if line.elapsed < 12*time.Second {
 		t.Errorf("elapsed = %s, want it measured from the attempt's start", line.elapsed)
@@ -1226,19 +1226,22 @@ func TestBridgeLogSinkStampsElapsed(t *testing.T) {
 func TestBridgeLogSinkIgnoresLateLogsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan bridgeLine, 1)
-	logf := bridgeLogSink(ctx, ch, time.Now())
+	emit := bridgeLogSink(ctx, ch, time.Now())
 
 	cancel()
 	close(ch)
 	// This is the sequence that panicked in v0.0.9: preflight had ended and
 	// closed its channel, but tsnet emitted another background debug log.
-	logf("late tsnet log")
+	emit(connection.Note("late tsnet log"))
+	// And the same for an event that is not droppable, which blocks rather
+	// than falling through a default and so has only cancellation to stop it.
+	emit(connection.Entered(connection.JoiningTailnet))
 }
 
 func TestWaitBridgeLogDrainsBufferedLogBeforeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan bridgeLine, 1)
-	ch <- bridgeLine{text: "final dial error"}
+	ch <- bridgeLine{event: connection.Note("final dial error")}
 	cancel()
 
 	msg := waitBridgeLog(ctx, ch)()
@@ -1246,52 +1249,32 @@ func TestWaitBridgeLogDrainsBufferedLogBeforeCancellation(t *testing.T) {
 	if !ok {
 		t.Fatalf("message = %T, want bridgeLogMsg", msg)
 	}
-	if logMsg.line.text != "final dial error" {
-		t.Errorf("line = %q, want final dial error", logMsg.line.text)
+	if logMsg.line.event.Text != "final dial error" {
+		t.Errorf("line = %q, want final dial error", logMsg.line.event.Text)
 	}
 }
 
 func TestAppendBridgeLogRetainsDiagnosticsOverTsnetNoise(t *testing.T) {
 	logs := []bridgeLine{
-		{text: `Bridge network: state=Running tailnet="example.com" peers=598`},
-		{text: `Bridge target is visible: requested="aperture.example.ts.net"`},
+		{event: connection.Note(`Bridge network: state=Running tailnet="example.com" peers=598`)},
+		{event: connection.Note(`Bridge target is visible: requested="aperture.example.ts.net"`)},
+		{event: connection.Entered(connection.AwaitingLoginLink)},
 	}
 	for i := range bridgeLogLimit + 10 {
-		logs = appendBridgeLog(logs, bridgeLine{text: fmt.Sprintf("magicsock: noisy line %d", i)})
+		logs = appendBridgeLog(logs, bridgeLine{event: connection.Notef("magicsock: noisy line %d", i)})
 	}
-	logs = appendBridgeLog(logs, bridgeLine{text: "Bridge dial failed: lookup failed"})
+	logs = appendBridgeLog(logs, bridgeLine{event: connection.Note("Bridge dial failed: lookup failed")})
 
 	if len(logs) != bridgeLogLimit {
 		t.Fatalf("len(logs) = %d, want %d", len(logs), bridgeLogLimit)
 	}
 	var got string
 	for _, line := range logs {
-		got += line.text + "\n"
+		got += line.event.String() + "\n"
 	}
-	for _, want := range []string{"Bridge network:", "Bridge target is visible:", "Bridge dial failed:"} {
+	for _, want := range []string{"Bridge network:", "Bridge target is visible:", "Bridge dial failed:", connection.AwaitingLoginLink.String()} {
 		if !strings.Contains(got, want) {
 			t.Errorf("logs lost %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestAuthURLFromLog(t *testing.T) {
-	const tsnetLine = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: https://login.tailscale.com/a/17bceb7b0129ba"
-	for _, tt := range []struct {
-		line string
-		want string
-	}{
-		{tsnetLine, "https://login.tailscale.com/a/17bceb7b0129ba"},
-		// The manager's own line, which beats tsnet's by up to five seconds.
-		{bridges.AuthLogPrefix + "https://login.tailscale.com/a/17bceb7b0129ba", "https://login.tailscale.com/a/17bceb7b0129ba"},
-		{bridges.AuthLogPrefix + "http://evil.example.com", ""},
-		{"magicsock: home is derp-1", ""},
-		{"or go to: http://evil.example.com", ""},
-		{"or go to: --version", ""},
-		{"or go to: https://login.tailscale.com/a/x --flag", ""},
-	} {
-		if got := authURLFromLog(tt.line); got != tt.want {
-			t.Errorf("authURLFromLog(%q) = %q, want %q", tt.line, got, tt.want)
 		}
 	}
 }
@@ -1313,7 +1296,10 @@ func runCmd(t *testing.T, cmd tea.Cmd) {
 const testAuthURL = "https://login.tailscale.com/a/17bceb7b0129ba"
 
 func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
-	const tsnetLine = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: " + testAuthURL
+	link, err := connection.ParseLoginLink(testAuthURL)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var opened []string
 	orig := openURL
@@ -1334,12 +1320,12 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 		act:   &activation{id: 7, logCh: ch, logCtx: ctx},
 	}
 
-	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{text: tsnetLine}})
+	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{event: connection.Login(link)}})
 	runCmd(t, cmd)
 	if len(opened) != 1 || opened[0] != testAuthURL {
 		t.Fatalf("browser opens = %q, want one at %q", opened, testAuthURL)
 	}
-	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{text: tsnetLine}})
+	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{event: connection.Login(link)}})
 	runCmd(t, cmd)
 	if len(opened) != 1 {
 		t.Errorf("repeated auth URL opened the browser again: %q", opened)
@@ -1356,7 +1342,7 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 	}
 
 	m.Update(browserOpenMsg{id: 7, err: errors.New("exec: \"xdg-open\": not found")})
-	if len(m.bridgeLogs) != 1 || !strings.Contains(m.bridgeLogs[0].text, "Use the link below") {
+	if len(m.bridgeLogs) != 1 || !strings.Contains(m.bridgeLogs[0].event.Text, "Use the link below") {
 		t.Errorf("failed open did not tell the user to use the link: %q", m.bridgeLogs)
 	}
 	m.Update(browserOpenMsg{id: 6, err: errors.New("stale")})
@@ -1554,7 +1540,7 @@ func TestFailureViewWrapsDiagnostics(t *testing.T) {
 		forcedToEndpoint: true,
 		preflightErr:     "bridge Work Bridge could not reach endpoint: lookup aperture.example.ts.net on 127.0.0.53:53: no such host",
 		bridgeLogs: []bridgeLine{
-			{text: `Bridge network: state=Running tailnet="example.com" dns_suffix="example.ts.net" peers=597`},
+			{event: connection.Note(`Bridge network: state=Running tailnet="example.com" dns_suffix="example.ts.net" peers=597`)},
 		},
 	}
 	m.resetStack(m.setupGuideMenu())
@@ -1594,5 +1580,48 @@ func TestRootHeaderShowsLogicalBridgeEndpoint(t *testing.T) {
 	header := m.menuHeader(m.top())
 	if !strings.Contains(header, "http://ai via Work") || strings.Contains(header, "127.0.0.1") {
 		t.Fatalf("root header = %q", header)
+	}
+}
+
+// TestBridgeLogSinkNeverDropsTheLoginLink covers the failure that left a slow
+// bridge unrecoverable: the sink discarded whatever arrived while its buffer
+// was full, and under -debug the tsnet backend logger shares that buffer, so a
+// burst of chatter could take the one line the user cannot proceed without.
+func TestBridgeLogSinkNeverDropsTheLoginLink(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan bridgeLine, 4)
+	emit := bridgeLogSink(ctx, ch, time.Now())
+
+	for i := range cap(ch) + 20 {
+		emit(connection.Notef("magicsock: noisy line %d", i))
+	}
+	if len(ch) != cap(ch) {
+		t.Fatalf("buffer holds %d lines, want it full at %d", len(ch), cap(ch))
+	}
+
+	link, err := connection.ParseLoginLink(testAuthURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan struct{})
+	go func() {
+		emit(connection.Login(link))
+		close(sent)
+	}()
+
+	// The update loop draining is what makes room. Without it the send above
+	// waits, which is the point: it waits rather than vanishing.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case line := <-ch:
+			if line.event.Kind == connection.LoginRequired {
+				<-sent
+				return
+			}
+		case <-deadline:
+			t.Fatal("the login link never arrived; a full buffer swallowed it")
+		}
 	}
 }

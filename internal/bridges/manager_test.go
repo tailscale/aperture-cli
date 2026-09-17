@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/tailscale/aperture-cli/internal/config"
+	"github.com/tailscale/aperture-cli/internal/connection"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
 )
@@ -23,7 +25,7 @@ type fakeNode struct {
 	backendAddr string
 	status      *ipnstate.Status
 	statusFn    func() (*ipnstate.Status, error)
-	watchFn     func(logf func(string))
+	watchFn     func(ev events)
 	upFn        func()
 	upErr       error
 	statusErr   error
@@ -69,11 +71,27 @@ func (n *fakeNode) DialContext(ctx context.Context, network, address string) (ne
 
 // WatchLogin stands in for the IPN bus watch: watchFn is what a test wants the
 // bus to report, and it runs until the manager cancels the watch.
-func (n *fakeNode) WatchLogin(ctx context.Context, logf func(string)) {
+func (n *fakeNode) WatchLogin(ctx context.Context, ev events) {
 	if n.watchFn != nil {
-		n.watchFn(logf)
+		n.watchFn(ev)
 	}
 	<-ctx.Done()
+}
+
+// collect records what a bridge reported, rendered the way the connect screen
+// renders it, so an assertion reads like the line the user would have seen.
+func collect(lines *[]string) func(connection.Event) {
+	return func(ev connection.Event) { *lines = append(*lines, ev.String()) }
+}
+
+// collectLocked is collect for the tests whose events arrive off a watch
+// goroutine.
+func collectLocked(mu *sync.Mutex, lines *[]string) func(connection.Event) {
+	return func(ev connection.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		*lines = append(*lines, ev.String())
+	}
 }
 
 func (n *fakeNode) dialedAddrs() []string {
@@ -122,7 +140,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture",
-		func(line string) { logs = append(logs, line) },
+		collect(&logs),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +231,7 @@ func TestActivateNormalLoggingOmitsDebugDiagnostics(t *testing.T) {
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture",
-		func(line string) { logs = append(logs, line) },
+		collect(&logs),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +280,7 @@ func TestActivateWaitsForPeerMapBeforeDialing(t *testing.T) {
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://ai",
-		func(line string) { logs = append(logs, line) },
+		collect(&logs),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -297,8 +315,13 @@ func TestActivateLogsLoginLinkWhileUpBlocks(t *testing.T) {
 		backendAddr: backend.Listener.Addr().String(),
 		status:      tailnetStatus("ai.example.ts.net.", "100.64.0.2"),
 	}
-	node.watchFn = func(logf func(string)) {
-		logf(AuthLogPrefix + url)
+	node.watchFn = func(ev events) {
+		link, err := connection.ParseLoginLink(url)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		ev.login(link)
 		close(watched)
 	}
 	// Up stands in for the wait on an interactive login, and gives up so a
@@ -322,11 +345,7 @@ func TestActivateLogsLoginLinkWhileUpBlocks(t *testing.T) {
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://ai",
-		func(line string) {
-			mu.Lock()
-			defer mu.Unlock()
-			logs = append(logs, line)
-		},
+		collectLocked(&mu, &logs),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +353,7 @@ func TestActivateLogsLoginLinkWhileUpBlocks(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, line := range logs {
-		if line == AuthLogPrefix+url {
+		if strings.Contains(line, url) {
 			return
 		}
 	}
@@ -345,7 +364,7 @@ func TestDialViaNode(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer backend.Close()
 	backendAddr := backend.Listener.Addr().String()
-	discard := func(string) {}
+	discard := events(func(connection.Event) {})
 
 	t.Run("dials the address the node's peer map gives", func(t *testing.T) {
 		node := &fakeNode{backendAddr: backendAddr, status: tailnetStatus("ai.example.ts.net.", "100.64.0.2")}
@@ -397,7 +416,7 @@ func TestDialViaNode(t *testing.T) {
 
 		conn, _, err := dialViaNode(
 			context.Background(), node, "tcp", "ai:80",
-			func(line string) { logs = append(logs, line) },
+			collect(&logs),
 			5*time.Millisecond, time.Millisecond,
 		)
 		if err != nil {
@@ -627,7 +646,7 @@ func activate(t *testing.T, backend *httptest.Server) activatedFixture {
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture.tailnet",
-		func(line string) { f.logs = append(f.logs, line) },
+		collect(&f.logs),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -771,5 +790,56 @@ func TestActivate(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, tc.run)
+	}
+}
+
+// TestLoginReporterSplitsTheTwoNeedsLoginWaits is the diagnosis this whole
+// change came from. A bridge took 29 seconds to come up and the screen said
+// only that it needed a login, so there was no way to tell the control plane
+// not having answered yet from a user who had not finished in the browser.
+// Both are ipn.NeedsLogin; they are different phases here.
+func TestLoginReporterSplitsTheTwoNeedsLoginWaits(t *testing.T) {
+	const url = "https://login.tailscale.com/a/28ba393017981"
+	var got []string
+	r := &loginReporter{ev: collect(&got)}
+
+	state := func(s ipn.State) *ipn.Notify { return &ipn.Notify{State: &s} }
+	browse := func(u string) *ipn.Notify { return &ipn.Notify{BrowseToURL: &u} }
+
+	r.notify(state(ipn.NeedsLogin))
+	r.notify(state(ipn.NeedsLogin)) // the bus repeats itself
+	r.notify(browse(url))
+	r.notify(state(ipn.NeedsLogin)) // still NeedsLogin, but no longer that wait
+	r.notify(browse(url))           // and the same link again
+	r.notify(state(ipn.Starting))
+	r.notify(state(ipn.Running))
+
+	want := []string{
+		connection.AwaitingLoginLink.String(),
+		connection.AwaitingAuthorization.String(),
+		"Authorize this bridge at " + url,
+		"Authorize this bridge at " + url,
+		connection.JoiningTailnet.String(),
+		connection.FindingEndpoint.String(),
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("reported:\n%s\n\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestLoginReporterRejectsAnUnusableLink(t *testing.T) {
+	var got []string
+	r := &loginReporter{ev: collect(&got)}
+
+	// http, not https. The value is handed to a desktop opener, so this is the
+	// one thing that must not pass through untouched.
+	plaintext := "http://evil.example.com/a/x"
+	r.notify(&ipn.Notify{BrowseToURL: &plaintext})
+
+	if len(got) != 1 || !strings.Contains(got[0], "unusable login link") {
+		t.Fatalf("reported %q, want one line saying the link was ignored", got)
+	}
+	if strings.Contains(got[0], "Authorize this bridge at") {
+		t.Errorf("an http link was offered to the browser: %q", got[0])
 	}
 }
