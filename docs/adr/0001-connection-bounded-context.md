@@ -155,6 +155,31 @@ Bad, and accepted:
   seconds while a login is outstanding. Nothing we can do from outside tsnet.
 - A migration: every `g.ApertureHost` reader changes.
 
+## Deferred: the channel plumbing
+
+Decision 2 changed what travels between `internal/bridges` and `internal/tui`
+from a string to a typed `Event`. It did not change the plumbing underneath,
+and the plumbing has four knots that the shape this ADR describes removes as a
+side effect. Recorded here rather than fixed piecemeal, because three of the
+four are one change: the Machine owns a long-lived stream and each Attempt
+subscribes to it for its own lifetime.
+
+| Knot | Where | What it costs today |
+|---|---|---|
+| Two identity mechanisms for "is this message from the current attempt" | `bridgeLogMsg` compares channel pointers (`tui.go:732`); `browserOpenMsg`, `clipboardMsg` and `activationTickMsg` compare `act.id` | `bridgeLogDoneMsg` exists only to unwire the pointer one. Same question, two answers, and a reader has to know which applies where. |
+| One goroutine per log line | `waitBridgeLog` receives one value and re-arms itself through the event loop | A `--debug` burst is a spawn per line. Works, and is the documented bubbletea idiom for a channel, which is the argument for a subscription instead of a channel. |
+| `WatchLogin` starts only when the node is created | `runningNode` (`manager.go:353`) returns early for a cached node | A re-login on an existing Machine reports no phases and surfaces no link. The `ev.enter(FindingEndpoint)` in `Activate` papers over the common case and nothing covers the rest. |
+| The sink outlives the Attempt that made it | fixed ahead of the rework; see below | |
+
+The last one was a live defect rather than untidiness, so it is fixed now:
+`runningNode` gave the node's `UserLogf`/`DebugLogf` a closure over the first
+Attempt's sink, and `startProxy` did the same for `transport.DialContext` and
+`proxy.ErrorHandler`. Nodes and proxies are cached in `Manager.nodes` and
+`nodeRuntime.proxies` for the life of the process; Attempts are not. From the
+second Attempt onward every dial diagnostic and every `Bridge proxy error` was
+written to a cancelled channel and dropped, which is exactly the output wanted
+when a bridge breaks mid-session.
+
 ## Alternatives considered
 
 **Timestamp the log lines and stop there.** Already shipped (`53f2148`) and it

@@ -47,6 +47,46 @@ const (
 type nodeRuntime struct {
 	node    tailnetNode
 	proxies map[string]*proxyRuntime
+	// ev is where this node and its proxies report, and it is an indirection
+	// rather than a captured sink because they outlive the connection that
+	// created them. See liveEvents.
+	ev *liveEvents
+}
+
+// liveEvents points a node's long-lived reporting at whichever connection is
+// using it now.
+//
+// A node is cached in Manager.nodes and its proxies in nodeRuntime.proxies for
+// the life of the process; the connection that built them ends with the
+// connect screen. Closures that captured that connection's own sink kept
+// writing to it, so from the second connection onward every dial failure and
+// every proxy error was handed to a channel nobody had read since the first
+// one finished, which is exactly the output wanted when a bridge breaks
+// mid-session.
+//
+// Nothing clears it when a connection ends. That is deliberate: the sink of a
+// finished connection discards what it is given, so the worst case is the
+// pre-existing behaviour, and a clear would need a lifecycle hook that only
+// the Attempt aggregate can own.
+type liveEvents struct {
+	mu sync.Mutex
+	ev events
+}
+
+func (l *liveEvents) use(ev events) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ev = ev
+}
+
+// emit has the events signature, so callers keep note and notef.
+func (l *liveEvents) emit(e connection.Event) {
+	l.mu.Lock()
+	ev := l.ev
+	l.mu.Unlock()
+	if ev != nil {
+		ev(e)
+	}
 }
 
 type proxyRuntime struct {
@@ -299,7 +339,7 @@ func (m *Manager) Activate(ctx context.Context, bridge config.Bridge, remoteURL 
 		return proxy.localURL, nil
 	}
 
-	proxy, err := m.startProxy(rt.node, target, ev)
+	proxy, err := m.startProxy(rt, target)
 	if err != nil {
 		return "", err
 	}
@@ -316,6 +356,9 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, ev even
 	rt := m.nodes[bridge.ID]
 	if rt != nil {
 		m.mu.Unlock()
+		// The node and its proxies were built by an earlier connection whose
+		// sink is long gone. Point them at this one before returning.
+		rt.ev.use(ev)
 		return rt, nil, nil
 	}
 	stateDir, err := config.BridgeStateDir(bridge.ID)
@@ -332,15 +375,18 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, ev even
 	//
 	// A no-op rather than nil: tsnet falls back to log.Printf when UserLogf is
 	// unset, which writes over the TUI.
+	live := &liveEvents{}
+	live.use(ev)
 	logNotes := func(format string, args ...any) {
 		if m.debug {
-			ev.notef(format, args...)
+			events(live.emit).notef(format, args...)
 		}
 	}
 	userLogf, debugLogf := logNotes, logNotes
 	rt = &nodeRuntime{
 		node:    m.newNode(bridge, stateDir, userLogf, debugLogf),
 		proxies: make(map[string]*proxyRuntime),
+		ev:      live,
 	}
 	m.nodes[bridge.ID] = rt
 	m.mu.Unlock()
@@ -506,7 +552,12 @@ func parseTarget(raw string) (*url.URL, error) {
 	return target, nil
 }
 
-func (m *Manager) startProxy(node tailnetNode, target *url.URL, ev events) (*proxyRuntime, error) {
+// startProxy builds the reverse proxy for one target on rt's node. It reports
+// through rt rather than through the connection that asked, because the proxy
+// it returns is cached and will still be serving long after that connection
+// has gone.
+func (m *Manager) startProxy(rt *nodeRuntime, target *url.URL) (*proxyRuntime, error) {
+	node, ev := rt.node, events(rt.ev.emit)
 	debug := m.debug
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -874,3 +874,51 @@ func TestLoginReporterNamesTheWaitBeforeTheControlPlaneAnswers(t *testing.T) {
 		t.Errorf("reported %q, want the wait named once", lines)
 	}
 }
+
+// TestAProxyReportsToTheAttemptUsingItNow covers a defect the typed events
+// introduced and the string logger had too: nodes and proxies are cached for
+// the life of the process, attempts are not, and the closures inside
+// startProxy captured whichever attempt happened to create the proxy. Every
+// dial failure after the first connection went to a channel nobody had read
+// since, which is precisely the output wanted when a bridge breaks mid-session.
+func TestAProxyReportsToTheAttemptUsingItNow(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+
+	f := activate(t, backend)
+	defer f.manager.Close()
+
+	// A second attempt on the same bridge and target, which reuses both the
+	// node and the proxy the first one built.
+	var mu sync.Mutex
+	var second []string
+	if _, err := f.manager.Activate(
+		context.Background(),
+		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
+		"http://aperture.tailnet",
+		collectLocked(&mu, &second),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	backend.Close() // the bridge breaking under a connection that already worked
+	// The proxy answers 502 rather than failing the request, so the status is
+	// what says the dial underneath it did not happen.
+	res, err := http.Get(f.localURL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d with no backend behind the proxy", res.StatusCode, http.StatusBadGateway)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.ContainsFunc(second, func(s string) bool { return strings.Contains(s, "dial failed") }) {
+		t.Errorf("the attempt using the proxy was told nothing; it saw %q", second)
+	}
+	if slices.ContainsFunc(f.logs, func(s string) bool { return strings.Contains(s, "dial failed") }) {
+		t.Errorf("the finished attempt was still being written to: %q", f.logs)
+	}
+}
