@@ -741,7 +741,7 @@ func appendBridgeLog(logs []string, line string) []string {
 // bridgeAuthLogPrefix labels the login link on the connect screen. It is also
 // an importantBridgeLog prefix: the link is the one line the user must act on,
 // and tsnet's own chatter would otherwise push it off the tail.
-const bridgeAuthLogPrefix = "Authorize this bridge in your browser: "
+const bridgeAuthLogPrefix = bridges.AuthLogPrefix
 
 func importantBridgeLog(line string) bool {
 	for _, prefix := range []string{

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/tailscale/aperture-cli/internal/config"
+	"tailscale.com/client/local"
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
@@ -56,9 +58,15 @@ type tailnetNode interface {
 	Up(context.Context) (*ipnstate.Status, error)
 	Status(context.Context) (*ipnstate.Status, error)
 	DialContext(context.Context, string, string) (net.Conn, error)
+	WatchLogin(context.Context, func(string))
 	Logout(context.Context) error
 	Close() error
 }
+
+// AuthLogPrefix labels the login link in a bridge's activation log. Callers
+// parse it back out of the log stream to open a browser, so the text is part
+// of this package's API rather than a message that can be reworded freely.
+const AuthLogPrefix = "Authorize this bridge in your browser: "
 
 type tsnetNode struct {
 	server *tsnet.Server
@@ -78,6 +86,59 @@ func (n *tsnetNode) Status(ctx context.Context) (*ipnstate.Status, error) {
 
 func (n *tsnetNode) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	return n.server.Dial(ctx, network, address)
+}
+
+// WatchLogin logs what an interactive login is waiting on, until ctx is done.
+//
+// tsnet surfaces the login link from a five second poll loop of its own, so a
+// link that lands just after a tick stays invisible for most of that window.
+// A bridge that took sixteen seconds to register showed the user nothing but
+// "NeedsLogin" and got killed a few hundred milliseconds before the link would
+// have been printed. The IPN bus has the link the moment the control plane
+// answers, so watch that instead of waiting for tsnet to notice.
+func (n *tsnetNode) WatchLogin(ctx context.Context, logf func(string)) {
+	// A cancelled watch is how this returns on every connection that works,
+	// so only a failure the caller did not ask for is worth a line.
+	report := func(err error) {
+		if err != nil && ctx.Err() == nil {
+			logf("Could not watch the bridge's login state: " + err.Error())
+		}
+	}
+
+	// LocalClient calls Start, so this blocks until the node is initialized,
+	// the same bring-up Up is waiting on in parallel.
+	lc, err := n.server.LocalClient()
+	if err != nil {
+		report(err)
+		return
+	}
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+	if err != nil {
+		report(err)
+		return
+	}
+	defer watcher.Close()
+	report(reportLogin(watcher, logf))
+}
+
+// reportLogin logs login progress from an IPN bus watch until it ends.
+func reportLogin(watcher *local.IPNBusWatcher, logf func(string)) error {
+	announced := false
+	for {
+		notify, err := watcher.Next()
+		if err != nil {
+			return err
+		}
+		if notify.State != nil && *notify.State == ipn.NeedsLogin && !announced {
+			// Otherwise the wait for the control plane to answer is silent,
+			// and the only thing on screen is tsnet's "NeedsLogin".
+			announced = true
+			logf("This bridge is not logged in to a tailnet yet. Waiting for a login link ...")
+		}
+		if notify.BrowseToURL != nil {
+			logf(AuthLogPrefix + *notify.BrowseToURL)
+		}
+	}
 }
 
 // Logout drops the node's tailnet credentials. The node must be running: the
@@ -203,6 +264,14 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, logf fu
 	m.mu.Unlock()
 
 	logf("Starting bridge " + bridge.Name + " (" + bridge.ID + ")")
+
+	// Up blocks until the node is Running, which for a bridge that has never
+	// logged in means blocking until the user visits a link nothing has shown
+	// them yet. The watch runs alongside it and ends with it.
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
+	go rt.node.WatchLogin(watchCtx, logf)
+
 	status, err := rt.node.Up(ctx)
 	if err != nil {
 		m.mu.Lock()

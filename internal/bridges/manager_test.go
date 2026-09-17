@@ -23,6 +23,8 @@ type fakeNode struct {
 	backendAddr string
 	status      *ipnstate.Status
 	statusFn    func() (*ipnstate.Status, error)
+	watchFn     func(logf func(string))
+	upFn        func()
 	upErr       error
 	statusErr   error
 	dialErr     error
@@ -38,6 +40,9 @@ type fakeNode struct {
 
 func (n *fakeNode) Up(context.Context) (*ipnstate.Status, error) {
 	n.up++
+	if n.upFn != nil {
+		n.upFn()
+	}
 	return n.status, n.upErr
 }
 
@@ -60,6 +65,15 @@ func (n *fakeNode) DialContext(ctx context.Context, network, address string) (ne
 	}
 	var d net.Dialer
 	return d.DialContext(ctx, network, n.backendAddr)
+}
+
+// WatchLogin stands in for the IPN bus watch: watchFn is what a test wants the
+// bus to report, and it runs until the manager cancels the watch.
+func (n *fakeNode) WatchLogin(ctx context.Context, logf func(string)) {
+	if n.watchFn != nil {
+		n.watchFn(logf)
+	}
+	<-ctx.Done()
 }
 
 func (n *fakeNode) dialedAddrs() []string {
@@ -268,6 +282,63 @@ func TestActivateWaitsForPeerMapBeforeDialing(t *testing.T) {
 	if got := strings.Join(logs, "\n"); !strings.Contains(got, "remote=") {
 		t.Fatalf("logs missing the connected dial:\n%s", got)
 	}
+}
+
+// TestActivateLogsLoginLinkWhileUpBlocks covers the bridge that looked hung: a
+// node that has never logged in blocks in Up until someone visits a link, so
+// the link has to reach the log while Up is still blocked, not after it.
+func TestActivateLogsLoginLinkWhileUpBlocks(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer backend.Close()
+
+	const url = "https://login.tailscale.com/a/28ba393017981"
+	watched := make(chan struct{})
+	node := &fakeNode{
+		backendAddr: backend.Listener.Addr().String(),
+		status:      tailnetStatus("ai.example.ts.net.", "100.64.0.2"),
+	}
+	node.watchFn = func(logf func(string)) {
+		logf(AuthLogPrefix + url)
+		close(watched)
+	}
+	// Up stands in for the wait on an interactive login, and gives up so a
+	// manager that never watches fails the assertion instead of hanging.
+	node.upFn = func() {
+		select {
+		case <-watched:
+		case <-time.After(2 * time.Second):
+		}
+	}
+
+	m := NewManager(false)
+	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+		return node
+	}
+	defer m.Close()
+
+	var mu sync.Mutex
+	var logs []string
+	if _, err := m.Activate(
+		context.Background(),
+		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
+		"http://ai",
+		func(line string) {
+			mu.Lock()
+			defer mu.Unlock()
+			logs = append(logs, line)
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, line := range logs {
+		if line == AuthLogPrefix+url {
+			return
+		}
+	}
+	t.Errorf("login link never reached the activation log:\n%s", strings.Join(logs, "\n"))
 }
 
 func TestDialViaNode(t *testing.T) {

@@ -4,6 +4,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/tailscale/aperture-cli/internal/bridges"
 )
 
 // tsnetAuthURLMarker is what tsnet logs ahead of the login link while a bridge
@@ -11,20 +13,29 @@ import (
 // It repeats the whole line every few seconds until login completes.
 const tsnetAuthURLMarker = "or go to: "
 
+// authURLMarkers are the two phrasings that carry a login link. The bridge
+// manager emits its line the moment the IPN bus has the link; tsnet's own
+// line comes out of a five second poll, so it usually repeats one that is
+// already on screen.
+var authURLMarkers = []string{bridges.AuthLogPrefix, tsnetAuthURLMarker}
+
 // authURLFromLog returns the Tailscale login link a bridge log line carries,
 // or "" when it carries none. The https:// requirement is not cosmetic: the
 // result is handed to a desktop opener, and anything else (a file path, a
 // leading dash) is not a link the user asked us to follow.
 func authURLFromLog(line string) string {
-	_, rest, ok := strings.Cut(line, tsnetAuthURLMarker)
-	if !ok {
-		return ""
+	for _, marker := range authURLMarkers {
+		_, rest, ok := strings.Cut(line, marker)
+		if !ok {
+			continue
+		}
+		url := strings.TrimSpace(rest)
+		if !strings.HasPrefix(url, "https://") || strings.ContainsAny(url, " \t") {
+			return ""
+		}
+		return url
 	}
-	url := strings.TrimSpace(rest)
-	if !strings.HasPrefix(url, "https://") || strings.ContainsAny(url, " \t") {
-		return ""
-	}
-	return url
+	return ""
 }
 
 // openURL asks the desktop to open a link. Start, not Run: the opener can

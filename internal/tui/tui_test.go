@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
@@ -1257,6 +1258,9 @@ func TestAuthURLFromLog(t *testing.T) {
 		want string
 	}{
 		{tsnetLine, "https://login.tailscale.com/a/17bceb7b0129ba"},
+		// The manager's own line, which beats tsnet's by up to five seconds.
+		{bridges.AuthLogPrefix + "https://login.tailscale.com/a/17bceb7b0129ba", "https://login.tailscale.com/a/17bceb7b0129ba"},
+		{bridges.AuthLogPrefix + "http://evil.example.com", ""},
 		{"magicsock: home is derp-1", ""},
 		{"or go to: http://evil.example.com", ""},
 		{"or go to: --version", ""},
