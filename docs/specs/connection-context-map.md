@@ -1,0 +1,100 @@
+# Connection context map
+
+Scope: everything between the user picking an endpoint and a client having
+somewhere to send requests. Written before the refactor that replaces the
+string log channel between `internal/bridges` and `internal/tui` with typed
+events.
+
+## Ubiquitous language
+
+| Term | Means | Does not mean |
+|---|---|---|
+| Connection Attempt | One try at reaching an Aperture from one Endpoint. Has identity, a phase, a recorded progress trail, and exactly one outcome. | The TCP connection. The persisted endpoint list. |
+| Endpoint | The remote Aperture the user chose, plus which Bridge (if any) reaches it. | The local proxy address. Anything the CLI listens on. |
+| Gateway | The address a client is finally told to send requests to. The Endpoint URL when no Bridge is involved, the Route's local end when one is. | The Endpoint. Only equal to it in the direct case. |
+| Route | The local door to one Endpoint through one Crossing: a `127.0.0.1:0` listener reverse-proxying over the Crossing. | A tailnet route or subnet route. |
+| Bridge | The thing the user configures and sees in the picker: id, display name, last tailnet joined. Persisted. | The running tsnet node. |
+| Crossing | The live tailnet membership for one Bridge: joins a tailnet, may need a login, carries dials. Outlives any one Attempt. | The Bridge record. The proxy. |
+| Login Link | The URL that authorizes a Crossing. `https` only, no whitespace, opened in a browser or copied. | Any URL in a log line. |
+| Phase | What the Attempt is waiting on right now, named for what the user is waiting for. | `ipn.State`. |
+| Progress | The trail of phases an Attempt passed through and how long each took. The thing that was missing when a 29s wait could not be attributed. | The scrolling log. |
+| Tailnet | The network a Crossing joined. Recorded on the Bridge so the picker can name it before the Crossing exists. | |
+| Provider | A model provider read from the Aperture's `/v1/models`. | |
+
+## Contexts
+
+| Context | Subdomain | Owns | Lives in |
+|---|---|---|---|
+| Connection | Core | Connection Attempt, Phase, Progress, Login Link, Gateway, Route, Crossing | `internal/bridges`, the activation half of `internal/tui` |
+| Settings | Supporting | Endpoint, Bridge, persistence | `internal/config` |
+| Client Launch | Supporting | Per-client config and env, written from a Gateway | `internal/clients/*`, `internal/profiles` |
+| Tailnet | Generic, external | Nodes, login, netmap, dialing | `tsnet`, `ipn`, `ipnstate`, `client/local` |
+| Aperture | Generic, external | `/v1/models` | the remote service |
+
+Connection is deliberately one context and not three. It spans bridge bring-up
+*and* the model fetch that follows, because a user waiting 29 seconds does not
+know or care which half they are in, and splitting them is exactly what left
+nobody owning the question "what is this attempt waiting on".
+
+```mermaid
+flowchart LR
+    User([User])
+    subgraph Core
+        Connection[Connection<br/>attempt, phase, progress<br/>crossing, route, gateway]
+    end
+    Settings[Settings<br/>endpoints, bridges]
+    Launch[Client Launch<br/>opencode, claude, gemini, codex]
+    Tailnet[[Tailnet<br/>tsnet / ipn]]
+    Aperture[[Aperture<br/>/v1/models]]
+
+    User -->|picks an Endpoint| Connection
+    Settings -->|Endpoint, Bridge| Connection
+    Connection -->|tailnet joined| Settings
+    Connection -->|Gateway| Launch
+    Connection -->|ACL| Tailnet
+    Connection -->|providers| Aperture
+    Launch -->|requests| Aperture
+```
+
+## Relationships
+
+| Upstream | Downstream | Pattern | Note |
+|---|---|---|---|
+| Settings | Connection | Shared kernel | `Endpoint` and `Bridge` are already value/entity types Connection uses unchanged. No translation needed and none wanted. |
+| Connection | Client Launch | Published language | Launch receives a `Gateway` and nothing else about how it was obtained. Today it receives `g.ApertureHost`, which is the same field for two different things. |
+| Tailnet | Connection | Anti-corruption layer | `internal/bridges` is the only importer of `tsnet`/`ipn`/`ipnstate`. The port must stop returning `*ipnstate.Status`. |
+| Aperture | Connection | Conformist | We take `/v1/models` as given; `config.ParseProviders` is the only translation. |
+
+## Ambiguous terms, resolved
+
+| Word | Meaning A | Meaning B | Resolution |
+|---|---|---|---|
+| `ApertureHost` | the remote Aperture URL (direct endpoint) | the localhost proxy address (bridged endpoint) | Split. `Endpoint` is always the remote. `Gateway` is always what a client uses. `config/global.go:63` already carries a comment apologising for the overload. |
+| `host` on `endpointActivationResult` | `ep.URL` on failure | the Route's local URL on success | Becomes `Gateway`, set only on success. A failed Attempt has no Gateway. |
+| Bridge | the persisted record | the running tsnet node | Split into `Bridge` and `Crossing`. "The bridge is not logged in" currently cannot be read unambiguously. |
+| connected | `model.connected`, meaning the last fetch succeeded | `ipn.Running` | Keep `connected` for the former only. The latter is a Phase, never surfaced by that word. |
+| Status | `*ipnstate.Status` | what phase an Attempt is in | `Status` leaves the vocabulary. Phase is the only word for the second. |
+
+## Stored, derived, transient
+
+| Fact | Where it lives |
+|---|---|
+| Endpoint list, active endpoint | stored, `settings.json` |
+| Bridge id, name, last tailnet | stored, `settings.json` |
+| Crossing tailnet credentials | stored by tsnet under the bridge state dir, never by us |
+| Crossing, Route | transient, process lifetime, keyed by bridge id |
+| Connection Attempt, Phase, Progress | transient, attempt lifetime |
+| Gateway | transient, overwritten per successful Attempt |
+| Providers | derived from the Aperture, cached on `Global` |
+
+## Still open
+
+- `Crossing` is the one term chosen rather than agreed. It names what the live
+  node does for this program (puts us on a tailnet so we can reach the far
+  side) and avoids `Node`, which is the vendor's word for it and for every peer
+  in the netmap. Alternatives considered: `Link`, `Bridgehead`.
+- Whether `Phase` should survive a Crossing being reused. A second Attempt over
+  an already-open Crossing skips five of the seven phases; today it silently
+  reports nothing at all.
+- Whether the Aperture context deserves an ACL. `ParseProviders` is the whole
+  surface, so conformist is honest for now.
