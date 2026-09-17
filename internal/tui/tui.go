@@ -40,6 +40,10 @@ var (
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 	dimStyle      = lipgloss.NewStyle().Faint(true)
 	greenStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	// authStyle is the login link at the foot of the connect screen: the
+	// palette's bright green on a dark terminal, its plain green on a light
+	// one, where bright green is unreadable.
+	authStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "2", Dark: "10"})
 
 	dotYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("●")
 	dotGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render("●")
@@ -97,6 +101,12 @@ type model struct {
 	bridgeLogs       []string
 	failedEndpoint   *config.Endpoint
 	connected        bool
+
+	// mouseOn tracks whether mouse reporting is currently enabled. It is only
+	// on while the login link's copy button is on screen: with reporting on,
+	// the terminal's own click-drag selection needs a Shift the user has no
+	// reason to expect, and every other screen here is text worth selecting.
+	mouseOn bool
 }
 
 // activation is the connection attempt currently on screen. It owns the
@@ -123,6 +133,10 @@ type activation struct {
 	// log tail from filling with one repeated URL and the browser from being
 	// opened again on each repeat.
 	authURL string
+	// copied records that the login link reached the terminal's clipboard, so
+	// the copy button can say so. A click that does nothing visible reads as a
+	// button that does not work.
+	copied bool
 	// override is the inline "different Aperture URL" editor shown while a
 	// bridge attempt runs.
 	override textField
@@ -212,6 +226,16 @@ type browserOpenMsg struct {
 
 func openURLCmd(id int, url string) tea.Cmd {
 	return func() tea.Msg { return browserOpenMsg{id: id, err: openURL(url)} }
+}
+
+// clipboardMsg reports the outcome of a click on the login link's copy button.
+type clipboardMsg struct {
+	id  int
+	err error
+}
+
+func copyURLCmd(id int, url string) tea.Cmd {
+	return func() tea.Msg { return clipboardMsg{id: id, err: copyToClipboard(url)} }
 }
 
 // activationTickMsg repaints the connect screen once a second so a slow
@@ -545,7 +569,33 @@ func (m *model) quitCmd() tea.Cmd {
 	}
 }
 
+// Update handles a message and then reconciles mouse reporting with what is on
+// screen. Doing it here rather than at each transition is what keeps reporting
+// from being left on by a path nobody thought about: every way off the connect
+// screen goes through this function.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if mouse := m.syncMouse(); mouse != nil {
+		return next, tea.Batch(cmd, mouse)
+	}
+	return next, cmd
+}
+
+// syncMouse returns the command that turns mouse reporting on or off, or nil
+// when it already matches the screen.
+func (m *model) syncMouse() tea.Cmd {
+	want := m.step == stepPreflight && m.act != nil && m.act.authURL != ""
+	if want == m.mouseOn {
+		return nil
+	}
+	m.mouseOn = want
+	if want {
+		return tea.EnableMouseCellMotion
+	}
+	return tea.DisableMouse
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -621,8 +671,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if url == m.act.authURL {
 				return m, next // tsnet reprinting the same link
 			}
+			// Not appended to the log tail: the footer owns the link now, and
+			// two copies of a 60 character URL on one screen is noise.
 			m.act.authURL = url
-			m.bridgeLogs = appendBridgeLog(m.bridgeLogs, bridgeAuthLogPrefix+url)
+			m.act.copied = false
 			return m, tea.Batch(next, openURLCmd(m.act.id, url))
 		}
 		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, msg.line)
@@ -636,12 +688,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case browserOpenMsg:
 		// Only the failure is worth a line: a browser that opened is on the
-		// user's screen, and the link itself is already in the log tail.
+		// user's screen, and the link itself is already at the foot of this
+		// one. Over SSH this is the common case, not an edge case: the remote
+		// box has an opener that exits "no method available" a moment after it
+		// starts, or none at all.
 		if m.act == nil || m.act.id != msg.id || msg.err == nil {
 			return m, nil
 		}
-		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, "Could not open a browser here ("+msg.err.Error()+"). Open the link above to authorize.")
+		m.bridgeLogs = appendBridgeLog(m.bridgeLogs, "Could not open a browser here ("+msg.err.Error()+"). Use the link below to authorize.")
 		return m, nil
+
+	case clipboardMsg:
+		if m.act == nil || m.act.id != msg.id {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.bridgeLogs = appendBridgeLog(m.bridgeLogs, "Could not copy the link ("+msg.err.Error()+"). Select it with the mouse instead.")
+			return m, nil
+		}
+		m.act.copied = true
+		return m, nil
+
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 
 	case bridgeLogDoneMsg:
 		if m.act != nil && m.act.logCh == msg.ch {
@@ -738,15 +807,10 @@ func appendBridgeLog(logs []string, line string) []string {
 	return logs
 }
 
-// bridgeAuthLogPrefix labels the login link on the connect screen. It is also
-// an importantBridgeLog prefix: the link is the one line the user must act on,
-// and tsnet's own chatter would otherwise push it off the tail.
-const bridgeAuthLogPrefix = bridges.AuthLogPrefix
-
 func importantBridgeLog(line string) bool {
 	for _, prefix := range []string{
-		bridgeAuthLogPrefix,
 		"Could not open a browser here",
+		"Could not copy the link",
 		"Bridge network:",
 		"Bridge health:",
 		"Bridge target ",
@@ -966,6 +1030,66 @@ func (m *model) updatePreflight(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// authCopyLabel and authCopiedLabel are the copy button beside the login link,
+// before and after a click. The glyph alone is not a word anyone reads as
+// "clickable", so it carries one.
+const (
+	authCopyLabel   = "⧉ copy"
+	authCopiedLabel = "✓ copied"
+)
+
+// authFooter renders the login link pinned to the foot of the connect screen,
+// and reports the terminal columns its copy button occupies.
+//
+// Only columns: a mouse click carries an absolute terminal row, and this TUI
+// renders inline rather than in the alternate screen, so the row the footer
+// landed on is not knowable from here. A click in the button's columns on some
+// other row copies a link the user was asking for anyway.
+//
+// ponytail: column-only hit test, row-accurate if this ever moves to altscreen.
+func (m *model) authFooter() (text string, startCol, endCol int) {
+	act := m.act
+	if act == nil || act.authURL == "" {
+		return "", 0, 0
+	}
+	button := authCopyLabel
+	if act.copied {
+		button = authCopiedLabel
+	}
+	link := m.wrapText("", "Authorize this bridge in your browser: "+act.authURL)
+	lastLine := link[strings.LastIndex(link, "\n")+1:]
+	sep := " "
+	startCol = ansi.StringWidth(lastLine) + 1
+	if m.width > 0 && startCol+ansi.StringWidth(button) > m.width {
+		sep = "\n"
+		startCol = 0
+	}
+	// Styled a line at a time: lipgloss pads a multi-line block out to its
+	// widest line, which would leave trailing spaces on a wrapped link.
+	lines := strings.Split(link+sep+button, "\n")
+	for i, line := range lines {
+		lines[i] = authStyle.Render(line)
+	}
+	return strings.Join(lines, "\n"), startCol, startCol + ansi.StringWidth(button)
+}
+
+// updateMouse turns a click on the copy button into a clipboard write. Mouse
+// reporting is only on while that button is showing, so there is nothing else
+// on screen a click could mean.
+func (m *model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+	if m.step != stepPreflight || m.act == nil || m.act.authURL == "" {
+		return m, nil
+	}
+	_, startCol, endCol := m.authFooter()
+	if msg.X < startCol || msg.X >= endCol {
+		return m, nil
+	}
+	return m, copyURLCmd(m.act.id, m.act.authURL)
+}
+
 // activationElapsed counts the attempt up on screen. It starts at 2s so a
 // connection that answers immediately does not flash a counter.
 func activationElapsed(act *activation) string {
@@ -1004,6 +1128,11 @@ func (m *model) viewPreflight() string {
 	case m.act.cancelable():
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Esc to cancel\n"))
+	}
+	if footer, _, _ := m.authFooter(); footer != "" {
+		sb.WriteString("\n")
+		sb.WriteString(footer)
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

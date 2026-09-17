@@ -1272,43 +1272,144 @@ func TestAuthURLFromLog(t *testing.T) {
 	}
 }
 
+// runCmd executes cmd and everything it batched, discarding the messages. The
+// side effects are the point: which of the batched commands actually ran.
+func runCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runCmd(t, c)
+		}
+	}
+}
+
+const testAuthURL = "https://login.tailscale.com/a/17bceb7b0129ba"
+
 func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
-	const tsnetLine = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: https://login.tailscale.com/a/17bceb7b0129ba"
+	const tsnetLine = "To start this tsnet server, restart with TS_AUTHKEY set, or go to: " + testAuthURL
+
+	var opened []string
+	orig := openURL
+	openURL = func(url string) error {
+		opened = append(opened, url)
+		return nil
+	}
+	t.Cleanup(func() { openURL = orig })
 
 	ch := make(chan string, 1)
-	// Cancelled: waitBridgeLog then answers immediately, so a repeat log line
-	// can be distinguished from one that also dispatched a browser open
-	// without running the open itself.
+	// Cancelled: waitBridgeLog then answers immediately, so running the batch
+	// does not block on a log line that will never come.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	m := &model{
-		g:   &config.Global{},
-		act: &activation{id: 7, logCh: ch, logCtx: ctx},
+		g:     &config.Global{},
+		width: 100,
+		act:   &activation{id: 7, logCh: ch, logCtx: ctx},
 	}
 
 	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: tsnetLine})
-	if _, ok := cmd().(tea.BatchMsg); !ok {
-		t.Fatalf("first auth URL did not dispatch a browser open")
+	runCmd(t, cmd)
+	if len(opened) != 1 || opened[0] != testAuthURL {
+		t.Fatalf("browser opens = %q, want one at %q", opened, testAuthURL)
 	}
 	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: tsnetLine})
-	if _, ok := cmd().(tea.BatchMsg); ok {
-		t.Errorf("repeated auth URL dispatched a second browser open")
+	runCmd(t, cmd)
+	if len(opened) != 1 {
+		t.Errorf("repeated auth URL opened the browser again: %q", opened)
 	}
 
-	if len(m.bridgeLogs) != 1 {
-		t.Fatalf("bridge logs = %q, want one line", m.bridgeLogs)
+	// The footer owns the link; a copy in the log tail would be the same 60
+	// characters twice on one screen.
+	if len(m.bridgeLogs) != 0 {
+		t.Errorf("bridge logs = %q, want the link only in the footer", m.bridgeLogs)
 	}
-	if want := bridgeAuthLogPrefix + "https://login.tailscale.com/a/17bceb7b0129ba"; m.bridgeLogs[0] != want {
-		t.Errorf("log line = %q, want %q", m.bridgeLogs[0], want)
+	footer, _, _ := m.authFooter()
+	if want := "Authorize this bridge in your browser: " + testAuthURL; !strings.Contains(ansi.Strip(footer), want) {
+		t.Errorf("footer = %q, want it to contain %q", ansi.Strip(footer), want)
 	}
 
 	m.Update(browserOpenMsg{id: 7, err: errors.New("exec: \"xdg-open\": not found")})
-	if len(m.bridgeLogs) != 2 || !strings.Contains(m.bridgeLogs[1], "Open the link above") {
+	if len(m.bridgeLogs) != 1 || !strings.Contains(m.bridgeLogs[0], "Use the link below") {
 		t.Errorf("failed open did not tell the user to use the link: %q", m.bridgeLogs)
 	}
 	m.Update(browserOpenMsg{id: 6, err: errors.New("stale")})
-	if len(m.bridgeLogs) != 2 {
+	if len(m.bridgeLogs) != 1 {
 		t.Errorf("a stale attempt's open failure was shown: %q", m.bridgeLogs)
+	}
+}
+
+// TestAuthFooterCopyButton covers the SSH case: no browser opens there, so the
+// only way to the link is the terminal's own clipboard, over OSC 52.
+func TestAuthFooterCopyButton(t *testing.T) {
+	var copies []string
+	orig := copyToClipboard
+	copyToClipboard = func(s string) error {
+		copies = append(copies, s)
+		return nil
+	}
+	t.Cleanup(func() { copyToClipboard = orig })
+
+	m := &model{
+		g:     &config.Global{},
+		width: 100,
+		act:   &activation{id: 3, authURL: testAuthURL},
+	}
+	_, startCol, endCol := m.authFooter()
+	if startCol <= 0 || endCol <= startCol {
+		t.Fatalf("copy button columns = [%d,%d), want a range past the link", startCol, endCol)
+	}
+
+	click := func(x int) tea.Cmd {
+		_, cmd := m.Update(tea.MouseMsg{X: x, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+		return cmd
+	}
+	runCmd(t, click(startCol-1))
+	runCmd(t, click(endCol))
+	if len(copies) != 0 {
+		t.Errorf("a click beside the button copied: %q", copies)
+	}
+	if !m.mouseOn {
+		t.Error("mouse reporting is off, so no click can reach the copy button")
+	}
+
+	runCmd(t, click(startCol))
+	if len(copies) != 1 || copies[0] != testAuthURL {
+		t.Fatalf("clipboard = %q, want one copy of %q", copies, testAuthURL)
+	}
+	m.Update(clipboardMsg{id: 3})
+	if footer, _, _ := m.authFooter(); !strings.Contains(footer, authCopiedLabel) {
+		t.Errorf("footer = %q, want it to confirm the copy", ansi.Strip(footer))
+	}
+
+	// Off the connect screen the button is gone, and the terminal gets its own
+	// click-drag selection back.
+	m.step = stepMenu
+	m.Update(activationTickMsg{id: 3})
+	if m.mouseOn {
+		t.Error("mouse reporting stayed on after the copy button left the screen")
+	}
+}
+
+// TestAuthFooterWrapsButtonToItsOwnLine keeps the click target on screen when
+// the link alone fills the terminal.
+func TestAuthFooterWrapsButtonToItsOwnLine(t *testing.T) {
+	m := &model{
+		g:     &config.Global{},
+		width: len("Authorize this bridge in your browser: " + testAuthURL),
+		act:   &activation{id: 3, authURL: testAuthURL},
+	}
+	footer, startCol, endCol := m.authFooter()
+	if startCol != 0 {
+		t.Errorf("copy button starts at column %d, want the start of its own line", startCol)
+	}
+	if endCol > m.width {
+		t.Errorf("copy button ends at column %d, past the %d column terminal", endCol, m.width)
+	}
+	if last := ansi.Strip(footer[strings.LastIndex(footer, "\n")+1:]); last != authCopyLabel {
+		t.Errorf("last footer line = %q, want just the copy button", last)
 	}
 }
 
