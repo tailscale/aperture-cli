@@ -90,7 +90,7 @@ Enumeration. Named for what the user is waiting for, not for `ipn.State`.
 | `StartingMachine` | the bridge to start | `tsnet` init returns a local client |
 | `AwaitingLoginLink` | the control plane to hand back a login link | `ipn.NeedsLogin` with no `BrowseToURL` yet |
 | `AwaitingAuthorization` | themselves, in a browser | `Notify.BrowseToURL` |
-| `JoiningTailnet` | the tailnet to accept the node | `Notify.LoginFinished`, then `Notify.SelfChange` when the netmap lands |
+| `JoiningTailnet` | the tailnet to accept the node | `ipn.Starting`, which is the one notification that covers login finishing and the netmap landing |
 | `FindingEndpoint` | the far side to appear and accept a dial | `ipn.Running`, then the peer-map wait in `waitForPeerAddr` |
 | `AskingForModels` | Aperture to answer `/v1/models` | the fetch starts |
 | `Ready` | nothing | providers parsed |

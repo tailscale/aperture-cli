@@ -52,6 +52,24 @@ could come to mean two things without anyone deciding that it should.
 Both need a home before the events are implemented. Naming them is out of scope
 for this pass; that they are unowned is the finding.
 
+### What shipped, and what the table is still describing
+
+Three of the six are in `internal/connection` (`event.go`). The other three are
+not, and the gap is deliberate rather than unfinished:
+
+| Event | State | Why |
+|---|---|---|
+| `PhaseEntered` | Built, payload reduced to `Phase` | `Progress` is derivable: the connect screen already stamps every line with elapsed time from the Attempt's start, so carrying a duration in the event would be a second copy of the same clock, computed earlier and able to disagree. Add it when something off-screen needs the number. |
+| `LoginRequired` | Built as specified | |
+| `Noted` | Built as specified | |
+| `TailnetJoined` | Not built | Blocked on the Bridge/tailnet ownership decision above. `Manager.Tailnet` and `recordBridgeTailnet` still carry it. |
+| `Ready`, `Failed` | Not built | Both already travel as `endpointActivationResult` on the same channel, typed, with the same single consumer. Converting them buys nothing until the Gateway owner exists, and `Ready`'s payload is that owner's to define. |
+
+Six `Phase` values are built, not nine. `Ready`, `Failed` and `Cancelled` are
+in the domain model because they are real states of an Attempt, but nothing
+emits a `PhaseEntered` for them today, and a constant no producer writes is a
+constant a reader has to go and check. They arrive with the Attempt aggregate.
+
 ## Persisted facts
 
 No DDL, but the schema rules still apply to `settings.json` and one of them
