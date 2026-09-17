@@ -18,6 +18,7 @@ import (
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/connection"
 	"tailscale.com/client/local"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
@@ -194,7 +195,11 @@ func (n *tsnetNode) WatchLogin(ctx context.Context, ev events) {
 		report(err)
 		return
 	}
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+	// InitialHealthState as well as InitialState: health changes reach every
+	// watcher regardless of mask, but a login that was already broken before
+	// this watch started only shows up in the initial one, which is the reused
+	// node case.
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyInitialHealthState)
 	if err != nil {
 		report(err)
 		return
@@ -228,6 +233,11 @@ func reportLogin(watcher *local.IPNBusWatcher, ev events) error {
 type loginReporter struct {
 	ev    events
 	phase connection.Phase
+	// loginBroken is whether the login-state warning is currently up. Held
+	// because the health state is re-sent on every retry and the text carries
+	// a fresh request ID each time, so reporting on text would put a new line
+	// on screen roughly once a second for as long as the failure lasts.
+	loginBroken bool
 }
 
 func (r *loginReporter) enter(p connection.Phase) {
@@ -286,6 +296,37 @@ func (r *loginReporter) notify(n *ipn.Notify) {
 		r.enter(connection.AwaitingAuthorization)
 		r.ev.login(link)
 	}
+	r.health(n.Health)
+}
+
+// health reports a login that is failing rather than merely slow.
+//
+// Without this the two are one screen: a register that control answers with a
+// 502 leaves the node in NeedsLogin, sending no BrowseToURL, so the attempt
+// sits on "Waiting for a login link" for as long as the user tolerates it
+// while tsnet retries behind a backoff. The failure is published on the health
+// state and nowhere else the bus exposes: the error is not a vizerror, so it
+// never reaches Notify.ErrMessage.
+//
+// login-state specifically, not every warning. The others describe a node that
+// is up and imperfect (no DERP home, an update available), which is not this
+// attempt's business and would bury the one line that is. k8s-proxy watches
+// the same warnable for the same reason.
+func (r *loginReporter) health(state *health.State) {
+	if state == nil {
+		return
+	}
+	warning, broken := state.Warnings[health.LoginStateWarnable.Code]
+	if broken == r.loginBroken {
+		return
+	}
+	r.loginBroken = broken
+	if !broken {
+		slog.Info("bridge login recovered")
+		return
+	}
+	slog.Error("bridge login is failing", "text", warning.Text)
+	r.ev.note("The tailnet will not log this bridge in: " + warning.Text)
 }
 
 // Logout drops the node's tailnet credentials. The node must be running: the

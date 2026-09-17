@@ -19,6 +19,7 @@ import (
 
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/connection"
+	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
@@ -994,5 +995,64 @@ func TestNotifyLogsWhatTheScreenCollapses(t *testing.T) {
 	// without this a discarded link is invisible on the run that hit it.
 	if !strings.Contains(logged, "http://evil.example.com/a/x") {
 		t.Errorf("run log = %q, want the link that was thrown away", logged)
+	}
+}
+
+func unhealthyLogin(text string) *ipn.Notify {
+	return &ipn.Notify{Health: &health.State{
+		Warnings: map[health.WarnableCode]health.UnhealthyState{
+			health.LoginStateWarnable.Code: {WarnableCode: health.LoginStateWarnable.Code, Text: text},
+		},
+	}}
+}
+
+// TestLoginReporterReportsALoginThatIsFailing is the 502 register loop. Control
+// answers the register with an error, so the node stays in NeedsLogin and never
+// sends a BrowseToURL, and the attempt sits on "Waiting for a login link" while
+// tsnet retries behind a backoff. Nothing else on the bus carries the reason:
+// the error is not a vizerror, so ErrMessage stays nil and the health state is
+// the only place it appears.
+func TestLoginReporterReportsALoginThatIsFailing(t *testing.T) {
+	const text = "You are logged out. The last login error was: register request: http 502"
+
+	var lines []string
+	r := &loginReporter{ev: collect(&lines)}
+	r.notify(state(ipn.NeedsLogin))
+	r.notify(unhealthyLogin(text))
+
+	if len(lines) != 2 || !strings.Contains(lines[1], text) {
+		t.Fatalf("reported %q, want the wait followed by why it will not end", lines)
+	}
+
+	// Every retry re-sends the state with a fresh request ID in the text, about
+	// once a second. Reporting each one would push the phases off the screen.
+	r.notify(unhealthyLogin(text + " REQ-0001"))
+	r.notify(unhealthyLogin(text + " REQ-0002"))
+	if len(lines) != 2 {
+		t.Errorf("reported %q, want the failure named once while it lasts", lines)
+	}
+
+	// A retry that succeeds clears the warning, and the next failure is news
+	// again rather than a repeat.
+	r.notify(&ipn.Notify{Health: &health.State{}})
+	r.notify(unhealthyLogin(text))
+	if len(lines) != 3 {
+		t.Errorf("reported %q, want a failure after a recovery to be reported", lines)
+	}
+}
+
+// TestLoginReporterIgnoresWarningsThatAreNotTheLogin keeps the connect screen
+// about the wait it is in. A node with no DERP home is a real warning and not
+// this attempt's business.
+func TestLoginReporterIgnoresWarningsThatAreNotTheLogin(t *testing.T) {
+	var lines []string
+	r := &loginReporter{ev: collect(&lines)}
+	r.notify(&ipn.Notify{Health: &health.State{
+		Warnings: map[health.WarnableCode]health.UnhealthyState{
+			"no-derp-home": {WarnableCode: "no-derp-home", Text: "no home DERP"},
+		},
+	}})
+	if len(lines) != 0 {
+		t.Errorf("reported %q, want an unrelated warning left off the connect screen", lines)
 	}
 }

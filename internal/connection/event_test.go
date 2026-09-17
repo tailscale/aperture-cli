@@ -1,6 +1,9 @@
 package connection
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseLoginLink(t *testing.T) {
 	for _, tt := range []struct {
@@ -75,6 +78,23 @@ func TestPhasesAreOrdered(t *testing.T) {
 		}
 		if p.String() == "" {
 			t.Errorf("phase %d has no name for the screen", int(p))
+		}
+	}
+}
+
+// TestNoteIsOneLine covers the shape control plane errors actually arrive in.
+// A register failure carries its request ID on a second line, and the connect
+// screen wraps and indents each log line itself: an embedded newline puts
+// unindented text mid-block and miscounts the rows the renderer repaints.
+func TestNoteIsOneLine(t *testing.T) {
+	raw := "register request: http 502: backend not found; tn=0\nREQ-2026091717445499013f4d855ec3c0"
+	got := Note(raw).String()
+	if strings.Contains(got, "\n") {
+		t.Errorf("note = %q, want the newline flattened out", got)
+	}
+	for _, want := range []string{"http 502", "REQ-2026091717445499013f4d855ec3c0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("note = %q, want it to keep %q", got, want)
 		}
 	}
 }

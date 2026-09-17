@@ -117,8 +117,17 @@ type Event struct {
 	Text  string    // Kind == Noted
 }
 
-// Note reports diagnostics.
-func Note(text string) Event { return Event{Kind: Noted, Text: text} }
+// Note reports diagnostics, flattened to one line.
+//
+// Flattened here rather than at each consumer because String promises one line
+// of the activation log and the screen relies on it: the connect screen wraps
+// and indents each line itself, and an embedded newline puts unindented text
+// in the middle of the block and miscounts the rows the renderer has to
+// repaint. Control plane errors arrive with the request ID on a second line,
+// so this is the normal shape of a failure, not a malformed one.
+func Note(text string) Event {
+	return Event{Kind: Noted, Text: strings.Join(strings.Fields(text), " ")}
+}
 
 // Notef reports diagnostics, formatted.
 func Notef(format string, args ...any) Event { return Note(fmt.Sprintf(format, args...)) }
