@@ -1,9 +1,11 @@
 package bridges
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -920,5 +922,45 @@ func TestAProxyReportsToTheAttemptUsingItNow(t *testing.T) {
 	}
 	if slices.ContainsFunc(f.logs, func(s string) bool { return strings.Contains(s, "dial failed") }) {
 		t.Errorf("the finished attempt was still being written to: %q", f.logs)
+	}
+}
+
+// TestSinkLogsEveryEvent covers the case the run log exists for: a connect
+// attempt that gets killed. Whatever the screen was showing is gone with the
+// process, so every event has to reach the file on its way to the screen,
+// including on the paths that pass no screen sink at all.
+func TestSinkLogsEveryEvent(t *testing.T) {
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	link, err := connection.ParseLoginLink("https://login.tailscale.com/a/17bceb7b0129ba")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var seen []connection.Event
+	ev := sink(func(e connection.Event) { seen = append(seen, e) })
+	ev.enter(connection.StartingMachine)
+	ev.login(link)
+	ev.note("dialing")
+	if len(seen) != 3 {
+		t.Errorf("screen saw %d events, want the tee to forward all 3", len(seen))
+	}
+
+	// The nil sink is the reuse path, which still has to leave a record.
+	sink(nil).enter(connection.FindingEndpoint)
+
+	logged := buf.String()
+	for _, want := range []string{
+		connection.StartingMachine.String(),
+		link.String(),
+		"dialing",
+		connection.FindingEndpoint.String(),
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("run log = %q, want it to record %q", logged, want)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -108,6 +109,49 @@ func gitCommitHeightInDir(dir string) string {
 	return height
 }
 
+// startRunLog points slog at the run log and returns its closer. Records are
+// written straight through, so the os.Exit paths that skip the close lose
+// nothing; the close is there to be tidy, not to flush.
+//
+// A run that cannot open the file still runs: diagnostics are not worth
+// refusing to start over. It falls back to discarding them rather than to
+// stderr, because stderr is the TUI's screen.
+//
+// verbose only raises the level. The log is on for every run: the run worth
+// reading back is the one that went wrong, and nobody knows to pass -debug
+// before it does.
+func startRunLog(verbose bool) func() {
+	f, err := config.OpenRunLog()
+	if err != nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		return func() {}
+	}
+	level := slog.LevelInfo
+	if verbose {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: level})))
+	slog.Info("aperture starting", "version", buildVersion, "commit", buildCommit, "pid", os.Getpid())
+	return func() {
+		slog.Info("aperture exiting")
+		f.Close()
+	}
+}
+
+// reportFailure puts a failure back in front of the user. Every diagnostic now
+// goes to the run log, which is the right place for a running TUI and the
+// wrong one for a run that just died: without this, a launch that fails prints
+// nothing and exits 1.
+//
+// stderr is safe at both call sites: the TUI either never started or has
+// already given the terminal back.
+func reportFailure(err error) {
+	fmt.Fprintln(os.Stderr, "aperture:", err)
+	if path, pathErr := config.RunLogPath(); pathErr == nil {
+		fmt.Fprintln(os.Stderr, "details:", path)
+	}
+}
+
 func main() {
 	flag.Parse()
 
@@ -120,9 +164,16 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Before anything that logs. slog's default handler writes to stderr,
+	// which on a TUI that owns the terminal means a line painted over the
+	// screen, so until this runs every diagnostic is either damage or lost.
+	closeLog := startRunLog(*flagDebug)
+	defer closeLog()
+
 	g, err := config.Load()
 	if err != nil {
 		slog.Error("loading launcher config", "err", err)
+		reportFailure(err)
 		os.Exit(1)
 	}
 	g.Debug = *flagDebug
@@ -136,10 +187,12 @@ func main() {
 	var exitCode int
 	if _, err := p.Run(); err != nil {
 		slog.Error("launcher error", "err", err)
+		reportFailure(err)
 		exitCode = 1
 	}
 	if err := bridgeManager.Close(); err != nil {
 		slog.Error("shutting down bridges", "err", err)
+		reportFailure(err)
 		exitCode = 1
 	}
 	if exitCode != 0 {

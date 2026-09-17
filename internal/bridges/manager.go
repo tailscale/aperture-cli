@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -112,10 +113,30 @@ type events func(connection.Event)
 
 // sink returns a usable events, so callers that want none can pass nil.
 func sink(emit func(connection.Event)) events {
-	if emit == nil {
-		return func(connection.Event) {}
+	return func(e connection.Event) {
+		logEvent(e)
+		if emit != nil {
+			emit(e)
+		}
 	}
-	return emit
+}
+
+// logEvent copies a connection event into the run log. The connect screen
+// already shows these, but the screen dies with the process, and the run
+// anyone wants to read back is the one that was killed halfway through: what
+// it was waiting on and for how long is only answerable from a file.
+//
+// Notes are debug because tsnet's backend logger arrives as notes under
+// -debug, and a phase is worth reading without wading through that.
+func logEvent(e connection.Event) {
+	switch e.Kind {
+	case connection.PhaseEntered:
+		slog.Info("bridge phase", "phase", e.Phase)
+	case connection.LoginRequired:
+		slog.Info("bridge needs login", "url", e.Link.String())
+	default:
+		slog.Debug("bridge note", "text", e.Text)
+	}
 }
 
 func (e events) note(text string)                 { e(connection.Note(text)) }
@@ -400,8 +421,13 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, ev even
 	defer stopWatch()
 	go rt.node.WatchLogin(watchCtx, ev)
 
+	// Timed because this is the wait every "it just sat there" report is
+	// about, and the number is the difference between a slow control plane and
+	// a login link the user never saw.
+	start := time.Now()
 	status, err := rt.node.Up(ctx)
 	if err != nil {
+		slog.Error("bridge node did not come up", "bridge", bridge.ID, "after", time.Since(start), "err", err)
 		m.mu.Lock()
 		if m.nodes[bridge.ID] == rt {
 			delete(m.nodes, bridge.ID)
@@ -409,6 +435,7 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, ev even
 		m.mu.Unlock()
 		return nil, nil, errors.Join(err, rt.node.Close())
 	}
+	slog.Info("bridge node up", "bridge", bridge.ID, "after", time.Since(start))
 
 	// Up returns the login status, so the tailnet this bridge reaches costs no
 	// extra call. The connection picker names it on rows the user has not
