@@ -102,12 +102,6 @@ type model struct {
 	bridgeLogs       []bridgeLine
 	failedEndpoint   *config.Endpoint
 	connected        bool
-
-	// mouseOn tracks whether mouse reporting is currently enabled. It is only
-	// on while the login link's copy button is on screen: with reporting on,
-	// the terminal's own click-drag selection needs a Shift the user has no
-	// reason to expect, and every other screen here is text worth selecting.
-	mouseOn bool
 }
 
 // activation is the connection attempt currently on screen. It owns the
@@ -635,33 +629,7 @@ func (m *model) quitCmd() tea.Cmd {
 	}
 }
 
-// Update handles a message and then reconciles mouse reporting with what is on
-// screen. Doing it here rather than at each transition is what keeps reporting
-// from being left on by a path nobody thought about: every way off the connect
-// screen goes through this function.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	next, cmd := m.update(msg)
-	if mouse := m.syncMouse(); mouse != nil {
-		return next, tea.Batch(cmd, mouse)
-	}
-	return next, cmd
-}
-
-// syncMouse returns the command that turns mouse reporting on or off, or nil
-// when it already matches the screen.
-func (m *model) syncMouse() tea.Cmd {
-	want := m.step == stepPreflight && m.act != nil && m.act.authURL != ""
-	if want == m.mouseOn {
-		return nil
-	}
-	m.mouseOn = want
-	if want {
-		return tea.EnableMouseCellMotion
-	}
-	return tea.DisableMouse
-}
-
-func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -775,14 +743,11 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.bridgeLogs = appendBridgeLog(m.bridgeLogs, m.act.logLine("Could not copy the link ("+msg.err.Error()+"). Select it with the mouse instead."))
+			m.bridgeLogs = appendBridgeLog(m.bridgeLogs, m.act.logLine("Could not copy the link ("+msg.err.Error()+"). Select it above instead."))
 			return m, nil
 		}
 		m.act.copied = true
 		return m, nil
-
-	case tea.MouseMsg:
-		return m.updateMouse(msg)
 
 	case bridgeLogDoneMsg:
 		if m.act != nil && m.act.logCh == msg.ch {
@@ -1084,6 +1049,12 @@ func (m *model) updatePreflight(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m, m.quitCmd()
 	}
+	// Before the override editor gets a look: that editor owns every printable
+	// key while a bridge attempt runs, which is the same screen the login link
+	// appears on, so the copy key has to be a chord the editor drops.
+	if msg.String() == "ctrl+y" && m.act != nil && m.act.authURL != "" {
+		return m, copyURLCmd(m.act.id, m.act.authURL)
+	}
 	if !m.act.cancelable() {
 		return m, nil
 	}
@@ -1109,64 +1080,56 @@ func (m *model) updatePreflight(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// authCopyLabel and authCopiedLabel are the copy button beside the login link,
-// before and after a click. The glyph alone is not a word anyone reads as
-// "clickable", so it carries one.
+// authCopyHint and authCopiedHint are the line under the login link, before
+// and after ctrl+y. The key has to be named on screen: nothing about a URL
+// suggests which chord copies it.
 const (
-	authCopyLabel   = "⧉ copy"
-	authCopiedLabel = "✓ copied"
+	authCopyHint   = "ctrl+y to copy the link"
+	authCopiedHint = "✓ copied to the clipboard"
+	authProse      = "Authorize this bridge in your browser:"
 )
 
-// authFooter renders the login link pinned to the foot of the connect screen,
-// and reports the terminal columns its copy button occupies.
+// authFooter renders the login link pinned to the foot of the connect screen.
 //
-// Only columns: a mouse click carries an absolute terminal row, and this TUI
-// renders inline rather than in the alternate screen, so the row the footer
-// landed on is not knowable from here. A click in the button's columns on some
-// other row copies a link the user was asking for anyway.
+// The link owns its lines outright, with no prose beside it and no indent
+// under it. Bubble Tea's renderer truncates any line wider than the terminal,
+// so a long URL has to wrap, and anything sharing those lines lands in the
+// selection when the user drags across them. Split across bare lines it still
+// pastes: browsers strip the newline out of a URL, they do not strip an
+// indent or a trailing label.
 //
-// ponytail: column-only hit test, row-accurate if this ever moves to altscreen.
-func (m *model) authFooter() (text string, startCol, endCol int) {
+// Every line carries the same OSC 8 hyperlink, id-tagged so terminals rejoin
+// the halves into one target. That is what keeps ctrl-click working on a URL
+// the screen had to break in two.
+func (m *model) authFooter() string {
 	act := m.act
 	if act == nil || act.authURL == "" {
-		return "", 0, 0
+		return ""
 	}
-	button := authCopyLabel
+	hint := authCopyHint
 	if act.copied {
-		button = authCopiedLabel
+		hint = authCopiedHint
 	}
-	link := m.wrapText("", "Authorize this bridge in your browser: "+act.authURL)
-	lastLine := link[strings.LastIndex(link, "\n")+1:]
-	sep := " "
-	startCol = ansi.StringWidth(lastLine) + 1
-	if m.width > 0 && startCol+ansi.StringWidth(button) > m.width {
-		sep = "\n"
-		startCol = 0
-	}
+	var sb strings.Builder
 	// Styled a line at a time: lipgloss pads a multi-line block out to its
 	// widest line, which would leave trailing spaces on a wrapped link.
-	lines := strings.Split(link+sep+button, "\n")
-	for i, line := range lines {
-		lines[i] = authStyle.Render(line)
+	for _, line := range strings.Split(m.wrapText("", authProse), "\n") {
+		sb.WriteString(authStyle.Render(line))
+		sb.WriteString("\n")
 	}
-	return strings.Join(lines, "\n"), startCol, startCol + ansi.StringWidth(button)
-}
-
-// updateMouse turns a click on the copy button into a clipboard write. Mouse
-// reporting is only on while that button is showing, so there is nothing else
-// on screen a click could mean.
-func (m *model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
-		return m, nil
+	for _, line := range strings.Split(m.wrapText("", act.authURL), "\n") {
+		sb.WriteString(ansi.SetHyperlink(act.authURL, "id=aperture-auth"))
+		sb.WriteString(authStyle.Render(line))
+		sb.WriteString(ansi.ResetHyperlink())
+		sb.WriteString("\n")
 	}
-	if m.step != stepPreflight || m.act == nil || m.act.authURL == "" {
-		return m, nil
+	for i, line := range strings.Split(m.wrapText("", hint), "\n") {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(dimStyle.Render(line))
 	}
-	_, startCol, endCol := m.authFooter()
-	if msg.X < startCol || msg.X >= endCol {
-		return m, nil
-	}
-	return m, copyURLCmd(m.act.id, m.act.authURL)
+	return sb.String()
 }
 
 // activationElapsed counts the attempt up on screen. It starts at 2s so a
@@ -1208,7 +1171,7 @@ func (m *model) viewPreflight() string {
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Esc to cancel\n"))
 	}
-	if footer, _, _ := m.authFooter(); footer != "" {
+	if footer := m.authFooter(); footer != "" {
 		sb.WriteString("\n")
 		sb.WriteString(footer)
 		sb.WriteString("\n")

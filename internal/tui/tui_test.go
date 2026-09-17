@@ -1336,9 +1336,12 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 	if len(m.bridgeLogs) != 0 {
 		t.Errorf("bridge logs = %q, want the link only in the footer", m.bridgeLogs)
 	}
-	footer, _, _ := m.authFooter()
-	if want := "Authorize this bridge in your browser: " + testAuthURL; !strings.Contains(ansi.Strip(footer), want) {
-		t.Errorf("footer = %q, want it to contain %q", ansi.Strip(footer), want)
+	footer := ansi.Strip(m.authFooter())
+	if !strings.Contains(footer, authProse) {
+		t.Errorf("footer = %q, want it to say what the link is for", footer)
+	}
+	if !strings.Contains(footer, "\n"+testAuthURL+"\n") {
+		t.Errorf("footer = %q, want %q alone on its line", footer, testAuthURL)
 	}
 
 	m.Update(browserOpenMsg{id: 7, err: errors.New("exec: \"xdg-open\": not found")})
@@ -1351,9 +1354,11 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 	}
 }
 
-// TestAuthFooterCopyButton covers the SSH case: no browser opens there, so the
-// only way to the link is the terminal's own clipboard, over OSC 52.
-func TestAuthFooterCopyButton(t *testing.T) {
+// TestAuthFooterCopyKey covers the SSH case: no browser opens there, so the
+// only way to the link is the terminal's own clipboard, over OSC 52. The key
+// is a chord because the override editor shares this screen and takes every
+// printable one.
+func TestAuthFooterCopyKey(t *testing.T) {
 	var copies []string
 	orig := copyToClipboard
 	copyToClipboard = func(s string) error {
@@ -1365,61 +1370,88 @@ func TestAuthFooterCopyButton(t *testing.T) {
 	m := &model{
 		g:     &config.Global{},
 		width: 100,
-		act:   &activation{id: 3, authURL: testAuthURL},
+		step:  stepPreflight,
+		act: &activation{
+			id:       3,
+			authURL:  testAuthURL,
+			endpoint: config.Endpoint{BridgeID: "b1"},
+			cancel:   func() {},
+		},
 	}
-	_, startCol, endCol := m.authFooter()
-	if startCol <= 0 || endCol <= startCol {
-		t.Fatalf("copy button columns = [%d,%d), want a range past the link", startCol, endCol)
+	if !m.act.overridable() {
+		t.Fatal("the override editor is inert here, so this does not test the collision it is about")
 	}
 
-	click := func(x int) tea.Cmd {
-		_, cmd := m.Update(tea.MouseMsg{X: x, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-		return cmd
-	}
-	runCmd(t, click(startCol-1))
-	runCmd(t, click(endCol))
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	runCmd(t, cmd)
 	if len(copies) != 0 {
-		t.Errorf("a click beside the button copied: %q", copies)
+		t.Errorf("a printable key copied: %q", copies)
 	}
-	if !m.mouseOn {
-		t.Error("mouse reporting is off, so no click can reach the copy button")
+	if m.act.override.value != "c" {
+		t.Errorf("override = %q, want the printable key to reach the editor", m.act.override.value)
 	}
 
-	runCmd(t, click(startCol))
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	runCmd(t, cmd)
 	if len(copies) != 1 || copies[0] != testAuthURL {
 		t.Fatalf("clipboard = %q, want one copy of %q", copies, testAuthURL)
 	}
-	m.Update(clipboardMsg{id: 3})
-	if footer, _, _ := m.authFooter(); !strings.Contains(footer, authCopiedLabel) {
-		t.Errorf("footer = %q, want it to confirm the copy", ansi.Strip(footer))
+	if m.act.override.value != "c" {
+		t.Errorf("override = %q, want ctrl+y to leave the editor alone", m.act.override.value)
 	}
 
-	// Off the connect screen the button is gone, and the terminal gets its own
-	// click-drag selection back.
-	m.step = stepMenu
-	m.Update(activationTickMsg{id: 3})
-	if m.mouseOn {
-		t.Error("mouse reporting stayed on after the copy button left the screen")
+	m.Update(clipboardMsg{id: 3})
+	if footer := ansi.Strip(m.authFooter()); !strings.Contains(footer, authCopiedHint) {
+		t.Errorf("footer = %q, want it to confirm the copy", footer)
 	}
 }
 
-// TestAuthFooterWrapsButtonToItsOwnLine keeps the click target on screen when
-// the link alone fills the terminal.
-func TestAuthFooterWrapsButtonToItsOwnLine(t *testing.T) {
+// TestAuthFooterKeepsAWrappedLinkSelectable is the narrow terminal case. Bubble
+// Tea's renderer cuts any line past the width, so the link has to wrap, and a
+// wrapped link that shares its lines with prose or an indent is one nobody can
+// drag out of the terminal.
+func TestAuthFooterKeepsAWrappedLinkSelectable(t *testing.T) {
 	m := &model{
 		g:     &config.Global{},
-		width: len("Authorize this bridge in your browser: " + testAuthURL),
+		width: 30,
 		act:   &activation{id: 3, authURL: testAuthURL},
 	}
-	footer, startCol, endCol := m.authFooter()
-	if startCol != 0 {
-		t.Errorf("copy button starts at column %d, want the start of its own line", startCol)
+	lines := strings.Split(ansi.Strip(m.authFooter()), "\n")
+	prose := strings.Count(m.wrapText("", authProse), "\n") + 1
+	hint := strings.Count(m.wrapText("", authCopyHint), "\n") + 1
+	link := lines[prose : len(lines)-hint]
+	if len(link) < 2 {
+		t.Fatalf("footer = %q, want a link too long for %d columns to have wrapped", lines, m.width)
 	}
-	if endCol > m.width {
-		t.Errorf("copy button ends at column %d, past the %d column terminal", endCol, m.width)
+	if joined := strings.Join(link, ""); joined != testAuthURL {
+		t.Errorf("link lines joined = %q, want %q: a paste of the selection would not resolve", joined, testAuthURL)
 	}
-	if last := ansi.Strip(footer[strings.LastIndex(footer, "\n")+1:]); last != authCopyLabel {
-		t.Errorf("last footer line = %q, want just the copy button", last)
+	for _, line := range lines {
+		if ansi.StringWidth(line) > m.width {
+			t.Errorf("line %q is wider than the %d column terminal, so the renderer will cut it", line, m.width)
+		}
+		if strings.TrimSpace(line) != line {
+			t.Errorf("line %q carries padding the selection would pick up", line)
+		}
+	}
+}
+
+// TestAuthFooterLinksEveryWrappedLine checks the OSC 8 hyperlink that makes
+// ctrl-click work on a link the screen had to break in two: each piece carries
+// the whole URL, under one id so the terminal treats them as one target.
+func TestAuthFooterLinksEveryWrappedLine(t *testing.T) {
+	m := &model{
+		g:     &config.Global{},
+		width: 30,
+		act:   &activation{id: 3, authURL: testAuthURL},
+	}
+	footer := m.authFooter()
+	open := ansi.SetHyperlink(testAuthURL, "id=aperture-auth")
+	if got := strings.Count(footer, open); got != 2 {
+		t.Errorf("footer opens the hyperlink %d times, want one per wrapped line: %q", got, footer)
+	}
+	if got := strings.Count(footer, ansi.ResetHyperlink()); got != 2 {
+		t.Errorf("footer closes the hyperlink %d times, want one per wrapped line: %q", got, footer)
 	}
 }
 
