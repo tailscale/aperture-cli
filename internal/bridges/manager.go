@@ -180,7 +180,13 @@ func (r *loginReporter) notify(n *ipn.Notify) {
 	}
 	if n.State != nil {
 		switch *n.State {
-		case ipn.NeedsLogin:
+		case ipn.NoState, ipn.NeedsLogin:
+			// Both, and NoState is the one that matters. A bridge that has
+			// never logged in sits in NoState for the whole of
+			// POST /machine/register and only reaches NeedsLogin once control
+			// has answered with a URL, so NoState is the wait, not a
+			// not-started-yet. Tailscale's own comment on it reads "UIs should
+			// print Loading..." (ipnlocal/local.go, nextStateLocked).
 			r.enter(connection.AwaitingLoginLink)
 		case ipn.NeedsMachineAuth:
 			// No phase of its own: we have never seen it, and inventing a wait

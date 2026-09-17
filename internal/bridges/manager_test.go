@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -793,6 +794,12 @@ func TestActivate(t *testing.T) {
 	}
 }
 
+// state and browse are the two notifications the bus sends that this package
+// translates. Named here rather than inline so the tests read as the sequence
+// a real login produces.
+func state(s ipn.State) *ipn.Notify { return &ipn.Notify{State: &s} }
+func browse(u string) *ipn.Notify   { return &ipn.Notify{BrowseToURL: &u} }
+
 // TestLoginReporterSplitsTheTwoNeedsLoginWaits is the diagnosis this whole
 // change came from. A bridge took 29 seconds to come up and the screen said
 // only that it needed a login, so there was no way to tell the control plane
@@ -802,9 +809,6 @@ func TestLoginReporterSplitsTheTwoNeedsLoginWaits(t *testing.T) {
 	const url = "https://login.tailscale.com/a/28ba393017981"
 	var got []string
 	r := &loginReporter{ev: collect(&got)}
-
-	state := func(s ipn.State) *ipn.Notify { return &ipn.Notify{State: &s} }
-	browse := func(u string) *ipn.Notify { return &ipn.Notify{BrowseToURL: &u} }
 
 	r.notify(state(ipn.NeedsLogin))
 	r.notify(state(ipn.NeedsLogin)) // the bus repeats itself
@@ -833,13 +837,40 @@ func TestLoginReporterRejectsAnUnusableLink(t *testing.T) {
 
 	// http, not https. The value is handed to a desktop opener, so this is the
 	// one thing that must not pass through untouched.
-	plaintext := "http://evil.example.com/a/x"
-	r.notify(&ipn.Notify{BrowseToURL: &plaintext})
+	r.notify(browse("http://evil.example.com/a/x"))
 
 	if len(got) != 1 || !strings.Contains(got[0], "unusable login link") {
 		t.Fatalf("reported %q, want one line saying the link was ignored", got)
 	}
 	if strings.Contains(got[0], "Authorize this bridge at") {
 		t.Errorf("an http link was offered to the browser: %q", got[0])
+	}
+}
+
+// TestLoginReporterNamesTheWaitBeforeTheControlPlaneAnswers is the state the
+// first version of this missed. A bridge that has never logged in sits in
+// ipn.NoState for the whole of POST /machine/register, and only reaches
+// NeedsLogin once control has answered with a URL, so NoState is the entire
+// wait this refactor exists to name. Untranslated it emits nothing, and a
+// register that took over a minute put "Starting the bridge" on screen and
+// then went silent.
+func TestLoginReporterNamesTheWaitBeforeTheControlPlaneAnswers(t *testing.T) {
+	var lines []string
+	reporter := loginReporter{ev: collect(&lines)}
+
+	// NoState alone, which is all the user gets for the length of the
+	// register. NeedsLogin arrives only once control has answered, so a test
+	// that ends on it would pass on the NeedsLogin case and prove nothing.
+	reporter.notify(state(ipn.NoState))
+	want := []string{connection.AwaitingLoginLink.String()}
+	if !slices.Equal(lines, want) {
+		t.Fatalf("reported %q, want %q", lines, want)
+	}
+
+	// And the NeedsLogin that follows it is the same wait, not a second one.
+	reporter.notify(state(ipn.NoState))
+	reporter.notify(state(ipn.NeedsLogin))
+	if !slices.Equal(lines, want) {
+		t.Errorf("reported %q, want the wait named once", lines)
 	}
 }
