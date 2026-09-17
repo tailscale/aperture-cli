@@ -146,8 +146,13 @@ func TestSettings_MissingFileUsesDefaults(t *testing.T) {
 func TestSettings_InvalidJSONReturnsErrorWithoutReplacingFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	cfgDir := filepath.Join(tmp, ".config")
-	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	// Ask for the config dir rather than assuming XDG layout: on darwin
+	// os.UserConfigDir ignores XDG_CONFIG_HOME and resolves under HOME.
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(cfgDir, "aperture", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -157,7 +162,7 @@ func TestSettings_InvalidJSONReturnsErrorWithoutReplacingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := config.LoadSettings()
+	_, err = config.LoadSettings()
 	if err == nil || !strings.Contains(err.Error(), "parsing settings") {
 		t.Fatalf("LoadSettings error = %v, want parsing error", err)
 	}
