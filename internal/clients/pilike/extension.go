@@ -1,0 +1,204 @@
+package pilike
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/tailscale/aperture-cli/internal/config"
+)
+
+// provider is the provider-config form accepted by the harness's
+// pi.registerProvider(id, config) extension API. Field names match pi's
+// documented models.json / registerProvider schema.
+type provider struct {
+	Name    string  `json:"name"`
+	BaseURL string  `json:"baseUrl"`
+	APIKey  string  `json:"apiKey"`
+	API     string  `json:"api"`
+	Models  []model `json:"models"`
+}
+
+// model is one entry in a provider's model list.
+//
+// Every field must be populated. Unlike the models.json path, which fills in
+// defaults for a partial model definition, a provider registered from an
+// extension is used as given: an omitted maxTokens reaches the endpoint as a
+// literal null and Anthropic rejects the request with "max_tokens: expected
+// number, received null". An omitted input list crashes the harness outright,
+// because its --list-models formatter dereferences it without a nil check.
+//
+// reasoning stays false because GET /v1/models reports no thinking
+// capability, and claiming it makes the harness send parameters the model may
+// reject.
+type model struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Reasoning     bool     `json:"reasoning"`
+	Input         []string `json:"input"`
+	ContextWindow int      `json:"contextWindow"`
+	MaxTokens     int      `json:"maxTokens"`
+	Cost          cost     `json:"cost"`
+}
+
+// Aperture's provider list carries no token metadata, so every model gets
+// the harness's own documented defaults rather than invented per-model
+// numbers. Users who need different limits can override them per model in
+// models.json.
+// provider.
+const (
+	defaultContextWindow = 128000
+	defaultMaxTokens     = 16384
+)
+
+// cost is the harness's per-million-token rate block. Aperture reports no
+// pricing, so every rate is zero.
+type cost struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cacheRead"`
+	CacheWrite float64 `json:"cacheWrite"`
+}
+
+// namespacedProviderID namespaces the Aperture provider ID so registering it
+// can never overwrite one of the harness's built-in providers (the harness
+// merges a registration into a same-named built-in, which would silently
+// retarget the user's own "anthropic" or "openai" models at Aperture).
+func namespacedProviderID(providerID string) string {
+	return "aperture-" + providerID
+}
+
+// modelRef is the "provider/model" reference the harness's --model flag
+// expects, built from the namespaced provider ID and a bare model ID.
+func modelRef(providerID, m string) string {
+	return namespacedProviderID(providerID) + "/" + stripProviderPrefix(m)
+}
+
+// baseURL returns the endpoint the harness should call for this backend. The
+// suffix differs per wire protocol: OpenAI-style APIs are rooted at /v1,
+// Anthropic takes the bare host because the harness appends /v1/messages
+// itself, and Vertex needs the project-scoped publisher path that Aperture's
+// router matches.
+func (b backend) baseURL(apertureHost string) string {
+	host := strings.TrimRight(apertureHost, "/")
+	switch b.id {
+	case "anthropic":
+		return host
+	case "vertex":
+		// The magic _aperture_auto_*_ placeholders are rewritten upstream,
+		// as in internal/clients/opencode/sdk.go.
+		return host + "/v1/projects/_aperture_auto_vertex_project_id_/locations/_aperture_auto_vertex_region_/publishers/google"
+	default:
+		return host + "/v1"
+	}
+}
+
+// buildProvider assembles the harness's provider config for one Aperture
+// provider routed over the given backend.
+func buildProvider(apertureHost string, p config.ProviderInfo, b backend) provider {
+	models := make([]model, len(p.Models))
+	for i, m := range p.Models {
+		models[i] = model{
+			ID:            m,
+			Name:          m,
+			Input:         []string{"text"},
+			Reasoning:     false,
+			ContextWindow: defaultContextWindow,
+			MaxTokens:     defaultMaxTokens,
+		}
+	}
+	return provider{
+		Name:    "Aperture (" + p.ID + ")",
+		BaseURL: b.baseURL(apertureHost),
+		APIKey:  "not-needed",
+		API:     b.api,
+		Models:  models,
+	}
+}
+
+// extensionSource renders the JavaScript extension the harness loads with -e.
+// The provider config is emitted as marshaled JSON so no value needs hand
+// escaping.
+func extensionSource(v Variant, providerID string, prov provider) (string, error) {
+	id, err := json.Marshal(namespacedProviderID(providerID))
+	if err != nil {
+		return "", err
+	}
+	cfg, err := json.MarshalIndent(prov, "  ", "  ")
+	if err != nil {
+		return "", err
+	}
+	return v.ExtensionHeader +
+		"export default function (pi) {\n" +
+		"  pi.registerProvider(" + string(id) + ", " + string(cfg) + ");\n" +
+		"}\n", nil
+}
+
+// extensionGlob matches every extension this package has ever written into a
+// client config directory. os.CreateTemp fills the * with a unique suffix.
+const extensionGlob = "tmp_aperture_provider_*.js"
+
+// sweepOrphanedExtensions removes extensions left behind by earlier launches.
+// The cleanup function returned by writeProviderExtension only runs when the
+// child exits normally, so a crash, a kill, or a panic strands the file, and
+// each one embeds the tailnet hostname.
+//
+// Removing a file that a running launch is still using is safe: the harness
+// reads the extension once at startup and never reopens it, so unlinking it
+// afterwards does not affect that process. Removal errors are ignored for the
+// same reason they are unlikely to matter — a file another process holds open
+// is not a reason to fail this launch.
+func sweepOrphanedExtensions(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, extensionGlob))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+// writeProviderExtension writes the per-launch extension and returns its
+// path plus a cleanup function that removes the file. Extensions stranded by
+// an earlier launch are swept first; see sweepOrphanedExtensions.
+//
+// Routing the harness through an extension rather than its own models.json is
+// deliberate. The harness reads models.json from the directory named by
+// PI_CODING_AGENT_DIR, but that same directory also roots settings.json,
+// auth.json, sessions, themes, and extensions. Redirecting it would hide the
+// user's saved logins, settings, and session history — breaking --continue
+// and --resume — so instead we inject the provider for one run and leave
+// the harness's own config directory untouched.
+func writeProviderExtension(v Variant, apertureHost string, p config.ProviderInfo, b backend) (string, func(), error) {
+	src, err := extensionSource(v, p.ID, buildProvider(apertureHost, p, b))
+	if err != nil {
+		return "", nil, err
+	}
+	dir, err := config.ClientConfigDir(v.ConfigDir)
+	if err != nil {
+		return "", nil, err
+	}
+	sweepOrphanedExtensions(dir)
+	f, err := os.CreateTemp(dir, extensionGlob)
+	if err != nil {
+		return "", nil, err
+	}
+	path := f.Name()
+	remove := func() { _ = os.Remove(path) }
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		remove()
+		return "", nil, err
+	}
+	if _, err := f.WriteString(src); err != nil {
+		_ = f.Close()
+		remove()
+		return "", nil, err
+	}
+	if err := f.Close(); err != nil {
+		remove()
+		return "", nil, err
+	}
+	return path, remove, nil
+}
