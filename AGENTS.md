@@ -15,7 +15,9 @@ the code, and let each correct the other.
   if the user experiences one thing, it is one context.
 - `domain` is never a package name. Packages and types are named after the
   thing they are, by what they do in this program rather than by their
-  technical role. `Crossing`, not `NodeManager`.
+  technical role. `Machine`, not `NodeManager`. Where the thing already has a
+  name in the system it wraps, take that name: a tailnet node registered by
+  `POST /machine/register` is a `Machine`.
 - Every domain object is classified entity, value object or enumeration, and
   every field is listed. Behaviour lives on the object.
 - Vendor types never appear in domain signatures. `tsnet`, `ipn` and

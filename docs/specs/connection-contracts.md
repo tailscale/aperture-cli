@@ -8,7 +8,7 @@ left blank:
 
 | Contract | Status | Reason |
 |---|---|---|
-| API | Absent | The CLI exposes no service surface. It has no callers, so there are no caller classes to enumerate, no authentication and no authorization rule. Its outbound calls are `GET /v1/models` on an Aperture we do not own and the in-process tsnet LocalAPI, both other people's contracts. The nearest thing we define is the `Crossing` port, which is covered by the domain model's behaviours. |
+| API | Absent | The CLI exposes no service surface. It has no callers, so there are no caller classes to enumerate, no authentication and no authorization rule. Its outbound calls are `GET /v1/models` on an Aperture we do not own and the in-process tsnet LocalAPI, both other people's contracts. The nearest thing we define is the `Machine` port, which is covered by the domain model's behaviours. |
 | DDL | Absent | No relational store. Persistence is `settings.json`, a document rewritten whole. See "Persisted facts" below for the one place the DDL rules still bite. |
 | Domain events | Defined below, 100% | The refactor's whole point is replacing a `func(string)` log sink with typed events, so these are the contract that exists. |
 
@@ -23,9 +23,9 @@ risk here is loss, not duplication, and the rule is in the per-event rows.
 | Name | Emitting aggregate | Emitting transition | Payload | Consumers | Delivery | Boundary | Domain service |
 |---|---|---|---|---|---|---|---|
 | `PhaseEntered` | ConnectionAttempt | every `Enter(Phase)`, including into terminal phases | `Phase Phase`, `Progress Progress` | connect screen (label, elapsed, spinner) | never dropped; a lost phase breaks the `Trail` gap-free invariant | internal to Connection | none; `ConnectionAttempt.Enter` is the whole reaction |
-| `LoginRequired` | Crossing | `Starting → NeedsLogin`, on the first `Notify.BrowseToURL` | `Link LoginLink` | ConnectionAttempt (`Authorize`), connect screen (footer, copy button, browser open) | never dropped; this is the event whose loss strands the user | internal to Connection | none; `ConnectionAttempt.Authorize` is a single aggregate method |
-| `TailnetJoined` | Crossing | `Joining → Open`, when the netmap carries a tailnet name | `Tailnet string` | ConnectionAttempt, Settings (`Bridge.Tailnet`) | never dropped; losing it silently un-labels the bridge in the picker | published, crosses into Settings | **missing.** See below. |
-| `Noted` | Crossing | none; not a transition | `Text string` | connect screen log pane only | droppable. The only droppable event, and the reason the others can state that they are not | internal to Connection | none |
+| `LoginRequired` | Machine | `Starting → NeedsLogin`, on the first `Notify.BrowseToURL` | `Link LoginLink` | ConnectionAttempt (`Authorize`), connect screen (footer, copy button, browser open) | never dropped; this is the event whose loss strands the user | internal to Connection | none; `ConnectionAttempt.Authorize` is a single aggregate method |
+| `TailnetJoined` | Machine | `Joining → Open`, when the netmap carries a tailnet name | `Tailnet string` | ConnectionAttempt, Settings (`Bridge.Tailnet`) | never dropped; losing it silently un-labels the bridge in the picker | published, crosses into Settings | **missing.** See below. |
+| `Noted` | Machine | none; not a transition | `Text string` | connect screen log pane only | droppable. The only droppable event, and the reason the others can state that they are not | internal to Connection | none |
 | `Failed` | ConnectionAttempt | any phase `→ Failed` | `Err error` | connect screen, endpoint menu | never dropped; terminal | internal to Connection | none |
 | `Ready` | ConnectionAttempt | `AskingForModels → Ready` | `Gateway Gateway`, `Providers []config.ProviderInfo` | Client Launch, connect screen, Settings (active endpoint) | never dropped; terminal | published, crosses into Client Launch | **missing.** See below. |
 
@@ -35,8 +35,8 @@ The domain service column is the anti-anemia check, and it found two holes.
 Both are cross-aggregate rules currently living in the TUI, which is an
 application service and does not count.
 
-`TailnetJoined` spans Crossing and Bridge: "the Bridge records the tailnet its
-Crossing joined, so the picker can name it before the Crossing exists again".
+`TailnetJoined` spans Machine and Bridge: "the Bridge records the tailnet its
+Machine joined, so the picker can name it before the Machine exists again".
 Today that is `model.recordBridgeTailnet` (`tui.go:421`), which reaches into
 `Manager.Tailnet(bridgeID)` and then `g.SetBridgeTailnet`. The TUI is loading,
 calling and committing, which is orchestration, but it is also deciding the
@@ -57,7 +57,7 @@ for this pass; that they are unowned is the finding.
 No DDL, but the schema rules still apply to `settings.json` and one of them
 bites.
 
-`Bridge.Tailnet` is empty until a Crossing joins one, which is the JSON-document
+`Bridge.Tailnet` is empty until a Machine joins one, which is the JSON-document
 form of a nullable `joined_at` on the primary row: a field about something that
 has not happened, sitting empty on every bridge the user has created and not
 yet connected. Under the rule it should be its own fact, keyed by bridge id,
@@ -81,7 +81,7 @@ emits an event, or is recorded here as deliberately silent.
 
 | Transition | Event | Note |
 |---|---|---|
-| ConnectionAttempt → `StartingCrossing` | `PhaseEntered` | |
+| ConnectionAttempt → `StartingMachine` | `PhaseEntered` | |
 | → `AwaitingLoginLink` | `PhaseEntered` | the phase that did not exist |
 | → `AwaitingAuthorization` | `PhaseEntered`, preceded by `LoginRequired` | |
 | → `JoiningTailnet` | `PhaseEntered` | |
@@ -90,12 +90,12 @@ emits an event, or is recorded here as deliberately silent.
 | → `Ready` | `PhaseEntered`, `Ready` | |
 | → `Failed` | `PhaseEntered`, `Failed` | |
 | → `Cancelled` | `PhaseEntered` only | Deliberately silent beyond the phase. Cancellation is initiated by the consumer, so an event telling it what it just did carries nothing. The `Trail` still records it, which is what a later "why was this slow" question needs. |
-| Crossing `Starting → NeedsLogin` | `LoginRequired` | |
-| Crossing `Starting → Joining` | none | Deliberately silent. The credentials-on-disk path has nothing to tell the user and no cross-aggregate reaction; the Attempt's own `PhaseEntered` covers the screen. |
-| Crossing `NeedsLogin → Joining` | none | Same. The authorization that caused it is already on screen. |
-| Crossing `Joining → Open` | `TailnetJoined` | |
-| Crossing `→ Closed` via `Close` | none | Deliberately silent. Process teardown; there is no consumer left to react. |
-| Crossing `→ Closed` via `LeaveTailnet` | `Noted` | Weak, and knowingly so. The user asked to switch tailnets and wants to see it happen, but nothing reacts to it, so it does not earn a typed event yet. Promote it if Settings ever needs to clear `Bridge.Tailnet` on logout, which it arguably already does. |
+| Machine `Starting → NeedsLogin` | `LoginRequired` | |
+| Machine `Starting → Joining` | none | Deliberately silent. The credentials-on-disk path has nothing to tell the user and no cross-aggregate reaction; the Attempt's own `PhaseEntered` covers the screen. |
+| Machine `NeedsLogin → Joining` | none | Same. The authorization that caused it is already on screen. |
+| Machine `Joining → Open` | `TailnetJoined` | |
+| Machine `→ Closed` via `Close` | none | Deliberately silent. Process teardown; there is no consumer left to react. |
+| Machine `→ Closed` via `LeaveTailnet` | `Noted` | Weak, and knowingly so. The user asked to switch tailnets and wants to see it happen, but nothing reacts to it, so it does not earn a typed event yet. Promote it if Settings ever needs to clear `Bridge.Tailnet` on logout, which it arguably already does. |
 
 Two invariants from the model have no enforcement point outside application
 code, which the skill flags and no constraint layer here can fix:
@@ -105,7 +105,7 @@ code, which the skill flags and no constraint layer here can fix:
   there is no check constraint to back them, so the constructor and the
   unexported fields are the whole guarantee. That makes "no exported fields, no
   setters" load-bearing rather than stylistic.
-- "At most one Crossing per Bridge" is enforced by a map keyed on bridge id
+- "At most one Machine per Bridge" is enforced by a map keyed on bridge id
   under a mutex. Same situation.
 
 ## Next pass

@@ -55,10 +55,10 @@ Neighbours and patterns are in
 
 ## Ubiquitous language
 
-Connection Attempt, Endpoint, Gateway, Route, Bridge, Crossing, Login Link,
+Connection Attempt, Endpoint, Gateway, Route, Bridge, Machine, Login Link,
 Phase, Progress. Defined in the context map. Three of these resolve words that
 currently mean two things: `Gateway` versus `Endpoint` splits `ApertureHost`,
-`Crossing` versus `Bridge` splits the running node from the saved record, and
+`Machine` versus `Bridge` splits the running node from the saved record, and
 `Phase` takes over from `Status`.
 
 ## Domain objects and invariants
@@ -124,12 +124,12 @@ outstanding, and to one after: `printAuthURLLoop` exits when the state leaves
    `TailscaleIPs` check, skip `resetServeStateOnce`, and silence `UserLogf`.
 5. `Gateway` replaces `ApertureHost` at the boundary into `internal/clients`
    and `internal/profiles`.
-6. `ConnectionAttempt` and `Crossing` are their own types. `Manager` does not
-   grow fields; `Crossing` takes the node, its routes and its tailnet, which is
+6. `ConnectionAttempt` and `Machine` are their own types. `Manager` does not
+   grow fields; `Machine` takes the node, its routes and its tailnet, which is
    most of what `Manager` holds today.
 
 Artifacts land in `docs/specs/` and `docs/adr/`, and the conventions they
-follow are recorded in the repo's `CLAUDE.md` rather than in any one person's
+follow are recorded in the repo's `AGENTS.md` rather than in any one person's
 tooling.
 
 ## Consequences

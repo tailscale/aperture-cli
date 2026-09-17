@@ -18,7 +18,7 @@ Attempt.
 | `Started` | `time.Time` | Origin for every elapsed time in `Trail`. |
 | `Phase` | `Phase` | What it is waiting on now. |
 | `Trail` | `[]Progress` | Every phase entered, in order. Never rewritten. |
-| `Link` | `*LoginLink` | Set once, when a Crossing asks for authorization. Nil for a direct Endpoint or a Crossing already logged in. |
+| `Link` | `*LoginLink` | Set once, when a Machine asks for authorization. Nil for a direct Endpoint or a Machine already logged in. |
 | `Gateway` | `*Gateway` | Set once, on reaching `Ready`. Nil otherwise. |
 | `Err` | `error` | Set once, on reaching `Failed`. |
 | `Ephemeral` | `bool` | The Endpoint was written to settings on the user's behalf, so cancelling takes it back out. |
@@ -38,31 +38,31 @@ Attempt.
 - `Err` is non-nil if and only if `Phase == Failed`.
 - Phase only moves forward through the order below, except to a terminal phase, which is reachable from anywhere.
 - `Trail` covers `Started` to now with no gaps: every phase transition appends, so summing `Trail` accounts for the whole wait. This is the invariant the current code lacks, and its absence is why three fixes were aimed at an unattributed 29 seconds.
-- A direct Endpoint (`BridgeID == ""`) never enters a Crossing phase.
+- A direct Endpoint (`BridgeID == ""`) never enters a Machine phase.
 
 ### States
 
 ```mermaid
 stateDiagram-v2
     [*] --> AskingForModels: direct endpoint
-    [*] --> StartingCrossing: bridged endpoint
+    [*] --> StartingMachine: bridged endpoint
 
-    StartingCrossing --> AwaitingLoginLink: crossing needs login
-    StartingCrossing --> JoiningTailnet: credentials already on disk
+    StartingMachine --> AwaitingLoginLink: machine needs login
+    StartingMachine --> JoiningTailnet: credentials already on disk
     AwaitingLoginLink --> AwaitingAuthorization: control plane answered
     AwaitingAuthorization --> JoiningTailnet: user authorized
     JoiningTailnet --> FindingEndpoint: tailnet joined
     FindingEndpoint --> AskingForModels: route open
     AskingForModels --> Ready: providers parsed
 
-    StartingCrossing --> Failed
+    StartingMachine --> Failed
     AwaitingLoginLink --> Failed
     AwaitingAuthorization --> Failed
     JoiningTailnet --> Failed
     FindingEndpoint --> Failed
     AskingForModels --> Failed
 
-    StartingCrossing --> Cancelled
+    StartingMachine --> Cancelled
     AwaitingLoginLink --> Cancelled
     AwaitingAuthorization --> Cancelled
     JoiningTailnet --> Cancelled
@@ -77,7 +77,7 @@ stateDiagram-v2
 ### Relationships
 
 - 1 ConnectionAttempt → 1 Endpoint.
-- 1 ConnectionAttempt → 0..1 Crossing, by bridge id, not by ownership. The Crossing outlives the Attempt.
+- 1 ConnectionAttempt → 0..1 Machine, by bridge id, not by ownership. The Machine outlives the Attempt.
 - 1 ConnectionAttempt → 0..n Progress, ordered.
 - 1 ConnectionAttempt → 0..1 LoginLink, 0..1 Gateway.
 
@@ -87,7 +87,7 @@ Enumeration. Named for what the user is waiting for, not for `ipn.State`.
 
 | Phase | The user is waiting for | Signal it is entered |
 |---|---|---|
-| `StartingCrossing` | the bridge to start | `tsnet` init returns a local client |
+| `StartingMachine` | the bridge to start | `tsnet` init returns a local client |
 | `AwaitingLoginLink` | the control plane to hand back a login link | `ipn.NeedsLogin` with no `BrowseToURL` yet |
 | `AwaitingAuthorization` | themselves, in a browser | `Notify.BrowseToURL` |
 | `JoiningTailnet` | the tailnet to accept the node | `Notify.LoginFinished`, then `Notify.SelfChange` when the netmap lands |
@@ -122,7 +122,7 @@ exactly once, when the next phase is entered.
 
 ## LoginLink
 
-Value object. The URL that authorizes a Crossing.
+Value object. The URL that authorizes a Machine.
 
 | Field | Type |
 |---|---|
@@ -154,15 +154,16 @@ if and only if the URL is a Route's local end. Nothing outside the Connection
 context needs `ViaBridge`; it exists so a log or an error can say which of the
 two a URL is, which `ApertureHost` cannot.
 
-## Crossing
+## Machine
 
-Entity, aggregate root. The live tailnet membership for one Bridge. Separate
-aggregate from ConnectionAttempt because it is cached by bridge id and reused
-across Attempts (`Manager.nodes`), so it cannot be owned by any one of them.
+Entity, aggregate root. What this program runs on the user's tailnet for one
+Bridge, and what their admin console lists under Machines. Separate aggregate
+from ConnectionAttempt because it is cached by bridge id and reused across
+Attempts (`Manager.nodes`), so it cannot be owned by any one of them.
 
 | Field | Type | Note |
 |---|---|---|
-| `BridgeID` | `string` | Identity. At most one Crossing per Bridge. |
+| `BridgeID` | `string` | Identity. At most one Machine per Bridge. |
 | `Tailnet` | `string` | The network joined, empty until the netmap lands. |
 | `Routes` | `map[string]*Route` | Keyed by target URL. |
 
@@ -170,10 +171,10 @@ Behaviors: `Open(ctx) (<-chan Event, error)`, `RouteTo(Endpoint) (Route, error)`
 `LeaveTailnet(ctx) error`, `Close() error`.
 
 Invariants:
-- A Route can only be created through an open Crossing.
-- `LeaveTailnet` destroys the Crossing: credentials live behind the node's own LocalAPI, so a close without a logout silently reuses them next time.
+- A Route can only be created through an open Machine.
+- `LeaveTailnet` destroys the Machine: credentials live behind the node's own LocalAPI, so a close without a logout silently reuses them next time.
 - Closing closes every Route first.
-- Exactly one IPN bus watch per Crossing. Today there are two of ours plus one of tsnet's; see the ADR.
+- Exactly one IPN bus watch per Machine. Today there are two of ours plus one of tsnet's; see the ADR.
 
 ### States
 
@@ -194,7 +195,7 @@ stateDiagram-v2
 
 ## Route
 
-Entity, inside the Crossing aggregate. The local door to one Endpoint.
+Entity, inside the Machine aggregate. The local door to one Endpoint.
 
 | Field | Type |
 |---|---|
@@ -203,8 +204,8 @@ Entity, inside the Crossing aggregate. The local door to one Endpoint.
 
 Behaviors: `Gateway() Gateway`, `Close() error`.
 
-Invariants: belongs to exactly one Crossing and one Endpoint. Its listener is
-bound to loopback only. Resolves the target against the Crossing's own peer map
+Invariants: belongs to exactly one Machine and one Endpoint. Its listener is
+bound to loopback only. Resolves the target against the Machine's own peer map
 before dialing, never the host resolver, because the host may itself be on a
 tailnet with a same-named node.
 
@@ -217,7 +218,7 @@ This replaces the `func(string)` log sink and the `chan bridgeLine`.
 |---|---|---|
 | `PhaseEntered` | `Phase`, `Progress` | The Attempt advanced. |
 | `LoginRequired` | `LoginLink` | Authorization is needed at this link. |
-| `TailnetJoined` | `string` | The Crossing is on this network. |
+| `TailnetJoined` | `string` | The Machine is on this network. |
 | `Noted` | `string` | Diagnostics with no domain meaning: tsnet backend chatter, dial detail. |
 | `Failed` | `error` | Terminal. |
 | `Ready` | `Gateway` | Terminal. |
@@ -241,10 +242,10 @@ erDiagram
     ConnectionAttempt ||--o| LoginLink : "shows"
     ConnectionAttempt ||--o| Gateway : "yields"
     ConnectionAttempt ||--o{ Event : "publishes"
-    ConnectionAttempt }o--o| Crossing : "uses"
+    ConnectionAttempt }o--o| Machine : "uses"
     Endpoint }o--o| Bridge : "reached through"
-    Bridge ||--o| Crossing : "runs as"
-    Crossing ||--o{ Route : "carries"
+    Bridge ||--o| Machine : "runs as"
+    Machine ||--o{ Route : "carries"
     Route ||--|| Endpoint : "fronts"
     Route ||--|| Gateway : "is reached as"
 ```
@@ -271,7 +272,7 @@ classDiagram
     }
     class Phase {
         <<enumeration>>
-        StartingCrossing
+        StartingMachine
         AwaitingLoginLink
         AwaitingAuthorization
         JoiningTailnet
@@ -296,7 +297,7 @@ classDiagram
         +bool ViaBridge
         +String() string
     }
-    class Crossing {
+    class Machine {
         +string BridgeID
         +string Tailnet
         +Open(ctx) chan Event
@@ -314,25 +315,24 @@ classDiagram
     ConnectionAttempt --> Progress
     ConnectionAttempt --> LoginLink
     ConnectionAttempt --> Gateway
-    ConnectionAttempt ..> Crossing
-    Crossing --> Route
+    ConnectionAttempt ..> Machine
+    Machine --> Route
     Route --> Gateway
 ```
 
 ## Open, not assumed
 
 - Two cross-aggregate reactions have no owning object, found by the
-  [contracts pass](connection-contracts.md): recording the tailnet a Crossing
+  [contracts pass](connection-contracts.md): recording the tailnet a Machine
   joined onto its Bridge, and deciding which Gateway is current for the next
   client launch. Both live in the TUI today, which orchestrates but should not
   decide. Needs resolving before the events are implemented.
-- Whether a reused Crossing should replay its phases to a second Attempt or
+- Whether a reused Machine should replay its phases to a second Attempt or
   report a single `FindingEndpoint`. Today it reports nothing, which looks like
   a hang for as long as the peer wait takes.
 - Whether `Trail` should be surfaced to the user at all, or only on failure and
   under `--debug`. Timing every phase is worth doing regardless; showing it
   always is a separate question.
-- Whether `Crossing` keeps that name. See the context map.
 - Whether `Route` deserves a lifecycle of its own. It is currently created once
-  and closed with its Crossing, so it has no interesting states, and a state
+  and closed with its Machine, so it has no interesting states, and a state
   machine for it would be invented rather than observed.
