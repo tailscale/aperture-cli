@@ -85,11 +85,24 @@ type backend struct {
 //
 // The IDs are persisted as LaunchState.LastBackendType, so renaming one
 // silently drops every user's recorded launch back to the full menu.
+//
+// The vertex backend claims the Gemini endpoint only. Its base URL is rooted
+// at publishers/google, and Aperture's Vertex router picks the wire protocol
+// from that publisher segment alone, never from the model name. Claiming
+// EndpointVertexClaude as well would offer this backend to a provider that
+// serves Claude over publishers/anthropic with :rawPredict, which no API type
+// in the harness's union can produce.
+//
+// Narrowing the claim does not make every Vertex model safe. A Vertex
+// provider that advertises both endpoints still matches here and still lists
+// its Claude models, which fail at the provider once launched. Filtering the
+// model list by family is the remaining fix, and it belongs with the same fix
+// in opencode rather than here.
 var backends = []backend{
 	{id: "openai_responses", displayName: "OpenAI Responses", api: "openai-responses", endpoints: []string{config.EndpointOpenAIResponses}},
 	{id: "anthropic", displayName: "Anthropic Messages", api: "anthropic-messages", endpoints: []string{config.EndpointAnthropicMessages}},
 	{id: "openai_chat", displayName: "OpenAI Chat Completions", api: "openai-completions", endpoints: []string{config.EndpointOpenAIChat}},
-	{id: "vertex", displayName: "Google Vertex", api: "google-generative-ai", endpoints: []string{config.EndpointVertexGemini, config.EndpointVertexClaude}},
+	{id: "vertex", displayName: "Google Vertex", api: "google-generative-ai", endpoints: []string{config.EndpointVertexGemini}},
 }
 
 // Name implements clients.Client.

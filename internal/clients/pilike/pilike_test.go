@@ -531,12 +531,18 @@ func TestBackendsFor(t *testing.T) {
 			want:      []string{"vertex"},
 		},
 		{
-			name:      "vertex_via_raw_predict",
+			// The vertex backend always calls publishers/google, and Aperture
+			// routes on that publisher segment alone. A provider that serves
+			// Claude over publishers/anthropic with :rawPredict cannot be
+			// reached this way, so it must not be offered the backend.
+			name:      "vertex_via_raw_predict_is_not_offered",
 			endpoints: map[string]bool{config.EndpointVertexClaude: true},
-			want:      []string{"vertex"},
+			want:      nil,
 		},
 		{
-			name:      "vertex_not_duplicated_when_both_endpoints_advertised",
+			// Advertising the Anthropic endpoint as well does not disqualify a
+			// provider: the Gemini endpoint is the one this backend drives.
+			name:      "vertex_offered_when_both_endpoints_advertised",
 			endpoints: map[string]bool{config.EndpointVertexGemini: true, config.EndpointVertexClaude: true},
 			want:      []string{"vertex"},
 		},
@@ -553,7 +559,7 @@ func TestBackendsFor(t *testing.T) {
 		},
 		{
 			name:      "all_four",
-			endpoints: map[string]bool{config.EndpointOpenAIChat: true, config.EndpointOpenAIResponses: true, config.EndpointAnthropicMessages: true, config.EndpointVertexClaude: true},
+			endpoints: map[string]bool{config.EndpointOpenAIChat: true, config.EndpointOpenAIResponses: true, config.EndpointAnthropicMessages: true, config.EndpointVertexGemini: true},
 			want:      []string{"openai_responses", "anthropic", "openai_chat", "vertex"},
 		},
 	}
