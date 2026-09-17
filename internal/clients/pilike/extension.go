@@ -45,7 +45,7 @@ type model struct {
 // Aperture's provider list carries no token metadata, so every model gets
 // the harness's own documented defaults rather than invented per-model
 // numbers. Users who need different limits can override them per model in
-// models.json, which the harness composes above an extension-registered
+// models.json.
 // provider.
 const (
 	defaultContextWindow = 128000
