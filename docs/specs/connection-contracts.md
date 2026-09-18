@@ -192,7 +192,7 @@ subscribing to it for its own lifetime.
 |---|---|---|
 | Two identity mechanisms for "is this message from the current attempt" | `bridgeLogMsg` compares channel pointers (`tui.go:732`); everything else compares `act.id` | `bridgeLogDoneMsg` exists only to unwire the pointer one. Same question, two answers. |
 | One goroutine per log line | `waitBridgeLog` receives one value and re-arms through the event loop | A `--debug` burst is a spawn per line. It is the documented bubbletea idiom for a channel, which is the argument for a subscription instead. |
-| `WatchLogin` starts only when the node is created | `runningNode` (`manager.go:353`) returns early for a cached node | A re-login on an existing Machine reports no phases and surfaces no link. `ev.enter(FindingEndpoint)` papers over the common case and nothing covers the rest. |
+| The bus watch runs only while the node is being brought up | `BringUp` owns it, and `runningNode` returns early for a cached node | A re-login on an existing Machine reports no phases and surfaces no link. `ev.enter(FindingEndpoint)` papers over the common case and nothing covers the rest. |
 
 A fourth was a live defect and is fixed: `runningNode` closed the node's
 `UserLogf`/`DebugLogf` over the first Attempt's sink, and `startProxy` did the
