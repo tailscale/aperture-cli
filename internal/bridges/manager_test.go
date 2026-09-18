@@ -44,8 +44,14 @@ type fakeNode struct {
 	dialed []string
 }
 
-func (n *fakeNode) Up(context.Context) (*ipnstate.Status, error) {
+// BringUp stands in for the one watch the real node waits on: watchFn is what
+// a test wants the bus to report before the node is usable, and upFn is the
+// wait itself.
+func (n *fakeNode) BringUp(_ context.Context, ev events) (*ipnstate.Status, error) {
 	n.up++
+	if n.watchFn != nil {
+		n.watchFn(ev)
+	}
 	if n.upFn != nil {
 		n.upFn()
 	}
@@ -71,15 +77,6 @@ func (n *fakeNode) DialContext(ctx context.Context, network, address string) (ne
 	}
 	var d net.Dialer
 	return d.DialContext(ctx, network, n.backendAddr)
-}
-
-// WatchLogin stands in for the IPN bus watch: watchFn is what a test wants the
-// bus to report, and it runs until the manager cancels the watch.
-func (n *fakeNode) WatchLogin(ctx context.Context, ev events) {
-	if n.watchFn != nil {
-		n.watchFn(ev)
-	}
-	<-ctx.Done()
 }
 
 // collect records what a bridge reported, rendered the way the connect screen
@@ -308,15 +305,14 @@ func TestActivateWaitsForPeerMapBeforeDialing(t *testing.T) {
 	}
 }
 
-// TestActivateLogsLoginLinkWhileUpBlocks covers the bridge that looked hung: a
-// node that has never logged in blocks in Up until someone visits a link, so
-// the link has to reach the log while Up is still blocked, not after it.
-func TestActivateLogsLoginLinkWhileUpBlocks(t *testing.T) {
+// TestActivateLogsTheLoginLinkBeforeItIsUsable covers the bridge that looked
+// hung: a node that has never logged in waits for someone to visit a link, so
+// the link has to reach the log during that wait rather than once it is over.
+func TestActivateLogsTheLoginLinkBeforeItIsUsable(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer backend.Close()
 
 	const url = "https://login.tailscale.com/a/28ba393017981"
-	watched := make(chan struct{})
 	node := &fakeNode{
 		backendAddr: backend.Listener.Addr().String(),
 		status:      tailnetStatus("ai.example.ts.net.", "100.64.0.2"),
@@ -328,15 +324,6 @@ func TestActivateLogsLoginLinkWhileUpBlocks(t *testing.T) {
 			return
 		}
 		ev.login(link)
-		close(watched)
-	}
-	// Up stands in for the wait on an interactive login, and gives up so a
-	// manager that never watches fails the assertion instead of hanging.
-	node.upFn = func() {
-		select {
-		case <-watched:
-		case <-time.After(2 * time.Second):
-		}
 	}
 
 	m := NewManager(false)
@@ -359,8 +346,11 @@ func TestActivateLogsLoginLinkWhileUpBlocks(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, line := range logs {
-		if strings.Contains(line, url) {
+		switch {
+		case strings.Contains(line, url):
 			return
+		case strings.Contains(line, "Listening on"):
+			t.Fatalf("the proxy was up before the link was reported:\n%s", strings.Join(logs, "\n"))
 		}
 	}
 	t.Errorf("login link never reached the activation log:\n%s", strings.Join(logs, "\n"))

@@ -18,7 +18,6 @@ import (
 
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/connection"
-	"tailscale.com/client/local"
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
@@ -83,10 +82,9 @@ type proxyRuntime struct {
 }
 
 type tailnetNode interface {
-	Up(context.Context) (*ipnstate.Status, error)
+	BringUp(context.Context, events) (*ipnstate.Status, error)
 	Status(context.Context) (*ipnstate.Status, error)
 	DialContext(context.Context, string, string) (net.Conn, error)
-	WatchLogin(context.Context, events)
 	Logout(context.Context) error
 	Close() error
 }
@@ -138,8 +136,30 @@ type tsnetNode struct {
 	server *tsnet.Server
 }
 
-func (n *tsnetNode) Up(ctx context.Context) (*ipnstate.Status, error) {
-	return n.server.Up(ctx)
+// BringUp waits for the node to be usable and reports what it is waiting on,
+// off the one IPN bus watch (ADR 0001, decision 4). tsnet.Server.Up runs a
+// watch of its own, and a second consumer of the same bus is evicted when it
+// lags, which arrives as a terminal "IPN bus consumer fell behind" on a login
+// the user did nothing wrong in.
+//
+// Taking the wait means taking what Up did with it: a terminal ErrMessage, and
+// the check that a Running node actually has an address. resetServeStateOnce
+// is not ours to keep; nothing here sets a serve config.
+func (n *tsnetNode) BringUp(ctx context.Context, ev events) (*ipnstate.Status, error) {
+	// LocalClient calls Start, so this is where the node begins registering.
+	lc, err := n.server.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+	// InitialHealthState too: health changes reach every watcher regardless of
+	// mask, but a login already broken before this watch started shows up only
+	// in the initial one, which is the reused node case.
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyInitialHealthState)
+	if err != nil {
+		return nil, err
+	}
+	defer watcher.Close()
+	return bringUp(ctx, watcher, lc.Status, ev)
 }
 
 func (n *tsnetNode) Status(ctx context.Context) (*ipnstate.Status, error) {
@@ -154,53 +174,38 @@ func (n *tsnetNode) DialContext(ctx context.Context, network, address string) (n
 	return n.server.Dial(ctx, network, address)
 }
 
-// WatchLogin reports what an interactive login is waiting on, until ctx is done.
-//
-// tsnet surfaces the link from a five second poll loop of its own, so a link
-// landing just after a tick stays invisible for most of that window: one bridge
-// was killed a few hundred milliseconds before its link would have printed. The
-// IPN bus has it the moment the control plane answers.
-func (n *tsnetNode) WatchLogin(ctx context.Context, ev events) {
-	// A cancelled watch is how this returns on every connection that works,
-	// so only a failure the caller did not ask for is worth a line.
-	report := func(err error) {
-		if err != nil && ctx.Err() == nil {
-			// Logged as well as noted: a dead watch leaves the attempt on its
-			// last phase forever, which on screen is indistinguishable from a
-			// control plane that is simply slow.
-			slog.Error("bridge login watch ended", "err", redactDiagnostic(err.Error()))
-			ev.note("Could not watch the bridge's login state: " + err.Error())
-		}
-	}
-
-	// LocalClient calls Start, so this blocks until the node is initialized,
-	// the same bring-up Up is waiting on in parallel.
-	lc, err := n.server.LocalClient()
-	if err != nil {
-		report(err)
-		return
-	}
-	// InitialHealthState too: health changes reach every watcher regardless of
-	// mask, but a login already broken before this watch started shows up only
-	// in the initial one, which is the reused node case.
-	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState|ipn.NotifyInitialHealthState)
-	if err != nil {
-		report(err)
-		return
-	}
-	defer watcher.Close()
-	report(reportLogin(watcher, ev))
+// notifier is the part of an IPN bus watch the bring-up reads, so the loop can
+// be exercised against a recorded bus.
+type notifier interface {
+	Next() (ipn.Notify, error)
 }
 
-// reportLogin translates an IPN bus watch into phases until the watch ends.
-func reportLogin(watcher *local.IPNBusWatcher, ev events) error {
+// bringUp waits for Running on one watch, naming each wait as it is entered.
+// The link comes off the bus rather than tsnet's five second poll loop, which
+// hides a link that lands just after a tick: one bridge was killed a few
+// hundred milliseconds before its link would have printed.
+func bringUp(ctx context.Context, w notifier, statusOf func(context.Context) (*ipnstate.Status, error), ev events) (*ipnstate.Status, error) {
 	reporter := loginReporter{ev: ev}
 	for {
-		notify, err := watcher.Next()
+		notify, err := w.Next()
 		if err != nil {
-			return err
+			return nil, err
+		}
+		if notify.ErrMessage != nil {
+			return nil, fmt.Errorf("bridge backend: %s", *notify.ErrMessage)
 		}
 		reporter.notify(&notify)
+		if notify.State == nil || *notify.State != ipn.Running {
+			continue
+		}
+		status, err := statusOf(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if status == nil || len(status.TailscaleIPs) == 0 {
+			return nil, errors.New("bridge node is running with no tailnet address")
+		}
+		return status, nil
 	}
 }
 
@@ -435,23 +440,15 @@ func (m *Manager) runningNode(ctx context.Context, bridge config.Bridge, rt *Mac
 
 	ev.enter(connection.StartingMachine)
 
-	// Up blocks until the node is Running, which for a bridge that has never
-	// logged in means blocking until the user visits a link nothing has shown
-	// them yet. The watch runs alongside it and ends with it.
-	watchCtx, stopWatch := context.WithCancel(ctx)
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		rt.node.WatchLogin(watchCtx, ev)
-	}()
-
+	// BringUp blocks until the node is Running, which for a bridge that has
+	// never logged in means blocking until the user visits a link nothing has
+	// shown them yet. It reports the wait off the watch it is waiting on.
+	//
 	// Timed because this is the wait every "it just sat there" report is
 	// about, and the number is the difference between a slow control plane and
 	// a login link the user never saw.
 	start := time.Now()
-	status, err := rt.node.Up(ctx)
-	stopWatch()
-	<-watchDone
+	status, err := rt.node.BringUp(ctx, ev)
 	if err != nil {
 		slog.Error("bridge node did not come up", "bridge", bridge.ID, "after", time.Since(start), "err", redactDiagnostic(err.Error()))
 		return nil, errors.Join(err, rt.close())

@@ -24,7 +24,7 @@ type pendingNode struct {
 	started, cancelling, releaseUp, closing, releaseClose chan struct{}
 }
 
-func (n *pendingNode) Up(ctx context.Context) (*ipnstate.Status, error) {
+func (n *pendingNode) BringUp(ctx context.Context, _ events) (*ipnstate.Status, error) {
 	close(n.started)
 	<-ctx.Done()
 	close(n.cancelling)
@@ -111,7 +111,7 @@ func TestActivateWaitsForCancelledNodeCleanup(t *testing.T) {
 
 type needsLoginNode struct{ *fakeNode }
 
-func (n *needsLoginNode) Up(ctx context.Context) (*ipnstate.Status, error) {
+func (n *needsLoginNode) BringUp(ctx context.Context, _ events) (*ipnstate.Status, error) {
 	n.up++
 	<-ctx.Done()
 	return nil, ctx.Err()
