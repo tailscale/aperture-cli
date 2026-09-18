@@ -57,10 +57,8 @@ const (
 	bridgeProviderFetchTimeout = 30 * time.Second
 )
 
-// NewModel returns the TUI model. g holds the persisted launcher state
-// (settings, endpoints, last launch). buildVersion is shown at the bottom
-// of the client picker. start is the endpoint to open on, which is the saved
-// active one unless the invocation named another.
+// NewModel returns the TUI model. start is the endpoint to open on, which is
+// the saved active one unless the invocation named another.
 func NewModel(g *config.Global, buildVersion string, bridgeManager *bridges.Manager, start config.Endpoint) tea.Model {
 	return &model{
 		g:             g,
@@ -75,10 +73,9 @@ type model struct {
 	g             *config.Global
 	buildVersion  string
 	bridgeManager *bridges.Manager
-	// start is where Init connects. It is not necessarily in settings yet:
-	// an endpoint named on the command line is saved on the way in and taken
-	// back out again if the attempt is abandoned, the same as one typed into
-	// the connection picker.
+	// start is not necessarily in settings yet: one named on the command line
+	// is written on the way in and taken back out if the attempt is abandoned,
+	// same as one typed into the connection picker.
 	start config.Endpoint
 
 	step step
@@ -112,10 +109,9 @@ type model struct {
 	connected        bool
 }
 
-// activation is the connection attempt currently on screen. It owns the
-// attempt's identity and cancellation handle, and the URL the user can type
-// over the top of it while it runs; the log tail it produces stays on the
-// model because the failure screen still renders it after the attempt ends.
+// activation is the connection attempt currently on screen: its identity, its
+// cancellation handle, and the URL the user can type over the top of it. The
+// log tail stays on the model because the failure screen outlives the attempt.
 //
 // cancel is nil for attempts that cannot be interrupted (the post-launch
 // re-check), which is what makes Esc and the inline override inert there.
@@ -155,12 +151,9 @@ func (a *activation) logLine(text string) bridgeLine {
 }
 
 // entered records a phase the attempt moved into, and reports whether it moved.
-//
-// The attempt owns this rule, not the bridge: phases reach it from the IPN bus
-// watch and from the manager's own progress, and only something that sees both
-// can keep them in order. A phase that does not move forward is dropped rather
-// than shown, because a bus that re-notifies NeedsLogin after the link is on
-// screen would otherwise walk the user backwards through their own wait.
+// The attempt owns the rule rather than the bridge because phases arrive from
+// both the IPN bus and the manager, and only something seeing both can order
+// them. A bus that re-notifies NeedsLogin would otherwise walk the user back.
 func (a *activation) entered(p connection.Phase) bool {
 	if a.phaseSet && p <= a.phase {
 		return false
@@ -183,11 +176,10 @@ type textField struct {
 	err   string
 }
 
-// insert appends the text a key press carries. A typed character arrives as
-// one rune and a pasted URL as many in a single message; both are text, and
-// dropping the paste would leave the user retyping an endpoint by hand. Named
-// keys and Alt chords carry no text and are ignored, as are control runes:
-// matching on the key's String() would append "up" when someone presses Up.
+// insert appends the text a key press carries. A pasted URL arrives as many
+// runes in one message, and dropping it leaves the user retyping an endpoint by
+// hand. Named keys and Alt chords carry no text: matching on the key's String()
+// would append "up" when someone presses Up.
 func (f *textField) insert(msg tea.KeyMsg) {
 	if msg.Alt || (msg.Type != tea.KeyRunes && msg.Type != tea.KeySpace) {
 		return
@@ -215,11 +207,9 @@ func (f *textField) backspace() {
 
 func (f *textField) reset() { *f = textField{} }
 
-// Init opens on m.start. connectVia rather than activateEndpointCmd because
-// the endpoint may have come off the command line and so may not be in
-// settings: connectVia writes it there for the failure screen to name and
-// marks it ephemeral, and for the saved active endpoint, which is already
-// configured, the two are the same call.
+// Init opens on m.start. connectVia because an endpoint off the command line
+// may not be in settings yet, and it writes it there for the failure screen to
+// name; for the saved endpoint the two calls are the same.
 func (m *model) Init() tea.Cmd {
 	return m.connectVia(m.start, false)
 }
@@ -243,11 +233,9 @@ type endpointActivationResult struct {
 }
 
 // bridgeLine is one thing the attempt reported and how far into the attempt it
-// was reported. The elapsed time is the reason this is a struct and not a
-// string: a bridge that takes half a minute to come up spends that time in one
-// of three places (the control plane answering with a login link, the user in
-// the browser, the first dial), and an unstamped log cannot tell them apart.
-// Three separate fixes have now been aimed at that wait without knowing which.
+// was. The elapsed time is why this is not a string: a bridge that takes half a
+// minute spends it in the control plane, the browser or the first dial, and an
+// unstamped log cannot say which. Three fixes were aimed without knowing.
 type bridgeLine struct {
 	elapsed time.Duration
 	event   connection.Event
@@ -286,10 +274,9 @@ func copyURLCmd(id int, url string) tea.Cmd {
 	return func() tea.Msg { return clipboardMsg{id: id, err: copyToClipboard(url)} }
 }
 
-// activationTickMsg repaints the connect screen once a second so a slow
-// attempt is visibly still running. Bringing a bridge up and then asking
-// Aperture for its models can take tens of seconds during which nothing is
-// logged, and a frozen screen is indistinguishable from a hang.
+// activationTickMsg repaints the connect screen once a second so a slow attempt
+// is visibly still running. Bring-up and the model fetch can take tens of
+// seconds logging nothing, and a frozen screen looks like a hang.
 type activationTickMsg struct{ id int }
 
 func activationTick(id int) tea.Cmd {
@@ -348,10 +335,9 @@ func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
 }
 
 // activateEndpoint starts a cancellable attempt to connect to ep. ephemeral
-// marks an endpoint this flow just wrote to settings on the user's behalf, so
-// cancelling or overriding the attempt can take it back out again.
-// switchTailnet logs the bridge out before connecting, so the attempt starts
-// from a login prompt rather than the tailnet the node is already on.
+// marks an endpoint this flow wrote to settings on the user's behalf, so
+// cancelling can take it back out. switchTailnet logs the bridge out first, so
+// the attempt starts from a login prompt rather than the tailnet it is on.
 func (m *model) activateEndpoint(ep config.Endpoint, ephemeral, switchTailnet bool) tea.Cmd {
 	cmd := m.beginActivation(ep, ephemeral, switchTailnet)
 	return tea.Batch(cmd, activationTick(m.act.id))
@@ -415,10 +401,9 @@ func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet boo
 	emit := bridgeLogSink(ctx, ch, act.started)
 	activate := func() tea.Msg {
 		defer cancel()
-		// Stamps the moment the user committed to this endpoint. Without it
-		// the first bridge line is the earliest thing in the log, and the gap
-		// in front of it reads as startup cost when it is usually someone
-		// reading the menu.
+		// Stamps the moment the user committed. Without it the first bridge
+		// line is the earliest thing in the log and the gap in front of it
+		// reads as startup cost rather than someone reading the menu.
 		slog.Info("activating endpoint", "url", ep.URL, "bridge", bridge.ID, "switchTailnet", switchTailnet)
 		// Inside the attempt, so it shares the attempt's cancellation and event
 		// sink: the new login link is what the user needs on screen, and Esc
@@ -432,11 +417,9 @@ func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet boo
 		if err != nil {
 			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
 		}
-		// The request below is the longest silent stretch of the whole
-		// attempt: the bridge is up, so tsnet has stopped logging, and
-		// nothing else names the host being waited on. The phase comes from
-		// here and not from the bridge because asking an Aperture for its
-		// models is the attempt's own work, not the bridge's.
+		// The longest silent stretch of the attempt: the bridge is up, so tsnet
+		// has stopped logging and nothing else names the host being waited on.
+		// The phase is the attempt's own work, not the bridge's.
 		emit(connection.Entered(connection.AskingForModels))
 		provs, err := fetchProvidersContext(ctx, localURL, bridgeProviderFetchTimeout)
 		if err != nil {
@@ -447,10 +430,9 @@ func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet boo
 	return tea.Batch(activate, waitBridgeLog(ctx, ch))
 }
 
-// recordBridgeTailnet saves the tailnet a bridge just connected through, so
-// the connection picker can name it on a later run before the bridge is
-// started again. A failed write is not worth interrupting a connection that
-// worked: the picker falls back to saying the tailnet is not known yet.
+// recordBridgeTailnet saves the tailnet a bridge connected through so the
+// picker can name it before the bridge is started again. A failed write is not
+// worth interrupting a connection that worked.
 func (m *model) recordBridgeTailnet(ep config.Endpoint) {
 	if ep.BridgeID == "" {
 		return
@@ -570,14 +552,10 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 }
 
 // bridgeLogSink is where the attempt's events land on their way to the update
-// loop.
-//
-// Only diagnostics are dropped when the buffer is full. Everything else waits
-// for room, bounded by the attempt's own cancellation, because the events that
-// are not diagnostics are the ones the user cannot proceed without: this sink
-// used to drop whatever arrived on a full buffer, and under -debug the tsnet
-// backend logger shares it, so a burst of chatter could take the login link
-// with it and strand the attempt on a link nobody ever saw.
+// loop. Only diagnostics are dropped when the buffer is full; everything else
+// waits for room, bounded by the attempt's cancellation. This sink used to drop
+// whatever arrived, and under -debug tsnet's backend logger shares it, so a
+// burst of chatter could take the login link with it.
 func bridgeLogSink(ctx context.Context, ch chan<- bridgeLine, started time.Time) func(connection.Event) {
 	return func(ev connection.Event) {
 		if ev.Kind == connection.Noted {
@@ -746,10 +724,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case browserOpenMsg:
 		// Only the failure is worth a line: a browser that opened is on the
-		// user's screen, and the link itself is already at the foot of this
-		// one. Over SSH this is the common case, not an edge case: the remote
-		// box has an opener that exits "no method available" a moment after it
-		// starts, or none at all.
+		// user's screen and the link is already in the footer. Over SSH the
+		// failure is the common case, not an edge case.
 		if m.act == nil || m.act.id != msg.id || msg.err == nil {
 			return m, nil
 		}
@@ -1109,16 +1085,11 @@ const (
 
 // authFooter renders the login link pinned to the foot of the connect screen.
 //
-// The link owns its lines outright, with no prose beside it and no indent
-// under it. Bubble Tea's renderer truncates any line wider than the terminal,
-// so a long URL has to wrap, and anything sharing those lines lands in the
-// selection when the user drags across them. Split across bare lines it still
-// pastes: browsers strip the newline out of a URL, they do not strip an
-// indent or a trailing label.
-//
-// Every line carries the same OSC 8 hyperlink, id-tagged so terminals rejoin
-// the halves into one target. That is what keeps ctrl-click working on a URL
-// the screen had to break in two.
+// The link owns its lines outright. Bubble Tea truncates any line wider than
+// the terminal, so a long URL has to wrap, and prose sharing those lines lands
+// in the selection when the user drags across them; a browser strips a newline
+// out of a URL but not an indent or a label. Every line carries the same OSC 8
+// hyperlink, id-tagged so terminals rejoin the halves and ctrl-click survives.
 func (m *model) authFooter() string {
 	act := m.act
 	if act == nil || act.authURL == "" {

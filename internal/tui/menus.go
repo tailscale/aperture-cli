@@ -242,10 +242,9 @@ func (m *model) bridgeRowDescription(bridge config.Bridge) string {
 }
 
 // endpointsMenu is the connection picker: every Aperture this launcher can
-// reach, one row each, whether it is a saved endpoint or a bridge that has no
-// endpoint yet. Selecting a row opens its page rather than connecting straight
-// away, so connecting, retargeting, switching tailnet and removing are all on
-// screen instead of behind remembered keys.
+// reach, one row each, saved endpoint or bridge with no endpoint yet. A row
+// opens its page rather than connecting, so every action is on screen instead
+// of behind a remembered key.
 func (m *model) endpointsMenu() *menu.Menu {
 	rows := m.connectionRows()
 	items := make([]menu.MenuItem, 0, len(rows)+4)
@@ -316,10 +315,9 @@ func (m *model) endpointsMenu() *menu.Menu {
 	}
 }
 
-// connectionRow is one line on the connection picker. A saved endpoint is one
-// row; so is a bridge nothing points at yet, described by the endpoint it would
-// create, because a bridge with no endpoint is still a connection the user has
-// to be able to pick. That is how a second tailnet gets reached the first time.
+// connectionRow is one line on the connection picker. A bridge nothing points
+// at yet is a row too, described by the endpoint it would create: that is how a
+// second tailnet gets reached the first time.
 type connectionRow struct {
 	ep     config.Endpoint
 	bridge config.Bridge
@@ -353,9 +351,8 @@ func (m *model) connectionRows() []connectionRow {
 }
 
 // connectionAtCursor resolves the picker row the cursor is on. The hidden "e"
-// and "d" aliases act through it rather than indexing Settings.Endpoints, so
-// they see the same rows the user does: a bridge with no endpoint is a row too,
-// and indexing past the endpoints made those keys silently do nothing.
+// and "d" aliases go through it so they see the same rows the user does;
+// indexing Settings.Endpoints made them silently do nothing on a bridge row.
 func (m *model) connectionAtCursor() (connectionRow, bool) {
 	rows := m.connectionRows()
 	idx := m.cursor()
@@ -519,13 +516,10 @@ func (m *model) removeConnection(ep config.Endpoint) menu.Result {
 	return menu.Result{Cmd: tea.ClearScreen}
 }
 
-// dropOrphanBridge removes a bridge once its last endpoint is gone.
-//
-// The picker shows a bridge-backed endpoint as one row, but settings hold two
-// objects, and removing only the endpoint left the bridge to be re-listed by
-// connectionRows as a bare "Connect via" row at the bottom. To the user that
-// read as the row moving instead of going, and clearing it took a second
-// press. A bridge two endpoints reach through is not an orphan and stays.
+// dropOrphanBridge removes a bridge once its last endpoint is gone. Settings
+// hold two objects where the picker shows one row, so removing the endpoint
+// alone left the bridge re-listed as a bare "Connect via" row: to the user the
+// row moved instead of going. A bridge two endpoints reach through stays.
 func (m *model) dropOrphanBridge(id string) error {
 	if id == "" {
 		return nil
@@ -684,10 +678,9 @@ func (m *model) setupGuideMenu() *menu.Menu {
 }
 
 // promptEditEndpoint edits ep's URL in place and connects to what the user
-// typed, keeping whichever bridge ep is reached through. It is the only way to
-// retarget an endpoint that connects successfully: the guessed default answers
-// on any tailnet with a host called "ai", and a success shows neither the
-// connect screen's inline override nor the setup guide's editor.
+// typed, keeping its bridge. It is the only way to retarget an endpoint that
+// connects: the guessed default answers on any tailnet with a host called "ai",
+// and a success shows neither the inline override nor the setup guide.
 func (m *model) promptEditEndpoint(ep config.Endpoint) {
 	m.promptForInput("Edit Endpoint:", "URL", ep.URL, func(v string) tea.Cmd {
 		next, err := config.ParseEndpoint(v, ep.BridgeID)
@@ -779,17 +772,16 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 }
 
 // connectBridgeCmd starts discovery through bridge: probe the well-known
-// Aperture location, the same guess a direct connection starts from, instead
-// of demanding a URL the user may not know. The connect screen takes a
-// different URL while the guess runs, so knowing it costs no waiting.
+// Aperture location, the same guess a direct connection starts from, instead of
+// demanding a URL the user may not know. The connect screen takes another URL
+// while the guess runs.
 func (m *model) connectBridgeCmd(bridge config.Bridge) tea.Cmd {
 	return m.connectVia(config.Endpoint{URL: config.DefaultLocation, BridgeID: bridge.ID}, false)
 }
 
 // connectVia connects to ep, saving it first when it is not in settings yet so
 // the failure screen has something to name, retry and edit. switchTailnet logs
-// the bridge out on the way, which is what makes the next connection ask for a
-// login instead of reusing the tailnet it is already on.
+// the bridge out on the way, so the connection asks for a login.
 func (m *model) connectVia(ep config.Endpoint, switchTailnet bool) tea.Cmd {
 	ephemeral := !m.endpointConfigured(ep)
 	if ephemeral {

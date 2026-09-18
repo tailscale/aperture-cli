@@ -803,11 +803,10 @@ func TestActivate(t *testing.T) {
 func state(s ipn.State) *ipn.Notify { return &ipn.Notify{State: &s} }
 func browse(u string) *ipn.Notify   { return &ipn.Notify{BrowseToURL: &u} }
 
-// TestLoginReporterSplitsTheTwoNeedsLoginWaits is the diagnosis this whole
-// change came from. A bridge took 29 seconds to come up and the screen said
-// only that it needed a login, so there was no way to tell the control plane
-// not having answered yet from a user who had not finished in the browser.
-// Both are ipn.NeedsLogin; they are different phases here.
+// TestLoginReporterSplitsTheTwoNeedsLoginWaits is the diagnosis this change
+// came from. A 29 second bridge said only that it needed a login, so there was
+// no telling the control plane not having answered from a user who had not
+// finished in the browser. Both are ipn.NeedsLogin; here they are two phases.
 func TestLoginReporterSplitsTheTwoNeedsLoginWaits(t *testing.T) {
 	const url = "https://login.tailscale.com/a/28ba393017981"
 	var got []string
@@ -851,12 +850,9 @@ func TestLoginReporterRejectsAnUnusableLink(t *testing.T) {
 }
 
 // TestLoginReporterNamesTheWaitBeforeTheControlPlaneAnswers is the state the
-// first version of this missed. A bridge that has never logged in sits in
-// ipn.NoState for the whole of POST /machine/register, and only reaches
-// NeedsLogin once control has answered with a URL, so NoState is the entire
-// wait this refactor exists to name. Untranslated it emits nothing, and a
-// register that took over a minute put "Starting the bridge" on screen and
-// then went silent.
+// first version missed. A bridge that never logged in sits in ipn.NoState for
+// the whole of POST /machine/register, so NoState is the wait this exists to
+// name. Untranslated it emits nothing and the screen goes silent.
 func TestLoginReporterNamesTheWaitBeforeTheControlPlaneAnswers(t *testing.T) {
 	var lines []string
 	reporter := loginReporter{ev: collect(&lines)}
@@ -878,12 +874,10 @@ func TestLoginReporterNamesTheWaitBeforeTheControlPlaneAnswers(t *testing.T) {
 	}
 }
 
-// TestAProxyReportsToTheAttemptUsingItNow covers a defect the typed events
-// introduced and the string logger had too: nodes and proxies are cached for
-// the life of the process, attempts are not, and the closures inside
-// startProxy captured whichever attempt happened to create the proxy. Every
-// dial failure after the first connection went to a channel nobody had read
-// since, which is precisely the output wanted when a bridge breaks mid-session.
+// TestAProxyReportsToTheAttemptUsingItNow covers a defect the string logger had
+// too: proxies are cached for the life of the process, attempts are not, and
+// startProxy's closures captured whichever attempt created the proxy. Every
+// later dial failure went to a channel nobody had read since.
 func TestAProxyReportsToTheAttemptUsingItNow(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer backend.Close()
@@ -1006,12 +1000,10 @@ func unhealthyLogin(text string) *ipn.Notify {
 	}}
 }
 
-// TestLoginReporterReportsALoginThatIsFailing is the 502 register loop. Control
-// answers the register with an error, so the node stays in NeedsLogin and never
-// sends a BrowseToURL, and the attempt sits on "Waiting for a login link" while
-// tsnet retries behind a backoff. Nothing else on the bus carries the reason:
-// the error is not a vizerror, so ErrMessage stays nil and the health state is
-// the only place it appears.
+// TestLoginReporterReportsALoginThatIsFailing is the 502 register loop. The
+// node stays in NeedsLogin and never sends a BrowseToURL, so the attempt sits
+// on "Waiting for a login link" while tsnet retries. The error is not a
+// vizerror, so ErrMessage stays nil and health state is the only place it is.
 func TestLoginReporterReportsALoginThatIsFailing(t *testing.T) {
 	const text = "You are logged out. The last login error was: register request: http 502"
 

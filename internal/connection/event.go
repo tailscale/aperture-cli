@@ -1,14 +1,11 @@
-// Package connection carries what a connection attempt reports while it runs.
-//
-// It exists so the producer of these events does not own their vocabulary.
-// Most of them come from the bridge manager, but the attempt is wider than the
-// bridge: the model fetch that follows bring-up is part of the same wait, and
-// the user does not know or care which half they are in. The types therefore
-// sit below both.
+// Package connection carries what a connection attempt reports while it runs,
+// so the producers of those events do not own their vocabulary. Most come from
+// the bridge manager, but the attempt is wider than the bridge: the model fetch
+// after bring-up is part of the same wait, and the user cannot tell the halves
+// apart.
 //
 // Nothing here may reference tsnet, ipn or ipnstate. Translating the tailnet's
-// vocabulary into this one is the bridge manager's job, and this package is
-// what it translates into.
+// vocabulary into this one is the bridge manager's job.
 package connection
 
 import (
@@ -20,12 +17,10 @@ import (
 // Phase is what an attempt is waiting on, named for what the user is waiting
 // for rather than for the backend state underneath it.
 //
-// AwaitingLoginLink and AwaitingAuthorization are the reason this type exists.
-// Both are ipn.NeedsLogin, and they are completely different problems: one is
-// the control plane not having answered yet, the other is the user not having
-// finished in the browser. A bridge that took 29 seconds to come up spent them
-// in the first and showed only "NeedsLogin", so there was nothing on screen to
-// tell the two apart and three fixes were aimed at the wrong one.
+// AwaitingLoginLink and AwaitingAuthorization are why this type exists. Both
+// are ipn.NeedsLogin and they are different problems: the control plane has not
+// answered yet, versus the user has not finished in the browser. A 29 second
+// bridge spent them in the first and showed only "NeedsLogin".
 type Phase int
 
 // Phases in the order an attempt passes through them. The order is load
@@ -66,12 +61,10 @@ type LoginLink struct {
 
 func (l LoginLink) String() string { return l.url }
 
-// ParseLoginLink validates a login link and is the only way to make one.
-//
-// The rules are not cosmetic: the value is handed to a desktop opener and
-// shown as something the user should click, so anything that is not an https
-// URL is not a link we were asked to follow. Tailscale applies the same rules
-// upstream in validPopBrowserURLLocked; this is the second gate, not the first.
+// ParseLoginLink validates a login link and is the only way to make one. The
+// value is handed to a desktop opener and shown as something to click, so
+// anything that is not an https URL is not a link we were asked to follow.
+// Tailscale applies the same rules in validPopBrowserURLLocked.
 func ParseLoginLink(raw string) (LoginLink, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -106,10 +99,9 @@ const (
 	LoginRequired
 )
 
-// Event is what an attempt publishes as it proceeds. It replaces a log sink of
-// plain strings, which forced every consumer to recover meaning by matching
-// prose: the TUI opened a browser on a phrase from inside a vendored package,
-// so a reworded upstream log line would silently strand the user.
+// Event is what an attempt publishes as it proceeds. It replaces a sink of
+// plain strings that had the TUI opening a browser on a phrase from inside a
+// vendored package, where a reworded log line silently stranded the user.
 type Event struct {
 	Kind  Kind
 	Phase Phase     // Kind == PhaseEntered
@@ -119,12 +111,10 @@ type Event struct {
 
 // Note reports diagnostics, flattened to one line.
 //
-// Flattened here rather than at each consumer because String promises one line
-// of the activation log and the screen relies on it: the connect screen wraps
-// and indents each line itself, and an embedded newline puts unindented text
-// in the middle of the block and miscounts the rows the renderer has to
-// repaint. Control plane errors arrive with the request ID on a second line,
-// so this is the normal shape of a failure, not a malformed one.
+// Flattened here because String promises one line and the connect screen wraps
+// and indents each itself: an embedded newline lands unindented and miscounts
+// the rows to repaint. Control plane errors carry their request ID on a second
+// line, so this is the normal shape of a failure.
 func Note(text string) Event {
 	return Event{Kind: Noted, Text: strings.Join(strings.Fields(text), " ")}
 }
@@ -139,12 +129,10 @@ func Entered(p Phase) Event { return Event{Kind: PhaseEntered, Phase: p} }
 func Login(link LoginLink) Event { return Event{Kind: LoginRequired, Link: link} }
 
 // Droppable reports whether a consumer under backpressure may discard this
-// event. Only diagnostics may go: losing a phase leaves a gap in the record of
-// where the time went, and losing a login link leaves the user waiting on a
-// browser tab that was never opened at a URL they were never shown. The old
-// sink dropped whatever arrived on a full buffer, and under -debug the tsnet
-// backend logger shared that buffer, so a burst of chatter could take the one
-// line the user could not proceed without.
+// event. Only diagnostics may go: a lost phase leaves a gap in where the time
+// went, and a lost login link leaves the user waiting on a browser tab nothing
+// opened. The old sink dropped whatever arrived on a full buffer, which under
+// -debug it shared with tsnet's backend logger.
 func (e Event) Droppable() bool { return e.Kind == Noted }
 
 // String renders the event as one line of the activation log.

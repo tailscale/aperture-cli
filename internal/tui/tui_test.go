@@ -830,10 +830,8 @@ func TestSetupGuideEditPrefillsFailedURL(t *testing.T) {
 }
 
 // A guessed URL that answers is not necessarily the Aperture the user wanted:
-// on a tailnet that already has a host called "ai", both a direct connection
-// and a new bridge land there and succeed, and nothing fails to open the setup
-// guide's editor. The endpoints menu has to be able to retarget a working
-// endpoint, or that first success is the only one reachable.
+// on a tailnet with a host called "ai" both a direct connection and a new
+// bridge land there and succeed, and nothing opens the setup guide's editor.
 func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
@@ -1719,10 +1717,9 @@ func TestBridgeLogSinkNeverDropsTheLoginLink(t *testing.T) {
 }
 
 // TestRemoveConnectionRowTakesTheBridgeWithIt covers what one press of "d" is
-// supposed to mean. A bridge-backed endpoint is one row on the picker, but it
-// is two objects in settings, and removing only the endpoint left the bridge
-// behind to be re-listed as a bare "Connect via" row at the bottom. The row
-// read as having moved rather than gone, and clearing it took a second press.
+// supposed to mean. One picker row is two objects in settings, and removing
+// only the endpoint left the bridge re-listed as a bare "Connect via" row: the
+// row read as having moved rather than gone.
 func TestRemoveConnectionRowTakesTheBridgeWithIt(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := &model{g: &config.Global{Settings: config.Settings{
