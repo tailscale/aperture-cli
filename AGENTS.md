@@ -66,3 +66,60 @@ Current: [Connection](docs/adr/0001-connection-bounded-context.md).
 
 - Commit prefixes match the package touched: `tui:`, `bridges:`, `config:`.
 - `make test` is the gate.
+
+## Workflow
+
+- Never commit to `main`. Every change gets a branch.
+- Prove a bug with a failing test first: reproduce it, watch it fail, fix to
+  green. No harness at that layer means adding the smallest one and wiring it
+  into `make check`.
+- Test through the real path before calling it fixed. Here that is the built
+  binary in a terminal, not only `go test`. State what was verified and what
+  could not be.
+- Reply to every addressed PR comment with the commit that fixed it: backticked
+  short hash, linked. No "done" without a hash.
+- Commit bodies and ADRs carry the why, because the what is in the diff: the
+  concrete failure, what the obvious alternative would have cost, and what
+  would justify revisiting. Same for PR descriptions.
+- Security-review any diff touching login links, tailnet identity, credentials
+  or the bridge state directory before it merges, as a fresh-context
+  adversarial pass by someone other than the author. Verify each finding; the
+  build is the arbiter.
+- Documents go in content-typed paths (`docs/specs/`, `docs/adr/`), never in a
+  path named after whatever produced them.
+
+## Writing the code
+
+Least code that solves it. Before writing any, in order: does it need to exist
+at all (skip it, and say so), is it already here (reuse it), does the stdlib do
+it, does a dependency already in `go.mod` do it, can it be one line, and only
+then the minimum new code. A new dependency has to be maintained and
+license-compatible, no GPL/AGPL; name the one chosen, or why none fit.
+
+- No abstraction nobody asked for: no interface with one implementation, no
+  wrapper around a single call, no config for a value that never changes.
+- Deletion over addition. Boring over clever.
+- Never grow a God object. When the natural home for new state is the struct
+  everything already hangs off, that is the signal to give it its own type.
+  Tells: unrelated field clusters, methods that ignore most of the fields, a
+  name that is a role rather than a thing, tests that cannot construct it
+  without stubbing the world.
+- Self-review each diff for duplication and misplaced logic before committing:
+  near-identical functions, repeated literals, a second copy of a helper that
+  already exists, code sitting in the wrong package.
+- Nil-check where a value enters: anything off an HTTP response, parsed input,
+  settings on disk or a function that can return nil is guarded at first
+  receipt. A check at every use site means the guard is missing at the door.
+- Handle errors where recovery is possible. Returning err to `main` moves every
+  failure to the top with no context and no recovery; propagate only when the
+  caller owns the decision, otherwise retry, default, wrap or degrade.
+- Fix the root cause, not the path the report names. Grep every caller first:
+  one guard in the shared function is a smaller diff than a guard in each.
+- Slow work is a `tea.Cmd`, never inline in `Update`. Back off on retries and
+  never poll the control plane or the LocalAPI in a tight loop.
+- Work consciously skipped is said out loud, never left as a TODO comment or
+  as speculative code.
+
+Being lazy about the solution is the goal. Being lazy about understanding it is
+not: trace the flow a change touches before picking an approach, because the
+smallest change in the wrong place is a second bug.
