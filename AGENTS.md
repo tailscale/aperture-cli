@@ -65,7 +65,8 @@ Current: [Connection](docs/adr/0001-connection-bounded-context.md).
 ## Conventions
 
 - Commit prefixes match the package touched: `tui:`, `bridges:`, `config:`.
-- `make test` is the gate.
+- `make check` is the gate, and it is what CI runs: lint, build, then the suite
+  under the race detector. `make test` is the fast loop, not the bar.
 
 ## Workflow
 
