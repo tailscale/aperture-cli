@@ -48,6 +48,10 @@ func (m *model) rootMenu() *menu.Menu {
 		if it.Action == nil {
 			continue
 		}
+		if !m.connected {
+			it.Disabled = true
+			it.Action = nil
+		}
 		items = append(items, it)
 	}
 
@@ -94,7 +98,7 @@ func (m *model) rootMenu() *menu.Menu {
 // and the human-readable label to render next to [0]. Returns nil if the
 // recorded endpoint is not active or the client selection is stale.
 func (m *model) quickSelect() (tea.Cmd, string) {
-	if m.g.LastLaunch.LastClientName == "" {
+	if !m.connected || m.g.LastLaunch.LastClientName == "" {
 		return nil, ""
 	}
 	for _, c := range registeredClients(m.g) {
@@ -677,25 +681,25 @@ func (m *model) setupGuideMenu() *menu.Menu {
 	}
 }
 
-// promptEditEndpoint edits ep's URL in place and connects to what the user
-// typed, keeping its bridge. It is the only way to retarget an endpoint that
-// connects: the guessed default answers on any tailnet with a host called "ai",
-// and a success shows neither the inline override nor the setup guide.
+// promptEditEndpoint verifies a replacement URL before removing ep, keeping
+// its bridge. It is the only way to retarget an endpoint that connects: the
+// guessed default answers on any tailnet with a host called "ai", and a success
+// shows neither the inline override nor the setup guide.
 func (m *model) promptEditEndpoint(ep config.Endpoint) {
 	m.promptForInput("Edit Endpoint:", "URL", ep.URL, func(v string) tea.Cmd {
 		next, err := config.ParseEndpoint(v, ep.BridgeID)
 		if err != nil {
 			return simpleErrorCmd(err)
 		}
-		if err := m.g.ReplaceEndpoint(ep, next); err != nil {
-			return simpleErrorCmd(err)
+		if m.act != nil && sameEndpoint(m.act.endpoint, ep) && m.act.replaces != nil {
+			return m.retargetActivation(next)
 		}
-		// Follow the rename, so a failure screen already showing ep keeps
-		// naming the endpoint the user is now trying.
-		if m.failedEndpoint != nil && sameEndpoint(*m.failedEndpoint, ep) {
-			m.failedEndpoint = &next
+		seq := m.activationSeq
+		cmd := m.connectVia(next, false)
+		if m.activationSeq != seq {
+			m.act.replaces = &ep
 		}
-		return m.activateEndpointCmd(next)
+		return cmd
 	})
 }
 

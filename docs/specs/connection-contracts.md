@@ -1,7 +1,61 @@
 # Connection contracts
 
-Pass 1. Contracts for the objects in
-[the domain model](connection-domain-model.md).
+Connection commits an edited endpoint only after verification and gives each
+Machine exclusive ownership of startup, logout and cleanup. These corrections
+are specified together with their data model in
+[the domain model](connection-domain-model.md#lifecycle-correction-implemented-in-this-pass).
+
+## Security correction contracts
+
+`peerAddr` may map a bare hostname only to `<host>.<current MagicDNS suffix>`;
+it accepts explicit peer FQDNs across suffixes. Unknown suffixes produce no
+bare-name match. Case folding and trailing-dot normalization do not relax the
+suffix boundary. Non-peer fallback stays in tsnet, not in a first-label alias.
+
+`ParseLoginLink` keeps its accepted HTTPS URL contract, including valid query
+separators; its errors never echo the input. The desktop adapter must treat the
+entire link as a URL argument, not shell syntax. Native opener errors propagate
+to the existing manual-login fallback. On Windows this is `ShellExecuteW`, with
+no command-line parameters and the URL as its file argument.
+
+`LoginRequired` still delivers the full link to the interactive consumer. Its
+representation in Aperture's run log is only the event fact. Raw diagnostic URL
+values are replaced before emission to that log at normal and debug levels, including
+rejected links, health warnings, backend chatter and startup/watch errors.
+Existing log files are not rewritten; they can still contain earlier links and
+must be treated as sensitive. This does not intercept the SDK's separate logtail
+pipeline, which receives diagnostics before Aperture's callbacks.
+
+Every concurrent or subsequent `Manager.Close` joins the same cleanup and
+returns the same result. No caller may report completion while another is
+still tearing down a Machine. New activations are rejected once closing begins.
+These are internal API/logging contracts: external APIs, domain events and the
+persistence schema are otherwise unchanged. See [ADR 0004](../adr/0004-contain-connection-authority.md).
+
+## Lifecycle correction contracts
+
+`Global.SetActiveEndpoint(ep Endpoint, replacing *Endpoint) error` atomically
+persists `ep` first, removes duplicate `ep` entries and the optional original,
+then updates in-memory settings. On a write error both settings and the runtime
+host stay unchanged. Normal selection passes nil. The existing JSON schema is
+unchanged; `activation.replaces` is a transient value, never persisted.
+
+`Manager.Activate` and `Manager.SwitchTailnet` keep their public signatures.
+Both acquire a cancellable turn on the Machine identified by Bridge ID. No
+proxy may be created before `Up` succeeds, and no new node may use its state
+directory before the prior node finishes closing. `SwitchTailnet` calls the
+node's `Logout`, whose LocalAPI initialization does not wait for `Running`.
+`Close` cancels operations, waits for cleanup and permanently closes the manager.
+
+No new domain event or external API is introduced. A pending edit is committed
+by the existing successful `endpointActivationResult`; failed and stale results
+do not commit. Switch intent invalidates the active runtime synchronously by
+Bridge ID before the logout command is dispatched, so cancellation cannot drop
+an invalidation event. Verification is the only transition back to launchable.
+There is no new persistence schema or migration.
+
+The tables below describe the broader pass-1 event proposal, including the
+explicitly deferred events.
 
 Two of the three contracts are deliberately absent, with reasons, rather than
 left blank:

@@ -216,7 +216,7 @@ func TestGlobal_SetActiveEndpoint_DistinguishesBridge(t *testing.T) {
 			},
 		},
 	}
-	if err := g.SetActiveEndpoint(config.Endpoint{URL: "http://ai", BridgeID: "bridge-abcdef"}); err != nil {
+	if err := g.SetActiveEndpoint(config.Endpoint{URL: "http://ai", BridgeID: "bridge-abcdef"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if g.Settings.Endpoints[0].BridgeID != "bridge-abcdef" {

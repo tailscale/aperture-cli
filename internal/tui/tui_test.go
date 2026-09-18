@@ -95,6 +95,7 @@ func TestRootMenu_QuickSelectPrepended(t *testing.T) {
 			LastEndpointURL: "http://ai",
 		},
 	}}
+	m.connected = true
 	root := m.rootMenu()
 
 	// First visible item should be the quick-select row with Digit=0.
@@ -134,6 +135,7 @@ func TestRootMenu_NoQuickSelectWhenReplayNil(t *testing.T) {
 			LastEndpointURL: "http://ai",
 		},
 	}}
+	m.connected = true
 	root := m.rootMenu()
 	for _, it := range root.Items {
 		if !it.Hidden && strings.Contains(it.Label, "Quick select") {
@@ -155,6 +157,7 @@ func TestRootMenu_NoQuickSelectWithoutRecordedEndpoint(t *testing.T) {
 		Settings:   config.Settings{Endpoints: []config.Endpoint{{URL: "http://ai"}}},
 		LastLaunch: config.LaunchState{LastClientName: "A"},
 	}}
+	m.connected = true
 	for _, it := range m.rootMenu().Items {
 		if !it.Hidden && strings.Contains(it.Label, "Quick select") {
 			t.Errorf("unexpected quick-select row without a recorded endpoint: %+v", it)
@@ -188,6 +191,7 @@ func TestQuickSelectRequiresRecordedEndpointToBeActive(t *testing.T) {
 			},
 		},
 	}
+	m.connected = true
 	for _, item := range m.rootMenu().Items {
 		if !item.Hidden && strings.Contains(item.Label, "Quick select") {
 			t.Fatalf("quick-select shown for inactive endpoint: %+v", item)
@@ -217,7 +221,7 @@ func TestMenuEngine_PushPop(t *testing.T) {
 	fc := &fakeClient{name: "A", installed: true, menuActions: sub}
 	withFakeClients(t, []clients.Client{fc})
 
-	m := &model{g: &config.Global{}, step: stepMenu}
+	m := &model{g: &config.Global{}, step: stepMenu, connected: true}
 	m.resetStack(m.rootMenu())
 
 	// Select the visible "A" item (first non-hidden).
@@ -870,11 +874,15 @@ func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 	m.inputOnSave("http://aperture.example.ts.net")
 
 	want := config.Endpoint{URL: "http://aperture.example.ts.net", BridgeID: bridge.ID}
-	if got := m.g.Settings.Endpoints; len(got) != 1 || !sameEndpoint(got[0], want) {
-		t.Fatalf("endpoints = %+v, want the row rewritten to %+v", got, want)
+	if got := m.g.ActiveEndpoint(); got != connected {
+		t.Fatalf("active endpoint = %+v, want %+v until verification", got, connected)
 	}
 	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
 		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
+	}
+	m.Update(endpointActivationResult{id: m.act.id, endpoint: want, host: "http://127.0.0.1:12345"})
+	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0] != want {
+		t.Fatalf("endpoints = %+v, want verified replacement %+v", got, want)
 	}
 }
 

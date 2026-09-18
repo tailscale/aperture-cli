@@ -56,15 +56,17 @@ longer name.
 
 ## Constraints
 
-**Logout needs a running node.** `Logout` (`manager.go:335`) goes through
-`server.LocalClient()`, so the credentials live behind the in-process LocalAPI
-and a closed node keeps them.
+**Logout needs an initialized LocalAPI, not an authorized node.** `Logout`
+goes through `server.LocalClient()`, which calls `Start` without waiting for
+`Running`. `SwitchTailnet` now uses this path; see
+[ADR 0003](../adr/0003-preserve-verified-connections.md). A closed node keeps
+its credentials, but requiring `Up` before logout would unnecessarily demand
+authorization of the identity being left.
 
-**Starting a node that never registered performs a full interactive login**
-(`manager.go:471`). Destroying through `runningNode` unconditionally would
-create a device in order to delete it, and would ask the user to authorize a
-machine they just asked to destroy. `Bridge.Tailnet != ""` is the persisted
-"has ever joined".
+**Initialization can begin registration; `Up` waits for it.** A future destroy
+operation must not require an interactive login to remove a bridge.
+`Bridge.Tailnet` is a display hint, not proof that no machine exists when empty:
+it is saved only after endpoint verification and cleared before a switch.
 
 **Destruction is slow and failable.** `/machine/register` was hanging past 90
 seconds on 2026-09-17 and logout is a round trip to the same place. The escape

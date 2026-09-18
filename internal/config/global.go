@@ -71,11 +71,12 @@ func (g *Global) ActiveEndpoint() Endpoint {
 
 // SetActiveEndpoint rotates the endpoint to the front of the endpoint list
 // (adding it if missing), updates ApertureHost to the endpoint URL, and
-// persists. Bridge activation later rewrites ApertureHost to localhost.
-func (g *Global) SetActiveEndpoint(ep Endpoint) error {
+// persists. replacing is the original endpoint of a verified URL edit, removed
+// in the same write. Bridge activation later rewrites ApertureHost to localhost.
+func (g *Global) SetActiveEndpoint(ep Endpoint, replacing *Endpoint) error {
 	eps := []Endpoint{ep}
 	for _, existing := range g.Settings.Endpoints {
-		if !sameEndpoint(existing, ep) {
+		if !sameEndpoint(existing, ep) && (replacing == nil || !sameEndpoint(existing, *replacing)) {
 			eps = append(eps, existing)
 		}
 	}
@@ -92,7 +93,7 @@ func (g *Global) SetActiveEndpoint(ep Endpoint) error {
 // SetApertureHost rotates the direct URL to the front of the endpoint list
 // (adding it if missing), updates ApertureHost, and persists.
 func (g *Global) SetApertureHost(url string) error {
-	return g.SetActiveEndpoint(Endpoint{URL: url})
+	return g.SetActiveEndpoint(Endpoint{URL: url}, nil)
 }
 
 // UpsertEndpoint appends the endpoint to the endpoint list if not already present,

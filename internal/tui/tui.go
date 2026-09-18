@@ -125,8 +125,10 @@ type activation struct {
 	// so abandoning or overriding the attempt takes it back out instead of
 	// leaving an endpoint nobody chose.
 	ephemeral bool
-	logCh     chan bridgeLine
-	logCtx    context.Context
+	// replaces is removed only when this edited endpoint verifies successfully.
+	replaces *config.Endpoint
+	logCh    chan bridgeLine
+	logCtx   context.Context
 	// phase is the wait this attempt is in, and phaseSet distinguishes "not
 	// started" from StartingMachine, which is the zero value.
 	phase    connection.Phase
@@ -331,7 +333,14 @@ func fetchProvidersContext(ctx context.Context, host string, timeout time.Durati
 }
 
 func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
-	return m.activateEndpoint(ep, false, false)
+	var replaces *config.Endpoint
+	var ephemeral bool
+	if m.act != nil && sameEndpoint(m.act.endpoint, ep) {
+		replaces, ephemeral = m.act.replaces, m.act.ephemeral
+	}
+	cmd := m.activateEndpoint(ep, ephemeral, false)
+	m.act.replaces = replaces
+	return cmd
 }
 
 // activateEndpoint starts a cancellable attempt to connect to ep. ephemeral
@@ -348,6 +357,11 @@ func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet boo
 	m.step = stepPreflight
 	m.preflightErr = ""
 	m.bridgeLogs = nil
+	if switchTailnet && ep.BridgeID != "" && ep.BridgeID == m.g.ActiveEndpoint().BridgeID {
+		// Cancellation cannot prove that Logout did not run. Any endpoint
+		// using this bridge must verify a new gateway before launching again.
+		m.connected = false
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.activationSeq++
@@ -503,7 +517,7 @@ func (m *model) cancelActivation() (tea.Model, tea.Cmd) {
 	}
 	m.act = nil
 	m.step = stepMenu
-	if len(m.stack) == 0 {
+	if len(m.stack) == 0 || !m.connected && m.g.ActiveEndpoint().BridgeID != "" {
 		m.preflightErr = "connection cancelled"
 		m.forcedToEndpoint = true
 		m.failedEndpoint = &endpoint
@@ -530,6 +544,16 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 		act.override.reset()
 		return m, nil
 	}
+	return m, m.retargetActivation(next)
+}
+
+// retargetActivation replaces an attempt's candidate while retaining the
+// original endpoint of a pending edit. Both URL editors use this path.
+func (m *model) retargetActivation(next config.Endpoint) tea.Cmd {
+	act := m.act
+	if sameEndpoint(next, act.endpoint) {
+		return m.activateEndpointCmd(next)
+	}
 	m.stopActivation()
 
 	ephemeral := !m.endpointConfigured(next)
@@ -539,16 +563,18 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 		if err := m.g.ReplaceEndpoint(act.endpoint, next); err != nil {
 			m.errMsg = err.Error()
 			m.step = stepError
-			return m, nil
+			return nil
 		}
 	} else if ephemeral {
 		if err := m.g.UpsertEndpoint(next); err != nil {
 			m.errMsg = err.Error()
 			m.step = stepError
-			return m, nil
+			return nil
 		}
 	}
-	return m, m.activateEndpoint(next, ephemeral, false)
+	cmd := m.activateEndpoint(next, ephemeral, false)
+	m.act.replaces = act.replaces
+	return cmd
 }
 
 // bridgeLogSink is where the attempt's events land on their way to the update
@@ -670,8 +696,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
-		if !sameEndpoint(m.g.ActiveEndpoint(), msg.endpoint) {
-			if err := m.g.SetActiveEndpoint(msg.endpoint); err != nil {
+		if !sameEndpoint(m.g.ActiveEndpoint(), msg.endpoint) || m.act.replaces != nil {
+			if err := m.g.SetActiveEndpoint(msg.endpoint, m.act.replaces); err != nil {
 				m.preflightErr = "could not save active endpoint: " + err.Error()
 				m.forcedToEndpoint = true
 				failed := msg.endpoint
@@ -681,6 +707,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		m.act.replaces = nil
+		m.act.ephemeral = false
 		m.recordBridgeTailnet(msg.endpoint)
 		m.g.ApertureHost = msg.host
 		m.g.Providers = msg.providers

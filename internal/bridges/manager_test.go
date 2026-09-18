@@ -107,13 +107,15 @@ func (n *fakeNode) dialedAddrs() []string {
 // tailnetStatus is a node status that knows one peer, the shape every dial
 // through a bridge depends on.
 func tailnetStatus(dnsName string, addrs ...string) *ipnstate.Status {
+	_, suffix, _ := strings.Cut(strings.TrimSuffix(dnsName, "."), ".")
 	ips := make([]netip.Addr, 0, len(addrs))
 	for _, addr := range addrs {
 		ips = append(ips, netip.MustParseAddr(addr))
 	}
 	return &ipnstate.Status{
-		BackendState: "Running",
-		TailscaleIPs: []netip.Addr{netip.MustParseAddr("100.64.0.1")},
+		BackendState:   "Running",
+		TailscaleIPs:   []netip.Addr{netip.MustParseAddr("100.64.0.1")},
+		CurrentTailnet: &ipnstate.TailnetStatus{MagicDNSSuffix: suffix},
 		Peer: map[key.NodePublic]*ipnstate.PeerStatus{
 			key.NewNode().Public(): {DNSName: dnsName, TailscaleIPs: ips},
 		},
@@ -950,13 +952,16 @@ func TestSinkLogsEveryEvent(t *testing.T) {
 	logged := buf.String()
 	for _, want := range []string{
 		connection.StartingMachine.String(),
-		link.String(),
+		"bridge needs login",
 		"dialing",
 		connection.FindingEndpoint.String(),
 	} {
 		if !strings.Contains(logged, want) {
 			t.Errorf("run log = %q, want it to record %q", logged, want)
 		}
+	}
+	if strings.Contains(logged, link.String()) {
+		t.Error("run log contains the authorization capability")
 	}
 }
 
@@ -987,8 +992,11 @@ func TestNotifyLogsWhatTheScreenCollapses(t *testing.T) {
 	}
 	// At Info, not behind -debug: the note this pairs with is a debug note, so
 	// without this a discarded link is invisible on the run that hit it.
-	if !strings.Contains(logged, "http://evil.example.com/a/x") {
-		t.Errorf("run log = %q, want the link that was thrown away", logged)
+	if !strings.Contains(logged, "login link is not https") {
+		t.Errorf("run log = %q, want the rejection reason", logged)
+	}
+	if strings.Contains(logged, "http://evil.example.com/a/x") {
+		t.Error("run log contains the rejected authorization URL")
 	}
 }
 

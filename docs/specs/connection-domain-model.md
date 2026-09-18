@@ -1,7 +1,69 @@
 # Connection domain model
 
-Objects in the Connection context. Language is fixed by
+Connection attempts may propose an endpoint edit but cannot replace a verified
+destination until success. A Machine serializes activation, logout and closure;
+its presence in the cache alone does not prove it is open. Language is fixed by
 [the context map](connection-context-map.md).
+
+## Security correction
+
+The existing objects gain stricter invariants, not new domain objects or stored
+fields. An Endpoint's bare hostname resolves against the Machine's current
+MagicDNS suffix; a shared peer needs its explicit FQDN. Missing suffix information
+does not authorize a first-label match. Existing tsnet fallback for non-peer
+destinations remains unchanged.
+
+LoginLink remains a value object with its sole `url string` field. Its value is
+available to the interactive UI, browser and clipboard; parse errors contain
+only rejection reasons, not the input. Windows passes it to the native URL
+opener, never to a command interpreter. Aperture's run log retains the
+login-required fact but omits the link. Raw bridge diagnostic URLs are redacted
+before entering that log, including backend debug output and login errors;
+this deliberately loses URL detail. The SDK's separate logtail pipeline is
+upstream of these callbacks and is not changed by this correction.
+
+Manager's shutdown is one session-lifetime operation. Its transient
+`shutdown func() error` uses the standard library's once-result primitive to
+join concurrent callers and retain the same error. The first caller stops new
+acquisitions and cancels operations; every caller waits until all Machines have
+finished closing. No new domain event, JSON field, or migration is introduced.
+
+## Lifecycle correction implemented in this pass
+
+The following is the concrete model for [ADR 0003](../adr/0003-preserve-verified-connections.md).
+The later sections retain the wider proposed event model.
+
+`activation` remains the ConnectionAttempt entity. Its fields are `id int`,
+`endpoint config.Endpoint`, `label string`, `started time.Time`,
+`cancel context.CancelFunc`, `ephemeral bool`, `replaces *config.Endpoint`,
+`logCh chan bridgeLine`, `logCtx context.Context`, `phase connection.Phase`,
+`phaseSet bool`, `authURL string`, `copied bool`, and `override textField`.
+`replaces` is the original endpoint value, optional for a URL edit. Retry and
+inline override retain it; success commits the new endpoint and removes the
+original in one settings write. Failure leaves the original and the candidate;
+cancellation removes only a candidate this attempt added. Neither outcome
+changes a verified runtime destination or its providers.
+
+`Machine` is an entity, identified by the Bridge ID key in `Manager.nodes`.
+It owns `node tailnetNode`, `proxies map[string]*proxyRuntime`, `ev *liveEvents`,
+`turn chan struct{}`, and `cancel context.CancelFunc`. The first three are the
+existing runtime; `turn` grants one operation at a time and `cancel` allows
+manager shutdown to interrupt that operation. These adapter fields remain in
+`internal/bridges`; no vendor type enters a public signature.
+
+States are idle (no node), starting, open, and closing. Activation holds the
+Machine's turn through startup and proxy creation. A failed startup closes the
+node before releasing the turn. Logout initializes the LocalAPI without waiting
+for authorization, then closes the node and all proxies. The Machine returns
+to idle and may create a new node on the next activation. Manager shutdown
+cancels current operations, waits for their turns, closes Machines, and rejects
+new operations. A waiting operation can cancel without affecting the owner.
+
+Before dispatching a tailnet switch, the TUI marks the active destination
+unverified if it shares that Bridge ID. This is conservative when cancellation
+beats logout, since cancellation cannot prove logout did not start. Failure,
+Escape and removal must not re-enable launches; only verification does. A
+switch on a different bridge leaves the active destination usable.
 
 ## ConnectionAttempt
 

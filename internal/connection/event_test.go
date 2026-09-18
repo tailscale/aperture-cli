@@ -38,6 +38,23 @@ func TestParseLoginLink(t *testing.T) {
 	}
 }
 
+func TestLoginLinkErrorsDoNotContainInput(t *testing.T) {
+	const secret = "synthetic-login-token"
+	for _, raw := range []string{
+		"http://login.tailscale.com/a/" + secret,
+		"https://login.tailscale.com/a/" + secret + " trailing argument",
+		"https://login.tailscale.com/%zz/" + secret,
+		"https:///a/" + secret,
+	} {
+		_, err := ParseLoginLink(raw)
+		if err == nil {
+			t.Errorf("invalid link accepted: %q", raw)
+		} else if strings.Contains(err.Error(), secret) {
+			t.Errorf("rejection error exposes the login capability: %v", err)
+		}
+	}
+}
+
 // TestOnlyNotesAreDroppable is the invariant the whole type exists for: the
 // sink discards events when its buffer fills, and the login link sharing that
 // buffer with tsnet's debug chatter is what could strand an attempt.

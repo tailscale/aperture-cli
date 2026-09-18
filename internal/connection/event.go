@@ -71,17 +71,17 @@ func ParseLoginLink(raw string) (LoginLink, error) {
 		return LoginLink{}, fmt.Errorf("login link is empty")
 	}
 	if strings.ContainsAny(raw, " \t\r\n") {
-		return LoginLink{}, fmt.Errorf("login link contains whitespace: %q", raw)
+		return LoginLink{}, fmt.Errorf("login link contains whitespace")
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return LoginLink{}, fmt.Errorf("login link is not a URL: %w", err)
+		return LoginLink{}, fmt.Errorf("login link is not a URL")
 	}
 	if parsed.Scheme != "https" {
-		return LoginLink{}, fmt.Errorf("login link is not https: %q", raw)
+		return LoginLink{}, fmt.Errorf("login link is not https")
 	}
 	if parsed.Host == "" {
-		return LoginLink{}, fmt.Errorf("login link has no host: %q", raw)
+		return LoginLink{}, fmt.Errorf("login link has no host")
 	}
 	return LoginLink{url: raw}, nil
 }

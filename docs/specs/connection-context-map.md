@@ -1,9 +1,15 @@
 # Connection context map
 
-Scope: everything between the user picking an endpoint and a client having
-somewhere to send requests. Written before the refactor that replaces the
-string log channel between `internal/bridges` and `internal/tui` with typed
-events.
+Connection owns the wait between choosing an endpoint and giving a client a
+verified destination. Settings commits a URL edit only after verification;
+logging out a Machine invalidates every destination reached through it. The
+lifecycle corrections are recorded in [ADR 0003](../adr/0003-preserve-verified-connections.md).
+Short names belong to the Machine's own MagicDNS suffix; visibility of a shared
+peer does not give it a local alias. Login links cross into the desktop as URLs,
+never shell commands, and do not cross into persistent diagnostics. See
+[ADR 0004](../adr/0004-contain-connection-authority.md).
+
+The context boundaries below also describe the proposed broader event refactor.
 
 ## Ubiquitous language
 
