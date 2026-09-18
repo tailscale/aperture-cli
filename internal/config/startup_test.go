@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -99,5 +100,45 @@ func TestResolveRejectsAUnusableURL(t *testing.T) {
 	s := config.Startup{URL: "ftp://aperture.example.com"}
 	if _, err := s.Resolve(g); err == nil {
 		t.Error("Resolve accepted an ftp URL, want it refused before the TUI takes the terminal")
+	}
+}
+
+// A refused invocation has to leave settings as it found them, or the run that
+// exits with an error still costs the user a bridge to clean up by hand.
+func TestResolveRejectsTheURLBeforeCreatingTheBridge(t *testing.T) {
+	g := loadInto(t, config.Settings{})
+
+	s := config.Startup{URL: "ftp://aperture.example.com", BridgeName: "Work"}
+	if _, err := s.Resolve(g); err == nil {
+		t.Fatal("Resolve accepted an ftp URL")
+	}
+	if len(g.Settings.Bridges) != 0 {
+		t.Errorf("bridges = %+v, want none created for a rejected invocation", g.Settings.Bridges)
+	}
+	saved, err := config.LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if len(saved.Bridges) != 0 {
+		t.Errorf("saved bridges = %+v, want the rejected invocation to write nothing", saved.Bridges)
+	}
+}
+
+// Names are the user's own labels and nothing keeps them unique, so a name that
+// matches two bridges cannot address either of them.
+func TestResolveRejectsAnAmbiguousBridgeName(t *testing.T) {
+	g := loadInto(t, config.Settings{Bridges: []config.Bridge{
+		{ID: "bridge-aaa111", Name: "Work"},
+		{ID: "bridge-bbb222", Name: "work"},
+	}})
+
+	_, err := config.Startup{BridgeName: "WORK"}.Resolve(g)
+	if err == nil {
+		t.Fatal("Resolve picked one of two bridges called work")
+	}
+	for _, id := range []string{"bridge-aaa111", "bridge-bbb222"} {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("error %q does not name %s, so the user cannot tell them apart", err, id)
+		}
 	}
 }

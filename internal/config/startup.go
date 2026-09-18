@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Startup is what the invocation asked the launcher to open. The zero value
 // means it asked for nothing.
@@ -25,28 +28,50 @@ func (s Startup) Resolve(g *Global) (Endpoint, error) {
 	if url == "" && name == "" {
 		return g.ActiveEndpoint(), nil
 	}
-	var bridgeID string
-	if name != "" {
-		bridge, err := s.bridge(g, name)
+	// The URL is checked before the bridge is looked up, because the lookup
+	// writes: an invocation that exits with a usage error must not leave a
+	// bridge on disk that the user then has to find and delete.
+	ep := Endpoint{URL: DefaultLocation}
+	if url != "" {
+		parsed, err := ParseEndpoint(url, "")
 		if err != nil {
 			return Endpoint{}, err
 		}
-		bridgeID = bridge.ID
+		ep = parsed
 	}
-	if url == "" {
-		return Endpoint{URL: DefaultLocation, BridgeID: bridgeID}, nil
+	if name == "" {
+		return ep, nil
 	}
-	return ParseEndpoint(url, bridgeID)
+	bridge, err := s.bridge(g, name)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	ep.BridgeID = bridge.ID
+	return ep, nil
 }
 
 // bridge creates the named bridge if there is none, which is what makes a first
 // run scriptable. Matching ignores case: the name is the user's own label and
 // nothing keys off it.
+//
+// Two bridges can carry one name, and the flag then names neither: picking the
+// first leaves the other unreachable from the command line, silently.
 func (s Startup) bridge(g *Global, name string) (Bridge, error) {
+	var matched []Bridge
 	for _, b := range g.Settings.Bridges {
 		if strings.EqualFold(b.Name, name) {
-			return b, nil
+			matched = append(matched, b)
 		}
 	}
-	return g.AddBridge(name)
+	switch len(matched) {
+	case 0:
+		return g.AddBridge(name)
+	case 1:
+		return matched[0], nil
+	}
+	ids := make([]string, 0, len(matched))
+	for _, b := range matched {
+		ids = append(ids, b.ID)
+	}
+	return Bridge{}, fmt.Errorf("%d bridges are called %q (%s); rename one in the connection picker", len(matched), name, strings.Join(ids, ", "))
 }
