@@ -80,10 +80,26 @@ If verification fails, the endpoint remains configured for retry or editing, and
 
 ### Flags
 
-| Flag | Description |
-|------|-------------|
-| `-version` | Print build version and exit |
-| `-debug` | Print environment variables set before launching the agent |
+| Flag | Environment | Description |
+|------|-------------|-------------|
+| `-version` | | Print build version and exit |
+| `-debug` | | Print environment variables set before launching the agent |
+| `-endpoint` | `APERTURE_ENDPOINT` | Aperture URL to open on, instead of the saved one |
+| `-bridge` | `APERTURE_BRIDGE` | Connect through the bridge with this name, creating it if there is none |
+
+A flag beats its environment variable, so a one-off run can override whatever
+the shell was started with. `-bridge` on its own starts at the well-known
+location, the same guess the connection picker makes:
+
+```sh
+aperture -bridge work                                   # http://ai over the "work" bridge
+aperture -bridge work -endpoint aperture.example.com    # that URL over the "work" bridge
+aperture -endpoint aperture.example.com                 # direct, no bridge
+```
+
+Neither is made the saved active endpoint until the connection works, so an
+unreachable URL passed on the command line does not displace the one that does
+work.
 
 ## Development
 

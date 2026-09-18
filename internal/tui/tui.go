@@ -59,12 +59,14 @@ const (
 
 // NewModel returns the TUI model. g holds the persisted launcher state
 // (settings, endpoints, last launch). buildVersion is shown at the bottom
-// of the client picker.
-func NewModel(g *config.Global, buildVersion string, bridgeManager *bridges.Manager) tea.Model {
+// of the client picker. start is the endpoint to open on, which is the saved
+// active one unless the invocation named another.
+func NewModel(g *config.Global, buildVersion string, bridgeManager *bridges.Manager, start config.Endpoint) tea.Model {
 	return &model{
 		g:             g,
 		buildVersion:  buildVersion,
 		bridgeManager: bridgeManager,
+		start:         start,
 		step:          stepPreflight,
 	}
 }
@@ -73,6 +75,11 @@ type model struct {
 	g             *config.Global
 	buildVersion  string
 	bridgeManager *bridges.Manager
+	// start is where Init connects. It is not necessarily in settings yet:
+	// an endpoint named on the command line is saved on the way in and taken
+	// back out again if the attempt is abandoned, the same as one typed into
+	// the connection picker.
+	start config.Endpoint
 
 	step step
 
@@ -208,8 +215,13 @@ func (f *textField) backspace() {
 
 func (f *textField) reset() { *f = textField{} }
 
+// Init opens on m.start. connectVia rather than activateEndpointCmd because
+// the endpoint may have come off the command line and so may not be in
+// settings: connectVia writes it there for the failure screen to name and
+// marks it ephemeral, and for the saved active endpoint, which is already
+// configured, the two are the same call.
 func (m *model) Init() tea.Cmd {
-	return m.activateEndpointCmd(m.g.ActiveEndpoint())
+	return m.connectVia(m.start, false)
 }
 
 // preflightResult is emitted when the /v1/models check completes.

@@ -614,6 +614,56 @@ func TestEndpointBridgeMenu_ConnectsExistingBridgeWithoutPrompting(t *testing.T)
 	}
 }
 
+// The launcher opens on whatever the invocation named, not on the saved
+// active endpoint, and does not make it active on the way in: a -endpoint
+// that turns out to be unreachable must not displace the one that works.
+func TestInitOpensOnTheStartEndpoint(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	saved := config.Endpoint{URL: "http://saved"}
+	named := config.Endpoint{URL: "http://named", BridgeID: bridge.ID}
+	m := NewModel(&config.Global{Settings: config.Settings{
+		Bridges:   []config.Bridge{bridge},
+		Endpoints: []config.Endpoint{saved},
+	}}, "B0-test", nil, named).(*model)
+
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("Init did not start a connection")
+	}
+	if m.act == nil || !sameEndpoint(m.act.endpoint, named) {
+		t.Fatalf("activation = %+v, want %+v", m.act, named)
+	}
+	if !m.act.ephemeral {
+		t.Error("an endpoint named on the command line should come back out if the attempt is abandoned")
+	}
+	if got := m.g.ActiveEndpoint(); !sameEndpoint(got, saved) {
+		t.Errorf("active endpoint = %+v, want %+v until the attempt succeeds", got, saved)
+	}
+}
+
+// The ordinary run names nothing, and has to behave exactly as it did before
+// the flags existed.
+func TestInitOpensOnTheSavedEndpointWhenNothingIsNamed(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	saved := config.Endpoint{URL: "http://saved"}
+	g := &config.Global{Settings: config.Settings{Endpoints: []config.Endpoint{saved}}}
+	m := NewModel(g, "B0-test", nil, g.ActiveEndpoint()).(*model)
+
+	if cmd := m.Init(); cmd == nil {
+		t.Fatal("Init did not start a connection")
+	}
+	if m.act == nil || !sameEndpoint(m.act.endpoint, saved) {
+		t.Fatalf("activation = %+v, want %+v", m.act, saved)
+	}
+	if m.act.ephemeral {
+		t.Error("the saved endpoint is not ephemeral; cancelling must not delete it")
+	}
+}
+
 func TestPreflightOverrideReplacesGuessedEndpoint(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

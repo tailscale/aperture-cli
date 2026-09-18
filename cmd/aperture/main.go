@@ -30,8 +30,10 @@ import (
 )
 
 var (
-	flagVersion = flag.Bool("version", false, "print version and exit")
-	flagDebug   = flag.Bool("debug", false, "enable bridge diagnostics and print agent launch environment")
+	flagVersion  = flag.Bool("version", false, "print version and exit")
+	flagDebug    = flag.Bool("debug", false, "enable bridge diagnostics and print agent launch environment")
+	flagEndpoint = flag.String("endpoint", "", "Aperture URL to open on, instead of the saved one ($APERTURE_ENDPOINT)")
+	flagBridge   = flag.String("bridge", "", "connect through the bridge with this name, creating it if there is none ($APERTURE_BRIDGE)")
 
 	buildVersion = "B0-dev"
 	buildCommit  = "unknown"
@@ -155,6 +157,17 @@ func reportFailure(err error) {
 	}
 }
 
+// orEnv falls back to the environment for a flag nobody passed, so the same
+// selection works from a dotfile, a container or a systemd unit as from a
+// typed invocation. The flag wins: a one-off run has to be able to override
+// whatever the shell was started with.
+func orEnv(value, key string) string {
+	if value != "" {
+		return value
+	}
+	return os.Getenv(key)
+}
+
 func main() {
 	flag.Parse()
 
@@ -184,8 +197,18 @@ func main() {
 	// Register Claude Desktop on supported platforms (darwin, windows).
 	profiles.RegisterIfSupported()
 
+	// Resolved before the TUI takes the terminal, so a URL it cannot use is a
+	// line on stderr and a non-zero exit rather than a full-screen error the
+	// script that passed it will never see.
+	start, err := g.StartupEndpoint(orEnv(*flagEndpoint, "APERTURE_ENDPOINT"), orEnv(*flagBridge, "APERTURE_BRIDGE"))
+	if err != nil {
+		slog.Error("resolving the endpoint to open on", "err", err)
+		reportFailure(err)
+		os.Exit(1)
+	}
+
 	bridgeManager := bridges.NewManager(g.Debug)
-	p := tea.NewProgram(tui.NewModel(g, buildVersion, bridgeManager))
+	p := tea.NewProgram(tui.NewModel(g, buildVersion, bridgeManager, start))
 
 	var exitCode int
 	if _, err := p.Run(); err != nil {
