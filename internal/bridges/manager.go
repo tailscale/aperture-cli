@@ -325,7 +325,7 @@ func NewManager(debug bool) *Manager {
 	m.newNode = func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 		s := &tsnet.Server{
 			Dir:      stateDir,
-			Hostname: "aperture-cli-" + bridge.ID,
+			Hostname: MachineName(bridge.ID),
 			UserLogf: userLogf,
 		}
 		if debug {
@@ -509,9 +509,7 @@ func (m *Manager) SwitchTailnet(ctx context.Context, bridge config.Bridge, emit 
 	logoutErr := rt.node.Logout(ctx)
 
 	closeErr := rt.close()
-	m.mu.Lock()
-	delete(m.tailnets, bridge.ID)
-	m.mu.Unlock()
+	m.forget(bridge.ID)
 
 	if err := errors.Join(logoutErr, closeErr); err != nil {
 		return err

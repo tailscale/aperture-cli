@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,5 +228,87 @@ func TestCloseEmptyManager(t *testing.T) {
 		if err := m.Close(); err != nil {
 			t.Errorf("closing an unused manager: %v", err)
 		}
+	}
+}
+
+// stateDir is the directory tsnet would have created for a bridge that has
+// started once, holding the node key that names the registered device.
+func stateDir(t *testing.T, bridgeID string) string {
+	t.Helper()
+	dir, err := config.BridgeStateDir(bridgeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tailscaled.state"), []byte("node key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestDestroyLeavesNoMachineBehind(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	dir := stateDir(t, bridge.ID)
+	if !HasMachine(bridge.ID) {
+		t.Fatal("a started bridge reports no machine")
+	}
+	n := &fakeNode{}
+	m := NewManager(false)
+	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
+	defer m.Close()
+
+	if err := m.Destroy(context.Background(), bridge, nil); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if n.loggedOut != 1 || !n.closed || n.up != 0 {
+		t.Errorf("logout=%d closed=%v up=%d; want a logout and close without authorization", n.loggedOut, n.closed, n.up)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("state directory survived the machine: %v", err)
+	}
+	if HasMachine(bridge.ID) {
+		t.Error("destroyed bridge still reports a machine")
+	}
+}
+
+// A failed logout keeps the local records: they are the only thing naming the
+// device, so the caller must be able to leave settings alone and say so.
+func TestDestroyKeepsStateWhenTheTailnetRefuses(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	dir := stateDir(t, bridge.ID)
+	n := &fakeNode{logoutErr: errors.New("control plane said no")}
+	m := NewManager(false)
+	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
+	defer m.Close()
+
+	if err := m.Destroy(context.Background(), bridge, nil); err == nil || !strings.Contains(err.Error(), "control plane said no") {
+		t.Fatalf("Destroy = %v, want the logout failure", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("state discarded after a failed logout: %v", err)
+	}
+}
+
+// A bridge nobody finished a login for has no device to deregister, and
+// starting a node to discover that would demand the login it never had.
+func TestDestroySkipsABridgeThatNeverStarted(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	if HasMachine(bridge.ID) {
+		t.Fatal("an unstarted bridge reports a machine")
+	}
+	m := NewManager(false)
+	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
+		t.Error("started a node to remove a bridge that never had one")
+		return &fakeNode{}
+	}
+	defer m.Close()
+
+	if err := m.Destroy(context.Background(), bridge, nil); err != nil {
+		t.Fatalf("Destroy: %v", err)
 	}
 }
