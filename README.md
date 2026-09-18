@@ -57,19 +57,49 @@ This is useful on machines where installing Tailscale is not practical, where Ap
 
 To use bridge mode:
 
-1. Open `Settings`, then open `Aperture Endpoints` and press `a` to add an endpoint.
-2. Choose `Bridge`, then select an existing bridge or choose `Add Bridge`.
-3. Enter the Aperture URL and follow the Tailscale login prompt for the bridge.
+1. Press `c` on the agent menu for `Change connection` (the same screen as `Settings`, then `Aperture Endpoints`).
+2. Choose `Add a connection`, then `Bridge`, then an existing bridge or `Add Bridge`.
+3. Authorize the bridge. Aperture CLI opens your browser at the Tailscale login link; if it cannot, the link stays on screen to open by hand. No URL is asked for: the bridge looks for Aperture at `http://ai`, the same location a direct connection starts from.
 4. Aperture CLI verifies `/v1/models`, makes the endpoint active, and returns to the agent menu.
 
-If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active. Select a configured endpoint from `Aperture Endpoints` to switch to it.
+If your Aperture answers on a different hostname, type it on the connect screen while the default is being tried. That cancels the attempt and connects to what you typed. Esc abandons the attempt and leaves your current endpoint alone.
+
+### Choosing a connection
+
+`Change connection` lists everything this launcher can reach: each saved endpoint, and each bridge that has no endpoint yet, labelled with the tailnet it reaches. That is the screen to use when the launcher connected on its own and you wanted the other bridge.
+
+Selecting a row opens it. From there you can connect to it, change its URL, switch its tailnet, or remove it.
+
+`http://ai` can answer and still be the wrong Aperture, which is what happens when the bridge joins a tailnet that already has a host called `ai`. `Change URL` points the connection somewhere else; it keeps the bridge it is reached through and reconnects.
+
+### Switching tailnets
+
+A bridge is on one tailnet at a time. `Switch tailnet` logs it out, which removes its node from that tailnet, then prints a new login link: open it and pick the tailnet you want. Use a second bridge instead if you want to keep both logins and choose between them.
+
+If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active.
 
 ### Flags
 
-| Flag | Description |
-|------|-------------|
-| `-version` | Print build version and exit |
-| `-debug` | Print environment variables set before launching the agent |
+| Flag | Environment | Description |
+|------|-------------|-------------|
+| `-version` | | Print build version and exit |
+| `-debug` | | Print environment variables set before launching the agent |
+| `-endpoint` | `APERTURE_ENDPOINT` | Aperture URL to open on, instead of the saved one |
+| `-bridge` | `APERTURE_BRIDGE` | Connect through the bridge with this name, creating it if there is none |
+
+A flag beats its environment variable, so a one-off run can override whatever
+the shell was started with. `-bridge` on its own starts at the well-known
+location, the same guess the connection picker makes:
+
+```sh
+aperture -bridge work                                   # http://ai over the "work" bridge
+aperture -bridge work -endpoint aperture.example.com    # that URL over the "work" bridge
+aperture -endpoint aperture.example.com                 # direct, no bridge
+```
+
+Neither is made the saved active endpoint until the connection works, so an
+unreachable URL passed on the command line does not displace the one that does
+work.
 
 ## Development
 

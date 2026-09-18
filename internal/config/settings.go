@@ -16,23 +16,6 @@ import (
 	"tailscale.com/atomicfile"
 )
 
-// DefaultLocation is the fallback Aperture endpoint URL used when the user
-// has no saved settings.
-const DefaultLocation = "http://ai"
-
-// Endpoint holds the URL and per-endpoint configuration for an Aperture proxy.
-type Endpoint struct {
-	URL      string `json:"url"`
-	BridgeID string `json:"bridgeId,omitempty"`
-}
-
-// Bridge is an embedded tsnet node used to reach Aperture without requiring
-// Tailscale to run on the host.
-type Bridge struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
 // Settings holds persistent launcher configuration managed by the user.
 type Settings struct {
 	// Bridges is the set of embedded tsnet nodes the user has configured.
@@ -115,10 +98,6 @@ func BridgeStateDir(id string) (string, error) {
 		return "", fmt.Errorf("bridge ID is empty")
 	}
 	return filepath.Join(dir, "aperture", "bridges", suffix), nil
-}
-
-func sameEndpoint(a, b Endpoint) bool {
-	return a.URL == b.URL && a.BridgeID == b.BridgeID
 }
 
 func newBridgeID(existing []Bridge) (string, error) {

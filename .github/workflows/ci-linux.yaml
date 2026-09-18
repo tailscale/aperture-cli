@@ -25,13 +25,8 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
-      # Only run in this linux based runner
-      - name: Check Formatting
-        run: |
-          if [ "$(gofmt -l . | wc -l)" -gt 0 ]; then
-            gofmt -l .
-            exit 1
-          fi
-
-      - name: Run tests
-        run: make test
+      # The Makefile is the one definition of the gate, so a green local
+      # `make check` means a green CI. The formatting check that used to be
+      # inlined here lives in `make lint`, which check depends on.
+      - name: Check
+        run: make check
