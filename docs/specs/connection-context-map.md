@@ -73,6 +73,37 @@ flowchart LR
 | Tailnet | Connection | Anti-corruption layer | `internal/bridges` is the only importer of `tsnet`/`ipn`/`ipnstate`. The port must stop returning `*ipnstate.Status`. |
 | Aperture | Connection | Conformist | We take `/v1/models` as given; `config.ParseProviders` is the only translation. |
 
+## Anti-corruption layer
+
+`internal/bridges` is the ACL and the only importer of `tsnet`, `ipn`,
+`ipnstate` and `client/local`. The existing `tailnetNode` port leaks
+`*ipnstate.Status`; the replacement speaks Connection's own types and publishes
+`Event`.
+
+Owning the IPN bus watch means not calling `tsnet.Server.Up`, so we take on
+what `Up` does beyond waiting for `ipn.Running` (`tsnet/tsnet.go:533`):
+
+| What `Up` does | How we do it |
+|---|---|
+| `s.LocalClient()`, which triggers `Start` | unchanged, we already call it |
+| its own `lc.WatchIPNBus(NotifyInitialState)` | ours becomes the only one |
+| fails on any `Notify.ErrMessage` | same, surfaced as `Failed` |
+| `lc.Status` and a non-empty `TailscaleIPs` check | same call, already on the port |
+| `resetServeStateOnce` | skipped |
+
+Skipping `resetServeStateOnce` is deliberate. It clears serve config and
+service advertisements left by an earlier run of a differently configured
+program, and we call neither `SetServeConfig` nor set `AdvertiseServices`, so
+it has nothing of ours to clear. Both halves are reachable from exported API if
+that changes: `lc.SetServeConfig`, and `EditPrefs` with `AdvertiseServicesSet`.
+
+`printAuthURLLoop` cannot be switched off. `go s.printAuthURLLoop()` is
+unconditional in `start()` and no field or envknob guards it, so a no-op
+`Server.UserLogf` is the only way to stop its prose reaching us. With a typed
+`LoginRequired` event its output is not a source any more. Watchers go three to
+two while a login is outstanding, then to one: it exits when the state leaves
+`NeedsLogin`.
+
 ## Ambiguous terms, resolved
 
 | Word | Meaning A | Meaning B | Resolution |

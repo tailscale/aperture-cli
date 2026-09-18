@@ -126,6 +126,27 @@ code, which the skill flags and no constraint layer here can fix:
 - "At most one Machine per Bridge" is enforced by a map keyed on bridge id
   under a mutex. Same situation.
 
+## Deferred plumbing
+
+[ADR 0001](../adr/0001-connection-bounded-context.md) decision 2 changed what
+travels between `internal/bridges` and `internal/tui` from a string to a typed
+`Event`. It did not change the plumbing underneath, which has three knots that
+the Machine owning a long-lived stream removes as one change, each Attempt
+subscribing to it for its own lifetime.
+
+| Knot | Where | What it costs |
+|---|---|---|
+| Two identity mechanisms for "is this message from the current attempt" | `bridgeLogMsg` compares channel pointers (`tui.go:732`); everything else compares `act.id` | `bridgeLogDoneMsg` exists only to unwire the pointer one. Same question, two answers. |
+| One goroutine per log line | `waitBridgeLog` receives one value and re-arms through the event loop | A `--debug` burst is a spawn per line. It is the documented bubbletea idiom for a channel, which is the argument for a subscription instead. |
+| `WatchLogin` starts only when the node is created | `runningNode` (`manager.go:353`) returns early for a cached node | A re-login on an existing Machine reports no phases and surfaces no link. `ev.enter(FindingEndpoint)` papers over the common case and nothing covers the rest. |
+
+A fourth was a live defect and is fixed: `runningNode` closed the node's
+`UserLogf`/`DebugLogf` over the first Attempt's sink, and `startProxy` did the
+same for `transport.DialContext` and `proxy.ErrorHandler`. Nodes and proxies
+live for the process; Attempts do not. From the second Attempt onward every
+dial diagnostic and every `Bridge proxy error` went to a cancelled channel,
+which is exactly the output wanted when a bridge breaks mid-session.
+
 ## Next pass
 
 Triggered by either of the two unowned reactions finding a home, or by the

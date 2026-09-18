@@ -38,6 +38,28 @@ Artifacts, written before the code:
 
 Mermaid diagrams in those files are rendered before the commit that adds them.
 
+### Writing them
+
+Progressive disclosure. Every document answers in its first paragraph and
+deepens from there, so a reader who stops early still leaves with the decision.
+Detail belongs in the spec; the ADR links to it.
+
+An ADR is one page, Nygard's shape with the reason made explicit:
+
+```
+# NNNN. Title            <- the decision, not the topic
+Status / Date
+## Why?                  <- the concrete failure, never the category
+## Decision              <- numbered, each one testable
+## Consequences          <- what this costs, not what it wins
+## Rejected              <- option, then the cost of taking it
+## Revisit when          <- the condition that reopens this
+```
+
+An ADR longer than that has a spec trying to get out of it. Both are read by
+someone with the code in front of them, so neither restates what the diff
+already says.
+
 Current: [Connection](docs/adr/0001-connection-bounded-context.md).
 
 ## Conventions

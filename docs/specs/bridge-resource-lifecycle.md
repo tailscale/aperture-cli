@@ -1,139 +1,86 @@
 # Bridge resource lifecycle
 
-What a bridge creates, what removes it, and what is left behind today.
-
 Creating a bridge produces three things. Removing one destroys one of them.
-The other two are a tailnet device the user can see in their admin console and
-a directory on their disk, and nothing in this repo has ever deleted either.
+The survivors are a device in the user's admin console and a directory on
+their disk. Decision: [ADR 0002](../adr/0002-bridge-removal-destroys-the-machine.md).
 
-## The three resources
+## What a bridge creates
 
 | Resource | Created by | First exists | Removed by |
 |---|---|---|---|
-| Tailnet device `aperture-cli-<bridge-id>` | `tsnet.Server` registering with the control plane | first successful `Activate` | nothing |
-| `$UserConfigDir/aperture/bridges/<hex>` | tsnet, lazily, from `Server.Dir` | first `Activate`, successful or not | nothing |
-| `config.Bridge` in settings | `Global.AddBridge` (`global.go:178-196`) | the moment the user types a name | `Global.RemoveBridge` (`global.go:219-239`) |
+| Machine `aperture-cli-<bridge-id>` | `tsnet.Server` registering | first successful `Activate` | nothing |
+| `$UserConfigDir/aperture/bridges/<hex>` | tsnet, from `Server.Dir` | first `Activate`, successful or not | nothing |
+| `config.Bridge` | `AddBridge` (`global.go:178`) | the moment a name is typed | `RemoveBridge` (`global.go:219`) |
 
-The device is persistent because the node is not ephemeral. `newNode`
-(`manager.go:357-367`) builds:
+The device outlives the process because `newNode` (`manager.go:357`) sets no
+`Ephemeral`, which is the point: the same bridge reconnects next run without a
+login. The directory is the other half of that, and tsnet mkdirs it lazily, so
+a bridge that never connected has none. `RemoveBridge` writes settings and
+nothing else; `os.RemoveAll` appears four times in the repo, all of it client
+installer cleanup.
 
-```go
-s := &tsnet.Server{
-    Dir:      stateDir,
-    Hostname: "aperture-cli-" + bridge.ID,
-    UserLogf: userLogf,
-}
-```
-
-There is no `Ephemeral` field set anywhere in `internal/bridges`, so the
-control plane keeps the machine after the process exits, which is the point:
-the same bridge reconnects next run without a login. The state directory is
-the other half of that. `config.BridgeStateDir` (`settings.go:90-101`) returns
-`$UserConfigDir/aperture/bridges/<id with the "bridge-" prefix stripped>`, and
-its only non-test caller is `runningNode` (`manager.go:440`), which hands it to
-`Server.Dir`. tsnet mkdirs it on start, so a bridge that has never been
-activated has no directory.
-
-`RemoveBridge` rewrites `Settings.Bridges` and calls `SaveSettings`. That is
-all it does. `os.RemoveAll` appears four times in the repo, all of it client
-installer cleanup, none of it bridge related. `Manager.Close`
-(`manager.go:567-587`) closes proxies and nodes and never logs out, which is
-correct for shutdown and is why nothing else has to be.
-
-The one place that does log out is `SwitchTailnet` (`manager.go:528-566`), and
-its comment already names the failure mode this document is about:
-
-> A node that was never started this session is therefore brought up on the
-> old tailnet first, which is also what leaves the device removed from it
-> rather than orphaned.
-
-That reasoning applies to removal at least as strongly as it applies to
-switching. Removal skipped it.
+`SwitchTailnet` (`manager.go:528`) is the only caller of `Logout`, and its
+comment already names the failure mode: a close without a logout leaves the
+device orphaned rather than removed.
 
 ## Where a bridge can be removed
 
-Six places, all in `internal/tui`, none of them confirming, none of them
-touching anything but settings.
+Six sites, all in `internal/tui`, none confirming, none touching anything but
+settings.
 
-| Site | What it removes | Note |
-|---|---|---|
-| `bridgesMenu` hidden `d` (`menus.go:213-227`) | the bridge | a second bridge-deleting UI, parallel to the picker's |
-| `removeConnectionRow` default arm (`menus.go:482-495`) | the bridge, for a row with no endpoint | the "Remove bridge" the user sees |
-| `removeConnection` (`menus.go:497-520`) | the endpoint, then cascades | |
-| `dropOrphanBridge` (`menus.go:529-539`) | the bridge, once its last endpoint is gone | added in `b2a6bc3` |
-| setup guide "Remove endpoint" (`menus.go:647-667`) | the endpoint, then cascades | duplicates `removeConnection`'s loop |
-| `discardActivation` (`tui.go:471-494`) | the ephemeral endpoint only | leaves the bridge |
+| Site | Removes |
+|---|---|
+| `bridgesMenu` hidden `d` (`menus.go:213`) | the bridge, from a second delete UI parallel to the picker's |
+| `removeConnectionRow` default arm (`menus.go:482`) | the bridge, for a row with no endpoint |
+| `removeConnection` (`menus.go:497`) | the endpoint, then cascades |
+| `dropOrphanBridge` (`menus.go:529`) | the bridge, once its last endpoint goes (`b2a6bc3`) |
+| setup guide "Remove endpoint" (`menus.go:647`) | the endpoint, then cascades |
+| `discardActivation` (`tui.go:471`) | the ephemeral endpoint, leaving the bridge |
 
-The last one is worth reading as a cause rather than a symptom. Cancelling a
-connection to a freshly created bridge takes the endpoint back out and leaves
-the bridge, which is exactly what makes a bare "Connect via" row appear in the
-picker with no endpoint attached. So the row that `removeConnectionRow`'s
-default arm deletes is usually the residue of an abandoned first login, and
-deleting it is the one case where there is no device to clean up: the bridge
-may never have registered at all.
+The last is a cause rather than a symptom: abandoning the first connection to a
+new bridge is what leaves a bare "Connect via" row with no endpoint. So the row
+the second site deletes is usually the residue of a login nobody finished, and
+is the one case with no device to clean up.
 
-`b2a6bc3` did not create the leak. It made it reachable from a single delete of
-an endpoint, where before the user had to press `d` a second time on a
-bridge-named row to get there.
+## What destroying it needs
 
-## What cleanup needs
+`Machine.Destroy(ctx) error`, on the aggregate that owns the node
+([domain model](connection-domain-model.md#machine)), not a new method on
+`Manager`: `LeaveTailnet`, `Close`, then discard the state directory, which is
+the Machine's own persistence.
 
-One operation on `bridges.Manager`, shaped like `SwitchTailnet` because it is
-the same work minus the restart:
+Order matters and is not the obvious one. Settings goes last, after `Destroy`
+returns, because settings is the only record that the device exists: dropping
+it first and then failing the logout leaves a registered machine the CLI can no
+longer name.
 
-```go
-func (m *Manager) Forget(ctx context.Context, bridge config.Bridge, emit func(connection.Event)) error
-```
+## Constraints
 
-Order matters, and it is not the obvious one. Logout, close the node, evict it
-from `nodes` and `tailnets`, `RemoveAll` the state directory, and only then let
-the caller drop the settings entry. Settings last because settings is the only
-record that the device exists: dropping it first and then failing the logout
-leaves a registered machine the CLI can no longer name, which is strictly worse
-than the leak we have now.
+**Logout needs a running node.** `Logout` (`manager.go:335`) goes through
+`server.LocalClient()`, so the credentials live behind the in-process LocalAPI
+and a closed node keeps them.
 
-## Constraints that decide the design
+**Starting a node that never registered performs a full interactive login**
+(`manager.go:471`). Destroying through `runningNode` unconditionally would
+create a device in order to delete it, and would ask the user to authorize a
+machine they just asked to destroy. `Bridge.Tailnet != ""` is the persisted
+"has ever joined".
 
-**Logout needs a running node.** `(*tsnetNode).Logout` (`manager.go:335-341`)
-goes through `server.LocalClient()`, so the credentials it clears live behind
-the in-process LocalAPI. Closing a node without logging out reuses them next
-start. There is no way to log out a bridge that is not up.
-
-**Starting a node that never registered performs a full interactive login.**
-`runningNode`'s own comment (`manager.go:471-474`) says `Up` blocks until the
-node is Running, which for a bridge that has never logged in means blocking
-until the user visits a link nothing has shown them yet. Routing removal
-through `runningNode` unconditionally would create a device in order to delete
-it, and would do it by asking the user to authorize a machine they just asked
-to destroy. `Bridge.Tailnet != ""` is the persisted signal for "has ever
-joined" (`SetBridgeTailnet`, `global.go:201-216`); a bridge without it skips
-the logout entirely, and has no state directory to remove either.
-
-**Removal is slow and failable.** `/machine/register` was observed hanging past
-90 seconds on 2026-09-17, and logout is a control-plane round trip on the same
-infrastructure. A delete that blocks the UI indefinitely is not shippable. The
-operation needs a bounded wait and an escape that removes the local records
-anyway and tells the user, in words, that a device named
-`aperture-cli-<id>` is still in their tailnet and where to delete it.
+**Destruction is slow and failable.** `/machine/register` was hanging past 90
+seconds on 2026-09-17 and logout is a round trip to the same place. The escape
+has to name the surviving device, not just report a timeout.
 
 **No removal site has a context or an event sink.** All six return
-`menu.Result` synchronously. The house pattern for slow work is the one
-`connectVia` uses (`menus.go:793-801`): do the fast fallible part inline,
-return a `tea.Cmd` for the rest. The house pattern for showing progress
-without a full connection attempt is the post-launch recheck
-(`tui.go:773-782`), which reuses `stepPreflight` with a bare `activation` for
-the label and clock plus its own result message.
+`menu.Result` synchronously. The house pattern for slow work is `connectVia`
+(`menus.go:793`); for progress without a connection attempt it is the
+post-launch recheck (`tui.go:773`), which reuses `stepPreflight` with its own
+result message.
 
-**No removal path confirms today.** Every deletion above is one keypress. The
-house confirm shape is `switchTailnetMenu` (`menus.go:544-576`): a menu whose
-title is a question naming the subject, a preamble stating the current state
-and the consequence, two items `{verb, y}` and `{Cancel, n}`, pushed with
-`Next` so Esc also backs out.
+**No removal path confirms today.** The house confirm shape is
+`switchTailnetMenu` (`menus.go:544`).
 
 ## Out of scope
 
-The cascade rule from `b2a6bc3` does not change: a bridge two endpoints reach
-through is not an orphan and survives the removal of either one.
-
-Deduplicating the six removal sites is not required to fix the leak, though
+The `b2a6bc3` cascade rule stands: a bridge two endpoints reach through is not
+an orphan. Deduplicating the six sites is not required to fix the leak, though
 whatever lands should not make it seven.
