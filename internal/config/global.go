@@ -69,51 +69,6 @@ func (g *Global) ActiveEndpoint() Endpoint {
 	return g.Settings.Endpoints[0]
 }
 
-// StartupEndpoint is where the launcher opens: what the invocation named, or
-// the saved active endpoint when it named nothing.
-//
-// Neither argument is required and neither implies the other. A URL on its own
-// is a direct connection. A bridge on its own starts at DefaultLocation, the
-// same guess the connection picker makes, because the point of naming a bridge
-// is usually that you know how to get on the tailnet and not what is listening
-// on it. Both together pin the URL behind the bridge.
-//
-// It is the caller's job to run this before the TUI takes the terminal: a
-// rejected URL is worth a line on stderr, not a full-screen error.
-func (g *Global) StartupEndpoint(endpointArg, bridgeArg string) (Endpoint, error) {
-	endpointArg = strings.TrimSpace(endpointArg)
-	bridgeArg = strings.TrimSpace(bridgeArg)
-	if endpointArg == "" && bridgeArg == "" {
-		return g.ActiveEndpoint(), nil
-	}
-	var bridgeID string
-	if bridgeArg != "" {
-		bridge, err := g.bridgeNamed(bridgeArg)
-		if err != nil {
-			return Endpoint{}, err
-		}
-		bridgeID = bridge.ID
-	}
-	if endpointArg == "" {
-		return Endpoint{URL: DefaultLocation, BridgeID: bridgeID}, nil
-	}
-	return ParseEndpoint(endpointArg, bridgeID)
-}
-
-// bridgeNamed finds the bridge called name and creates it if there is none,
-// which is what makes a first run scriptable: a flag that only worked once
-// someone had already made the bridge by hand would not be worth having.
-// Matching ignores case because the name is the user's own label and nothing
-// keys off it.
-func (g *Global) bridgeNamed(name string) (Bridge, error) {
-	for _, b := range g.Settings.Bridges {
-		if strings.EqualFold(b.Name, name) {
-			return b, nil
-		}
-	}
-	return g.AddBridge(name)
-}
-
 // SetActiveEndpoint rotates the endpoint to the front of the endpoint list
 // (adding it if missing), updates ApertureHost to the endpoint URL, and
 // persists. Bridge activation later rewrites ApertureHost to localhost.

@@ -157,10 +157,9 @@ func reportFailure(err error) {
 	}
 }
 
-// orEnv falls back to the environment for a flag nobody passed, so the same
-// selection works from a dotfile, a container or a systemd unit as from a
-// typed invocation. The flag wins: a one-off run has to be able to override
-// whatever the shell was started with.
+// orEnv lets a dotfile, container or systemd unit make the same selection a
+// typed invocation can. The flag wins, so a one-off run can override the shell
+// it started in.
 func orEnv(value, key string) string {
 	if value != "" {
 		return value
@@ -197,10 +196,12 @@ func main() {
 	// Register Claude Desktop on supported platforms (darwin, windows).
 	profiles.RegisterIfSupported()
 
-	// Resolved before the TUI takes the terminal, so a URL it cannot use is a
-	// line on stderr and a non-zero exit rather than a full-screen error the
-	// script that passed it will never see.
-	start, err := g.StartupEndpoint(orEnv(*flagEndpoint, "APERTURE_ENDPOINT"), orEnv(*flagBridge, "APERTURE_BRIDGE"))
+	// Before the TUI takes the terminal, so a URL we cannot use exits non-zero
+	// instead of painting an error the script that passed it will never see.
+	start, err := config.Startup{
+		URL:        orEnv(*flagEndpoint, "APERTURE_ENDPOINT"),
+		BridgeName: orEnv(*flagBridge, "APERTURE_BRIDGE"),
+	}.Resolve(g)
 	if err != nil {
 		slog.Error("resolving the endpoint to open on", "err", err)
 		reportFailure(err)

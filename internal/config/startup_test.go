@@ -8,7 +8,7 @@ import (
 )
 
 // loadInto points config at a scratch directory and returns a Global holding
-// the given settings, saved, so StartupEndpoint's writes have somewhere to go.
+// the given settings, saved, so Resolve's writes have somewhere to go.
 func loadInto(t *testing.T, s config.Settings) *config.Global {
 	t.Helper()
 	tmp := t.TempDir()
@@ -24,24 +24,24 @@ func loadInto(t *testing.T, s config.Settings) *config.Global {
 	return g
 }
 
-func TestStartupEndpointFallsBackToTheSavedOne(t *testing.T) {
+func TestResolveFallsBackToTheSavedOne(t *testing.T) {
 	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{{URL: "http://saved"}}})
 
-	ep, err := g.StartupEndpoint("", "")
+	ep, err := config.Startup{}.Resolve(g)
 	if err != nil {
-		t.Fatalf("StartupEndpoint: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 	if ep != (config.Endpoint{URL: "http://saved"}) {
 		t.Errorf("endpoint = %+v, want the saved one", ep)
 	}
 }
 
-func TestStartupEndpointTakesABareHost(t *testing.T) {
+func TestResolveTakesABareHost(t *testing.T) {
 	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{{URL: "http://saved"}}})
 
-	ep, err := g.StartupEndpoint("aperture.example.com", "")
+	ep, err := config.Startup{URL: "aperture.example.com"}.Resolve(g)
 	if err != nil {
-		t.Fatalf("StartupEndpoint: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 	if ep != (config.Endpoint{URL: "http://aperture.example.com"}) {
 		t.Errorf("endpoint = %+v, want the named one, schemed", ep)
@@ -51,12 +51,12 @@ func TestStartupEndpointTakesABareHost(t *testing.T) {
 // A named bridge with no URL is the scripted equivalent of picking a bridge in
 // the connection picker, which starts at the well-known location rather than
 // demanding a URL the user may not know.
-func TestStartupEndpointGuessesTheLocationForANamedBridge(t *testing.T) {
+func TestResolveGuessesTheLocationForANamedBridge(t *testing.T) {
 	g := loadInto(t, config.Settings{Bridges: []config.Bridge{{ID: "bridge-abc123", Name: "Work"}}})
 
-	ep, err := g.StartupEndpoint("", "work")
+	ep, err := config.Startup{BridgeName: "work"}.Resolve(g)
 	if err != nil {
-		t.Fatalf("StartupEndpoint: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 	if ep != (config.Endpoint{URL: config.DefaultLocation, BridgeID: "bridge-abc123"}) {
 		t.Errorf("endpoint = %+v, want %s through the existing bridge", ep, config.DefaultLocation)
@@ -68,12 +68,12 @@ func TestStartupEndpointGuessesTheLocationForANamedBridge(t *testing.T) {
 
 // The first scripted run has no bridge yet. Refusing there would mean the
 // flag only works after someone has already done the thing by hand.
-func TestStartupEndpointCreatesAnUnknownBridge(t *testing.T) {
+func TestResolveCreatesAnUnknownBridge(t *testing.T) {
 	g := loadInto(t, config.Settings{})
 
-	ep, err := g.StartupEndpoint("http://aperture.example.com", "Work")
+	ep, err := config.Startup{URL: "http://aperture.example.com", BridgeName: "Work"}.Resolve(g)
 	if err != nil {
-		t.Fatalf("StartupEndpoint: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 	if len(g.Settings.Bridges) != 1 || g.Settings.Bridges[0].Name != "Work" {
 		t.Fatalf("bridges = %+v, want one called Work", g.Settings.Bridges)
@@ -93,10 +93,11 @@ func TestStartupEndpointCreatesAnUnknownBridge(t *testing.T) {
 	}
 }
 
-func TestStartupEndpointRejectsAUnusableURL(t *testing.T) {
+func TestResolveRejectsAUnusableURL(t *testing.T) {
 	g := loadInto(t, config.Settings{})
 
-	if _, err := g.StartupEndpoint("ftp://aperture.example.com", ""); err == nil {
-		t.Error("StartupEndpoint accepted an ftp URL, want it refused before the TUI takes the terminal")
+	s := config.Startup{URL: "ftp://aperture.example.com"}
+	if _, err := s.Resolve(g); err == nil {
+		t.Error("Resolve accepted an ftp URL, want it refused before the TUI takes the terminal")
 	}
 }
