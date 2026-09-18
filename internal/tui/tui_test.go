@@ -1742,7 +1742,7 @@ func TestRemoveConnectionRowTakesTheBridgeWithIt(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("connectionRows() = %d rows, want 2", len(rows))
 	}
-	m.removeConnectionRow(rows[1])
+	m.removeRow(rows[1])
 
 	after := m.connectionRows()
 	if len(after) != 1 {
@@ -1769,7 +1769,7 @@ func TestRemoveConnectionRowKeepsASharedBridge(t *testing.T) {
 		Bridges: []config.Bridge{{ID: "b1", Name: "work"}},
 	}}}
 
-	m.removeConnectionRow(m.connectionRows()[1])
+	m.removeRow(m.connectionRows()[1])
 
 	if len(m.g.Settings.Bridges) != 1 {
 		t.Fatalf("bridges = %+v, want the bridge kept for the other endpoint", m.g.Settings.Bridges)

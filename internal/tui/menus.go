@@ -14,6 +14,7 @@ import (
 const (
 	rootTitle       = "Which editor do you want to use?"
 	endpointsTitle  = "Aperture Endpoints"
+	bridgesTitle    = "Bridges"
 	setupGuideTitle = "Getting Started"
 )
 
@@ -223,14 +224,11 @@ func (m *model) bridgesMenu() *menu.Menu {
 			if idx < 0 || idx >= len(m.g.Settings.Bridges) {
 				return menu.Result{}
 			}
-			if err := m.g.RemoveBridge(m.g.Settings.Bridges[idx].ID); err != nil {
-				return errResult(err.Error())
-			}
-			return menu.Result{Replace: m.bridgesMenu()}
+			return m.remove(bridgeRemoval{bridge: m.g.Settings.Bridges[idx]})
 		},
 	})
 	return &menu.Menu{
-		Title: "Bridges",
+		Title: bridgesTitle,
 		Items: items,
 		Hint:  "Enter to connect · d to remove · a to add · Esc to go back",
 	}
@@ -298,7 +296,7 @@ func (m *model) endpointsMenu() *menu.Menu {
 			if !ok {
 				return menu.Result{}
 			}
-			return m.removeConnectionRow(row)
+			return m.removeRow(row)
 		},
 	})
 
@@ -460,13 +458,13 @@ func (m *model) connectionMenu(row connectionRow) *menu.Menu {
 	case row.saved:
 		items = append(items, menu.MenuItem{
 			Label:  "Remove connection",
-			Action: func() menu.Result { return m.removeConnectionRow(row) },
+			Action: func() menu.Result { return m.removeRow(row) },
 		})
 	default:
 		items = append(items, menu.MenuItem{
 			Label:       "Remove bridge",
 			Description: row.bridge.ID,
-			Action:      func() menu.Result { return m.removeConnectionRow(row) },
+			Action:      func() menu.Result { return m.removeRow(row) },
 		})
 	}
 
@@ -475,49 +473,6 @@ func (m *model) connectionMenu(row connectionRow) *menu.Menu {
 		Items: items,
 		Hint:  "Enter to select · Esc to go back",
 	}
-}
-
-// removeConnectionRow deletes what a picker row stands for: the endpoint, or
-// the bridge itself when no endpoint points at it yet. Shared by the row's page
-// and the "d" key, which have to agree on what removing a row means.
-func (m *model) removeConnectionRow(row connectionRow) menu.Result {
-	switch {
-	case row.active:
-		return errResult("connect to another endpoint before removing the active one")
-	case row.saved:
-		return m.removeConnection(row.ep)
-	default:
-		if err := m.g.RemoveBridge(row.bridge.ID); err != nil {
-			return errResult(err.Error())
-		}
-		m.refreshEndpointsMenu()
-		return menu.Result{Cmd: tea.ClearScreen}
-	}
-}
-
-func (m *model) removeConnection(ep config.Endpoint) menu.Result {
-	for i, existing := range m.g.Settings.Endpoints {
-		if !sameEndpoint(existing, ep) {
-			continue
-		}
-		if i == 0 {
-			return errResult("connect to another endpoint before removing the active one")
-		}
-		if err := m.g.RemoveEndpoint(i); err != nil {
-			return errResult(err.Error())
-		}
-		if err := m.dropOrphanBridge(existing.BridgeID); err != nil {
-			return errResult(err.Error())
-		}
-		break
-	}
-	if m.failedEndpoint != nil && sameEndpoint(*m.failedEndpoint, ep) {
-		m.clearEndpointFailure()
-		m.resetStack(m.rootMenu())
-		return menu.Result{Cmd: tea.ClearScreen}
-	}
-	m.refreshEndpointsMenu()
-	return menu.Result{Cmd: tea.ClearScreen}
 }
 
 // dropOrphanBridge removes a bridge once its last endpoint is gone. Settings
@@ -644,23 +599,8 @@ func (m *model) setupGuideMenu() *menu.Menu {
 	}
 	if m.endpointConfigured(target) && !sameEndpoint(target, m.g.ActiveEndpoint()) {
 		items = append(items, menu.MenuItem{
-			Label: "Remove endpoint",
-			Action: func() menu.Result {
-				for i, ep := range m.g.Settings.Endpoints {
-					if !sameEndpoint(ep, target) {
-						continue
-					}
-					if err := m.g.RemoveEndpoint(i); err != nil {
-						return errResult(err.Error())
-					}
-					if err := m.dropOrphanBridge(ep.BridgeID); err != nil {
-						return errResult(err.Error())
-					}
-					break
-				}
-				m.clearEndpointFailure()
-				return menu.Result{Replace: m.rootMenu()}
-			},
+			Label:  "Remove endpoint",
+			Action: func() menu.Result { return m.remove(m.removalFor(target)) },
 		})
 	}
 

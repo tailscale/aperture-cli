@@ -1,6 +1,6 @@
 # 0002. Removing a bridge destroys its Machine
 
-Status: proposed
+Status: accepted
 Date: 2026-09-18
 
 ## Why?
@@ -23,15 +23,19 @@ Detail, including all six removal sites and the constraints:
 
 Destroying the last Bridge reference destroys its Machine.
 
-1. `Machine` grows `Destroy(ctx) error`: `LeaveTailnet`, `Close`, then discard
-   the state directory, which is the Machine's own persistence. No new
-   `Manager` method. `Manager` caches Machines; it does not own their
-   lifecycle (ADR 0001, decision 6).
+1. `Machine` grows `destroy`: `Logout`, `Close`, then discard the state
+   directory, which is the Machine's own persistence. `Manager.Destroy` is the
+   way in, because the turn that serialises work on one Machine and the cache
+   entry holding it are both `Manager` state, and a destroy that took neither
+   could open the state directory a running attempt is still writing. `Manager`
+   grows a method, not a field (ADR 0001, decision 6).
 2. New invariant: a Bridge with no Endpoint has no Machine.
 3. Settings last. It is the only record the device exists, so dropping it
    before a failed logout leaves a machine the CLI can no longer name.
-4. A Bridge with no `Tailnet` never registered. It has no Machine to destroy
-   and must not start one to find out.
+4. A Bridge with no state directory never registered. It has no Machine to
+   destroy and must not start one to find out. Not `Bridge.Tailnet`: that is a
+   display hint, written after verification and cleared before a switch, so it
+   is empty for machines that do exist.
 5. Destruction confirms, naming the device and the tailnet.
 6. The wait is bounded, and on timeout the local records go anyway and the
    user is told which device is still theirs to delete.

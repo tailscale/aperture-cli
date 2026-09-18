@@ -720,6 +720,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetStack(m.rootMenu())
 		return m, tea.ClearScreen
 
+	case bridgeRemovedMsg:
+		return m.bridgeRemoved(msg)
+
 	case bridgeLogMsg:
 		if m.act == nil || m.act.logCh != msg.ch {
 			return m, nil

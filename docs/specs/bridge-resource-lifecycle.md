@@ -25,29 +25,35 @@ device orphaned rather than removed.
 
 ## Where a bridge can be removed
 
-Six sites, all in `internal/tui`, none confirming, none touching anything but
-settings.
+Six sites, all in `internal/tui`. Five of them now describe the delete as a
+`bridgeRemoval` and hand it to `remove` (`removal.go`), which is the only place
+that decides whether a machine has to be destroyed first.
 
 | Site | Removes |
 |---|---|
-| `bridgesMenu` hidden `d` (`menus.go:213`) | the bridge, from a second delete UI parallel to the picker's |
-| `removeConnectionRow` default arm (`menus.go:482`) | the bridge, for a row with no endpoint |
-| `removeConnection` (`menus.go:497`) | the endpoint, then cascades |
-| `dropOrphanBridge` (`menus.go:529`) | the bridge, once its last endpoint goes (`b2a6bc3`) |
-| setup guide "Remove endpoint" (`menus.go:647`) | the endpoint, then cascades |
-| `discardActivation` (`tui.go:471`) | the ephemeral endpoint, leaving the bridge |
+| `bridgesMenu` hidden `d` | the bridge, from a second delete UI parallel to the picker's |
+| `removeRow` bridge arm | the bridge, for a row with no endpoint |
+| `removeRow` endpoint arm | the endpoint, then cascades |
+| `dropOrphanBridge` | the bridge, once its last endpoint goes (`b2a6bc3`) |
+| setup guide "Remove endpoint" | the endpoint, then cascades |
+| `discardActivation` (`tui.go`) | the ephemeral endpoint, leaving the bridge |
 
-The last is a cause rather than a symptom: abandoning the first connection to a
-new bridge is what leaves a bare "Connect via" row with no endpoint. So the row
-the second site deletes is usually the residue of a login nobody finished, and
-is the one case with no device to clean up.
+The last is the exception and is a cause rather than a symptom: abandoning the
+first connection to a new bridge is what leaves a bare "Connect via" row with
+no endpoint. So the row the second site deletes is usually the residue of a
+login nobody finished, and is the one case with no device to clean up.
 
 ## What destroying it needs
 
-`Machine.Destroy(ctx) error`, on the aggregate that owns the node
-([domain model](connection-domain-model.md#machine)), not a new method on
-`Manager`: `LeaveTailnet`, `Close`, then discard the state directory, which is
-the Machine's own persistence.
+`Machine.destroy`, on the aggregate that owns the node
+([domain model](connection-domain-model.md#machine)): `Logout`, `Close`, then
+discard the state directory, which is the Machine's own persistence.
+`Manager.Destroy` is the entry point, because the Machine's turn and its cache
+entry are `Manager` state and destruction has to hold the turn like every other
+operation on that node.
+
+The state directory goes last and only when the logout succeeded: it holds the
+node key, which is what a later attempt would need to deregister the device.
 
 Order matters and is not the obvious one. Settings goes last, after `Destroy`
 returns, because settings is the only record that the device exists: dropping
@@ -63,23 +69,26 @@ goes through `server.LocalClient()`, which calls `Start` without waiting for
 its credentials, but requiring `Up` before logout would unnecessarily demand
 authorization of the identity being left.
 
-**Initialization can begin registration; `Up` waits for it.** A future destroy
-operation must not require an interactive login to remove a bridge.
-`Bridge.Tailnet` is a display hint, not proof that no machine exists when empty:
-it is saved only after endpoint verification and cleared before a switch.
+**Initialization can begin registration; `Up` waits for it.** Destruction must
+not require an interactive login to remove a bridge, so it initializes the node
+and never brings it up. `Bridge.Tailnet` is a display hint, not proof that no
+machine exists when empty: it is saved only after endpoint verification and
+cleared before a switch. The state directory is the durable evidence, which is
+what `bridges.HasMachine` reads.
 
 **Destruction is slow and failable.** `/machine/register` was hanging past 90
 seconds on 2026-09-17 and logout is a round trip to the same place. The escape
 has to name the surviving device, not just report a timeout.
 
-**No removal site has a context or an event sink.** All six return
-`menu.Result` synchronously. The house pattern for slow work is `connectVia`
-(`menus.go:793`); for progress without a connection attempt it is the
-post-launch recheck (`tui.go:773`), which reuses `stepPreflight` with its own
-result message.
+**No removal site had a context or an event sink.** They return `menu.Result`
+synchronously, so the wait goes where every other slow bridge operation goes:
+`destroyBridgeCmd` reuses `stepPreflight`, the bridge log tail and
+`bridgeRemovedMsg`, in the shape of the post-launch recheck. The attempt keeps
+no cancel handle, so Esc cannot abandon a logout half way through and leave the
+record disagreeing with the device.
 
-**No removal path confirms today.** The house confirm shape is
-`switchTailnetMenu` (`menus.go:544`).
+**No removal path confirmed.** `removeBridgeMenu` follows `switchTailnetMenu`,
+the house confirm shape.
 
 ## Out of scope
 
