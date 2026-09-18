@@ -20,12 +20,6 @@ Pull requests from outside Tailscale are not accepted and will be closed
 without review. If you have a change in mind, please open an issue first — we're
 happy to hear your idea and may well build it ourselves.
 
-## Development
-
-Internal development notes live in the [repo docs](./docs). To add support for
-a new coding agent, see
-[docs/adding-a-client.md](./docs/adding-a-client.md). The `Makefile` at the
-repo root has the common build and test targets.
 
 ## License
 
