@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/connection"
@@ -218,11 +219,18 @@ func (n *tsnetNode) Close() error {
 // newTSNetNode returns the node factory production Machines use. Each node is
 // a tsnet.Server on the slot's state directory, named the way the admin
 // console will show it.
+//
+// TS_AUTHKEY, when set, authorizes a fresh slot without the browser login:
+// every concurrent process is its own device (ADR 0006), so unattended
+// sessions need a reusable key or each new slot asks for a login once. Once
+// a slot is registered its state directory carries the credentials and the
+// key is not consulted again for it.
 func newTSNetNode(debug bool) func(bridge config.Bridge, slot int, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 	return func(bridge config.Bridge, slot int, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 		s := &tsnet.Server{
 			Dir:      stateDir,
 			Hostname: MachineName(bridge.ID, slot),
+			AuthKey:  os.Getenv("TS_AUTHKEY"),
 			UserLogf: userLogf,
 		}
 		if debug {
