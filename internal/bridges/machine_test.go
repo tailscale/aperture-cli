@@ -161,8 +161,11 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
 	}
-	if !strings.Contains(string(body), "lookup aperture") {
-		t.Errorf("response body = %q, want dial error", body)
+	if !strings.Contains(string(body), "not a node on this bridge's tailnet") {
+		t.Errorf("response body = %q, want the short name refused", body)
+	}
+	if dialed := node.dialedAddrs(); len(dialed) != 0 {
+		t.Errorf("short name handed to tsnet: dialed %v", dialed)
 	}
 
 	got := strings.Join(logs, "\n")
@@ -171,7 +174,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 		`dns_suffix="example.ts.net"`,
 		`target is not present among visible peers`,
 		`Bridge dial failed`,
-		`lookup aperture`,
+		`not a node on this bridge's tailnet`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("logs missing %q:\n%s", want, got)
@@ -406,12 +409,12 @@ func TestDialViaNode(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to the name when the target is not a peer", func(t *testing.T) {
+	t.Run("falls back to a qualified name when the target is not a peer", func(t *testing.T) {
 		node := &fakeNode{backendAddr: backendAddr, status: tailnetStatus("other.example.ts.net.", "100.64.0.3")}
 		var logs []string
 
 		conn, _, err := dialViaNode(
-			context.Background(), node, "tcp", "ai:80",
+			context.Background(), node, "tcp", "db.internal.example:5432",
 			collect(&logs),
 			5*time.Millisecond, time.Millisecond,
 		)
@@ -419,8 +422,8 @@ func TestDialViaNode(t *testing.T) {
 			t.Fatal(err)
 		}
 		conn.Close()
-		if got := node.dialedAddrs(); len(got) != 1 || got[0] != "ai:80" {
-			t.Errorf("dialed %v, want [ai:80]", got)
+		if got := node.dialedAddrs(); len(got) != 1 || got[0] != "db.internal.example:5432" {
+			t.Errorf("dialed %v, want [db.internal.example:5432]", got)
 		}
 		if got := strings.Join(logs, "\n"); !strings.Contains(got, "not a node on this bridge's tailnet") {
 			t.Errorf("logs do not say the target left the tailnet's DNS:\n%s", got)

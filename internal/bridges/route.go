@@ -146,9 +146,16 @@ func dialViaNode(
 		if ctx.Err() != nil {
 			return nil, attempts, err
 		}
-		// Not every target is a tailnet node: a subnet router or the tailnet's
-		// own DNS can serve it. Those resolve only the way tsnet resolves, so
-		// fall through and say so, since this path can leave the tailnet.
+		// A bare name is a peer alias and nothing else. Handed to tsnet it
+		// would fall through to the host resolver, and on a machine already
+		// on another tailnet that answers with that tailnet's node of the
+		// same name; the wait above only delayed that.
+		if !strings.Contains(host, ".") {
+			return nil, attempts, fmt.Errorf("%s is not a node on this bridge's tailnet (%v)", host, err)
+		}
+		// A qualified name can be a subnet route or the tailnet's own DNS,
+		// which resolve only the way tsnet resolves, so fall through and say
+		// so, since this path can leave the tailnet.
 		ev.notef("Bridge target %s is not a node on this bridge's tailnet (%v); resolving it the usual way.", host, err)
 		conn, derr := node.DialContext(ctx, network, address)
 		return conn, attempts, derr
