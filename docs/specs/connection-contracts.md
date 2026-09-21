@@ -47,7 +47,7 @@ and no new node may use its state directory before the prior node finishes
 closing. `LeaveTailnet` calls the node's `Logout`, whose LocalAPI
 initialization does not wait for `Running`. `Machines.Close` cancels the
 operation each Machine is running, waits for cleanup and refuses new members.
-`Bridging` composes these for the TUI; see the domain model for its table.
+`Attempt.Run` composes these for a connection and `Machines.Destroy` for a removal; see the domain model.
 
 No new domain event or external API is introduced. A pending edit is committed
 by the existing successful `endpointActivationResult`; failed and stale results
@@ -94,7 +94,7 @@ application service and does not count.
 `TailnetJoined` spans Machine and Bridge: "the Bridge records the tailnet its
 Machine joined, so the picker can name it before the Machine exists again".
 Today that is `model.recordBridgeTailnet` (`tui.go:421`), which reaches into
-`Machine.Tailnet` and then `g.SetBridgeTailnet`, now inside `Bridging.Commit`. Before that the TUI was loading,
+`Machine.Tailnet` and then `g.SetBridgeTailnet`, now inside `Attempt.Commit`. Before that the TUI was loading,
 calling and committing, which is orchestration, but it is also deciding the
 rule, which is not.
 
@@ -118,7 +118,7 @@ not, and the gap is deliberate rather than unfinished:
 | `PhaseEntered` | Built, payload reduced to `Phase` | `Progress` is derivable: the connect screen already stamps every line with elapsed time from the Attempt's start, so carrying a duration in the event would be a second copy of the same clock, computed earlier and able to disagree. Add it when something off-screen needs the number. |
 | `LoginRequired` | Built as specified | |
 | `Noted` | Built as specified | |
-| `TailnetJoined` | Not built | `Bridging.Commit` carries the fact as a field of `Verified`; no event yet. |
+| `TailnetJoined` | Not built | `Attempt.Commit` carries the fact as a field of `Verified`; no event yet. |
 | `Ready`, `Failed` | Not built | Both already travel as `endpointActivationResult` on the same channel, typed, with the same single consumer. Converting them buys nothing until the Gateway owner exists, and `Ready`'s payload is that owner's to define. |
 
 Six `Phase` values are built, not nine. `Ready`, `Failed` and `Cancelled` are

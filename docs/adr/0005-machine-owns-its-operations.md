@@ -1,4 +1,4 @@
-# 0005. Machine owns its operations, Machines holds them, Bridging decides between Bridge and Machine
+# 0005. Machine owns its operations, Machines holds them, Attempt owns its transitions
 
 Status: accepted
 Date: 2026-09-21
@@ -30,16 +30,20 @@ decide".
    private detail; nothing outside it takes a lock.
 2. `Machines` is a collection: creates a Machine per Bridge on first use,
    closes them all once. It does no network work.
-3. `Bridging` is a stateless domain service for the transitions that belong
-   to no single aggregate: an Attempt reaching an Endpoint and committing it,
-   the tailnet joined recorded on the Bridge, a Bridge removed only after its
-   Machine is destroyed.
-4. `Attempt` (the model's ConnectionAttempt) lives in `internal/bridges`. The
-   TUI's `activation` holds presentation state only.
-5. Every service operation that waits on the network is split from the one
-   that writes settings. `Run` and `Destroy` may run anywhere and write
-   nothing; `Begin`, `Commit`, `Fail`, `Abandon`, `Destroys` and `Forget` run
-   on the update loop.
+3. `Attempt` (the model's ConnectionAttempt) lives in `internal/bridges` and
+   owns its transitions: `BeginAttempt`, `Run`, `Commit`, `Abandon`,
+   `Retarget`. Commit rather than Succeed, because it persists a result Run
+   already produced and decides nothing. The TUI's `activation` holds
+   presentation state only.
+4. Removing a Bridge is the one transition no aggregate owns, and it gets
+   functions named for the nouns it acts on rather than a process object:
+   `DestroysMachine`, `Machines.Destroy`, `ForgetBridge`. No service type.
+   The first attempt at this was a `Bridging` service and a `Removal` value,
+   both names for activities rather than things, and both went in review.
+5. Every operation that waits on the network is split from the one that
+   writes settings. `Run` and `Machines.Destroy` may run anywhere and write
+   nothing; `BeginAttempt`, `Commit`, `Abandon`, `DestroysMachine` and
+   `ForgetBridge` run on the update loop.
 6. `Manager` is deleted. No compatibility wrapper.
 
 ## Consequences
@@ -55,12 +59,12 @@ attempt's; the TUI's id check still discards it, and `Commit` runs only for
 the attempt on screen. Unchanged from before.
 
 `Bridge.Tailnet` is still written by the service on verification rather than
-on join, because writing on join would happen in `Run`. `Bridging.Tailnet`
+on join, because writing on join would happen in `Run`. `Machines.Tailnet`
 covers the gap by preferring what the running Machine reports.
 
 The two rules the model still leaves unowned stay in the TUI as a display
-flag: whether the active destination is verified. `Begin` and `Fail` report
-the rule's answer; the TUI keeps the bit. Naming the object that owns "the
+flag: whether the active destination is verified. `InvalidatesActive` and
+`TargetsActive` on the Attempt are the rule's answer; the TUI keeps the bit. Naming the object that owns "the
 current Gateway and whether it is verified" is the next modelling step.
 
 ## Rejected
@@ -78,6 +82,6 @@ current Gateway and whether it is verified" is the next modelling step.
 ## Revisit when
 
 APT-330 lands: `Machines` and `Machine` become one launcher's view of a shared
-helper, and `Bridging` should survive that with its signatures. Or an object
+helper, and `Attempt` should survive that with its signatures. Or an object
 owning the current Gateway exists, at which point `connected` leaves the TUI
-and `InvalidatesActive` and `Fail` lose their reason to report a bool.
+and `InvalidatesActive` and `TargetsActive` lose their reason to exist.

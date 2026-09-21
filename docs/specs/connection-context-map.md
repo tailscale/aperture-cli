@@ -16,13 +16,12 @@ The context boundaries below also describe the proposed broader event refactor.
 | Term | Means | Does not mean |
 |---|---|---|
 | Connection Attempt | One try at reaching an Aperture from one Endpoint. Has identity, a phase, a recorded progress trail, and exactly one outcome. | The TCP connection. The persisted endpoint list. |
-| Endpoint | The remote Aperture the user chose, plus which Bridge (if any) reaches it. | The local proxy address. Anything the CLI listens on. |
+| Endpoint | The remote Aperture the user chose and the way to it. Two kinds and no third: a DirectEndpoint the host reaches itself, a BridgeEndpoint reached through a Bridge's Machine. The kind is the type, never an empty field. | The local proxy address. Anything the CLI listens on. |
 | Gateway | The address a client is finally told to send requests to. The Endpoint URL when no Bridge is involved, the Route's local end when one is. | The Endpoint. Only equal to it in the direct case. |
 | Route | The local door to one Endpoint through one Machine: a `127.0.0.1:0` listener reverse-proxying over the Machine. | A tailnet route or subnet route. |
 | Bridge | The thing the user configures and sees in the picker: id, display name, last tailnet joined. Persisted. | The running tsnet node. |
 | Machine | What this program runs on the user's tailnet for one Bridge: registers, may need a login, gets an address, carries dials, and shows up under Machines in their admin console. Outlives any one Attempt. | The Bridge record. The proxy. The computer aperture is running on. |
 | Machines | The process's Machines, one per Bridge. Where a Machine is created and where they are all closed. | A manager. It does no network work of its own. |
-| Bridging | The service between a Bridge, its Machine and the Endpoints reached through it: connecting, switching tailnet, removing. Stateless. | The Machine's own operations, which stay on the Machine. |
 | Login Link | The URL that authorizes a Machine. `https` only, no whitespace, opened in a browser or copied. | Any URL in a log line. |
 | Phase | What the Attempt is waiting on right now, named for what the user is waiting for. | `ipn.State`. |
 | Progress | The trail of phases an Attempt passed through and how long each took. The thing that was missing when a 29s wait could not be attributed. | The scrolling log. |
@@ -41,7 +40,7 @@ it for our node and for every peer in the netmap at once.
 
 | Context | Subdomain | Owns | Lives in |
 |---|---|---|---|
-| Connection | Core | Connection Attempt, Phase, Progress, Login Link, Gateway, Route, Machine, Machines, Bridging | `internal/bridges`. `internal/tui` presents and dispatches, and decides nothing. |
+| Connection | Core | Connection Attempt, Phase, Progress, Login Link, Gateway, Route, Machine, Machines | `internal/bridges`. `internal/tui` presents and dispatches, and decides nothing. |
 | Settings | Supporting | Endpoint, Bridge, persistence | `internal/config` |
 | Client Launch | Supporting | Per-client config and env, written from a Gateway | `internal/clients/*`, `internal/profiles` |
 | Tailnet | Generic, external | Nodes, login, netmap, dialing | `tsnet`, `ipn`, `ipnstate`, `client/local` |

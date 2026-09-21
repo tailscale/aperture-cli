@@ -35,8 +35,9 @@ The following is the concrete model for [ADR 0003](../adr/0003-preserve-verified
 The later sections retain the wider proposed event model.
 
 `bridges.Attempt` is the ConnectionAttempt entity as built. Its fields are
-`Endpoint config.Endpoint`, `InvalidatesActive bool`, `bridge config.Bridge`,
-`ephemeral bool`, `replaces *config.Endpoint` and `switchTailnet bool`.
+`Endpoint config.Endpoint`, `InvalidatesActive bool`, `TargetsActive bool`,
+`bridge config.Bridge`, `ephemeral bool`, `replaces config.Endpoint` and
+`switchTailnet bool`.
 `replaces` is the original endpoint value, optional for a URL edit. Retry and
 inline override retain it; success commits the new endpoint and removes the
 original in one settings write. Failure leaves the original and the candidate;
@@ -63,9 +64,10 @@ state directory. `Machines.Close` closes each Machine, which cancels the
 operation it is running, waits for it, and rejects new operations. An
 operation waiting its turn can be cancelled without affecting the one running.
 
-`Bridging.Begin` marks the attempt as invalidating the active destination when
+`BeginAttempt` marks the attempt as invalidating the active destination when
 a tailnet switch is on the Bridge the active endpoint uses; the TUI shows that
-as unverified before dispatch. This is conservative when cancellation beats
+as unverified before dispatch. It also records whether the attempt targets the
+active endpoint, so a failure can leave that unverified too. This is conservative when cancellation beats
 logout, since cancellation cannot prove logout did not start. Failure, Escape
 and removal must not re-enable launches; only verification does. A switch on a
 different bridge leaves the active destination usable.
@@ -94,7 +96,11 @@ Attempt.
 
 - `Enter(Phase) Progress` — advance, appending to `Trail`. Rejects a backwards move.
 - `Authorize(LoginLink)` — record the link and enter `AwaitingAuthorization`.
-- `Succeed(Gateway)` / `Fail(error)` / `Cancel()` — terminal, once.
+- `Run(ctx, machines, emit) (Verified, error)` — the attempt happening: leave the tailnet if asked, open the Machine, route, ask the Aperture for models. Writes nothing, so it runs off the update loop.
+- `Commit(settings, Verified) error` — persist a verified attempt: one settings write for the edit, the tailnet recorded on the Bridge, the Gateway and providers clients launch against.
+- `Abandon(settings) error` — remove the candidate this attempt added, never the active endpoint. Failure is not abandonment: a failed attempt keeps its candidate for retry and edit.
+- `Retarget(settings, next)` / `Retry()` — a new URL for the same edit, or the same attempt again without repeating a tailnet switch.
+- Constructors `BeginAttempt(settings, endpoint, switchTailnet, replacing)` and `EditAttempt(settings, current, endpoint, next)`. Begin writes an unsaved Endpoint as the candidate and clears the Bridge's recorded tailnet before a switch.
 - `Slowest() Progress` — the phase that consumed the most wall clock. This is the question a 29 second wait asks and that nothing could answer.
 - `Supersedes(other ConnectionAttempt) bool` — `a.ID > other.ID`.
 
@@ -289,30 +295,27 @@ member and lets concurrent callers share one result.
 Invariants: at most one Machine per Bridge ID. A Bridge ID that is not the
 generated `bridge-<hex>` shape is refused before it can become a hostname.
 
-## Bridging
+## Removing a Bridge
 
-Domain service. Stateless over `Machines` and Settings. It exists because the
-transitions it owns belong to no single aggregate: an Attempt reaches an
-Endpoint through a Machine and then commits to Settings; joining a tailnet is
-a Machine fact recorded on a Bridge; removing a Bridge destroys its Machine
-first (ADR 0002). Before it, the TUI decided all three.
+The one transition no single aggregate owns: a Bridge record and the Machine
+registered for it go together, Machine first (ADR 0002). Three functions in
+`internal/bridges`, named for the nouns they act on, and a Settings rule.
 
 | Operation | Runs on | Does |
 |---|---|---|
-| `Begin(ep, switchTailnet, replacing)` | update loop | Writes an unsaved Endpoint as the attempt's candidate, clears the Bridge's recorded tailnet before a switch, marks the attempt as invalidating the active destination. |
-| `Retarget(a, next)`, `Edit(current, ep, next)` | update loop | Replace a candidate nobody chose; keep the original of a pending edit. |
-| `Run(ctx, a, emit)` | any goroutine | Leaves the tailnet if asked, opens the Machine, routes, asks the Aperture for models. Writes nothing. |
-| `Commit(a, verified)` | update loop | One settings write for the edit; records the tailnet on the Bridge; sets the Gateway and providers clients launch against. |
-| `Fail(a)` | update loop | Keeps the candidate; reports whether the active destination is now unverified. |
-| `Abandon(a)` | update loop | Removes the candidate this attempt added, never the active endpoint. |
-| `Destroys(rem)` | update loop | Whether rem takes a device off a tailnet, and whether rem may go at all. |
-| `Destroy(ctx, rem, emit)` | any goroutine | The bounded logout (ADR 0002 decision 6). Writes nothing. |
-| `Forget(rem, destroyErr)` | update loop | Drops endpoint then bridge, or keeps both when the tailnet refused; an expired wait drops them and returns `*Unconfirmed`. |
-| `Tailnet(bridge)` | update loop | What the running Machine reports, else what was saved. |
+| `DestroysMachine(settings, bridge, endpoint)` | update loop | Whether removing the endpoint, or the bare bridge, takes a device off a tailnet: the Bridge's last Endpoint and a Machine that started. An error when it may not go: the active endpoint, or a bare Bridge some Endpoint still reaches through. |
+| `Machines.Destroy(ctx, bridge, emit)` | any goroutine | The bounded logout (ADR 0002 decision 6). Returns `*Unconfirmed` when the wait expires. Writes nothing. |
+| `ForgetBridge(settings, bridge, endpoint, destroyErr)` | update loop | Drops endpoint then bridge, or keeps both when the tailnet refused; an expired wait drops them and returns the `*Unconfirmed`. |
+| `Machines.Tailnet(bridge)` | update loop | What the running Machine reports, else what was saved. |
 
-The split into a waiting half and a writing half is not stylistic. Nothing
-serializes access to `config.Global`; the bubbletea update loop is the only
-place settings are read, so it is the only place they may be written.
+`Unconfirmed` is a removal the tailnet did not confirm within the wait: the
+records are gone and the device may not be. It carries the Bridge so the user
+can be told which device to look for.
+
+The split between the goroutine half and the update-loop half is not
+stylistic, here or on ConnectionAttempt. Nothing serializes access to
+`config.Global`; the bubbletea update loop is the only place settings are
+read, so it is the only place they may be written.
 
 ## Event
 
@@ -369,9 +372,9 @@ classDiagram
         +bool Ephemeral
         +Enter(Phase) Progress
         +Authorize(LoginLink)
-        +Succeed(Gateway)
-        +Fail(error)
-        +Cancel()
+        +Run(ctx, machines, emit) Verified
+        +Commit(settings, Verified)
+        +Abandon(settings)
         +Slowest() Progress
         +Supersedes(ConnectionAttempt) bool
     }
@@ -427,10 +430,10 @@ classDiagram
 
 ## Open, not assumed
 
-- Which Gateway is current for the next client launch is now `Bridging.Commit`
+- Which Gateway is current for the next client launch is now `Attempt.Commit`
   writing `Global.ApertureHost`, and recording the tailnet a Machine joined is
   the same commit. Whether that Gateway is still verified is the TUI's
-  `connected` flag, set from what `Begin` and `Fail` report. No object owns
+  `connected` flag, set from `InvalidatesActive` and `TargetsActive`. No object owns
   "the current Gateway and whether it is verified"; `Global` holds the URL and
   the TUI holds the bit.
 - Whether a reused Machine should replay its phases to a second Attempt or

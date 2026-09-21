@@ -26,7 +26,7 @@ device orphaned rather than removed.
 ## Where a bridge can be removed
 
 Six sites, all in `internal/tui`. Five of them now describe the delete as a
-`bridgeRemoval` and hand it to `remove` (`removal.go`), which is the only place
+the Bridge and Endpoint pair and hand it to `remove` (`removal.go`), which is the only place
 that decides whether a machine has to be destroyed first.
 
 | Site | Removes |
@@ -48,7 +48,7 @@ login nobody finished, and is the one case with no device to clean up.
 `Machine.destroy`, on the aggregate that owns the node
 ([domain model](connection-domain-model.md#machine)): `Logout`, `Close`, then
 discard the state directory, which is the Machine's own persistence.
-`Machine.Destroy` is the entry point, reached through `Bridging.Destroy`, because
+`Machine.Destroy` is the entry point, reached through `Machines.Destroy`, because
 destruction has to hold the Machine like every other
 operation on that node.
 
