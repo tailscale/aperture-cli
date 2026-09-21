@@ -12,14 +12,14 @@ their disk. Decision: [ADR 0002](../adr/0002-bridge-removal-destroys-the-machine
 | `$UserConfigDir/aperture/bridges/<hex>` | tsnet, from `Server.Dir` | first `Activate`, successful or not | nothing |
 | `config.Bridge` | `AddBridge` (`global.go:178`) | the moment a name is typed | `RemoveBridge` (`global.go:219`) |
 
-The device outlives the process because `newNode` (`manager.go:357`) sets no
+The device outlives the process because `newTSNetNode` (`node.go`) sets no
 `Ephemeral`, which is the point: the same bridge reconnects next run without a
 login. The directory is the other half of that, and tsnet mkdirs it lazily, so
 a bridge that never connected has none. `RemoveBridge` writes settings and
 nothing else; `os.RemoveAll` appears four times in the repo, all of it client
 installer cleanup.
 
-`SwitchTailnet` (`manager.go:528`) is the only caller of `Logout`, and its
+`Machine.LeaveTailnet` and `Machine.Destroy` are the only callers of `Logout`, and its
 comment already names the failure mode: a close without a logout leaves the
 device orphaned rather than removed.
 
@@ -48,8 +48,8 @@ login nobody finished, and is the one case with no device to clean up.
 `Machine.destroy`, on the aggregate that owns the node
 ([domain model](connection-domain-model.md#machine)): `Logout`, `Close`, then
 discard the state directory, which is the Machine's own persistence.
-`Manager.Destroy` is the entry point, because the Machine's turn and its cache
-entry are `Manager` state and destruction has to hold the turn like every other
+`Machine.Destroy` is the entry point, reached through `Bridging.Destroy`, because
+destruction has to hold the Machine like every other
 operation on that node.
 
 The state directory goes last and only when the logout succeeded: it holds the

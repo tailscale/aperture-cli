@@ -19,8 +19,8 @@ import (
 func withFakeDestroy(t *testing.T, fn func(context.Context, config.Bridge) error) {
 	t.Helper()
 	orig := destroyBridge
-	destroyBridge = func(ctx context.Context, _ *bridges.Manager, b config.Bridge, _ func(connection.Event)) error {
-		return fn(ctx, b)
+	destroyBridge = func(ctx context.Context, _ bridges.Bridging, rem bridges.Removal, _ func(connection.Event)) error {
+		return fn(ctx, rem.Bridge)
 	}
 	t.Cleanup(func() { destroyBridge = orig })
 }
@@ -206,12 +206,8 @@ func TestDestroyTimeoutRemovesLocallyAndNamesTheDevice(t *testing.T) {
 	m := pickerModel(t)
 	withFakeClients(t, []clients.Client{})
 	startedBridge(t, "bridge-aaaaaa")
-	orig := bridgeDestroyTimeout
-	bridgeDestroyTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { bridgeDestroyTimeout = orig })
-	withFakeDestroy(t, func(ctx context.Context, _ config.Bridge) error {
-		<-ctx.Done()
-		return ctx.Err()
+	withFakeDestroy(t, func(_ context.Context, b config.Bridge) error {
+		return &bridges.Unconfirmed{Bridge: b, Wait: 50 * time.Millisecond, Err: context.DeadlineExceeded}
 	})
 	row := bridgedRow(t, m)
 	m.resetStack(m.endpointsMenu())

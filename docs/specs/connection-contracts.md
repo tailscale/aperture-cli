@@ -26,7 +26,7 @@ Existing log files are not rewritten; they can still contain earlier links and
 must be treated as sensitive. This does not intercept the SDK's separate logtail
 pipeline, which receives diagnostics before Aperture's callbacks.
 
-Every concurrent or subsequent `Manager.Close` joins the same cleanup and
+Every concurrent or subsequent `Machines.Close` joins the same cleanup and
 returns the same result. No caller may report completion while another is
 still tearing down a Machine. New activations are rejected once closing begins.
 These are internal API/logging contracts: external APIs, domain events and the
@@ -40,12 +40,14 @@ then updates in-memory settings. On a write error both settings and the runtime
 host stay unchanged. Normal selection passes nil. The existing JSON schema is
 unchanged; `activation.replaces` is a transient value, never persisted.
 
-`Manager.Activate` and `Manager.SwitchTailnet` keep their public signatures.
-Both acquire a cancellable turn on the Machine identified by Bridge ID. No
-proxy may be created before `Up` succeeds, and no new node may use its state
-directory before the prior node finishes closing. `SwitchTailnet` calls the
-node's `Logout`, whose LocalAPI initialization does not wait for `Running`.
-`Close` cancels operations, waits for cleanup and permanently closes the manager.
+`Machine.Open`, `Machine.RouteTo`, `Machine.LeaveTailnet` and `Machine.Destroy`
+each hold the Machine for their whole duration; a caller waiting for it can be
+cancelled through its context. No Route may be created before the node is up,
+and no new node may use its state directory before the prior node finishes
+closing. `LeaveTailnet` calls the node's `Logout`, whose LocalAPI
+initialization does not wait for `Running`. `Machines.Close` cancels the
+operation each Machine is running, waits for cleanup and refuses new members.
+`Bridging` composes these for the TUI; see the domain model for its table.
 
 No new domain event or external API is introduced. A pending edit is committed
 by the existing successful `endpointActivationResult`; failed and stale results
@@ -92,7 +94,7 @@ application service and does not count.
 `TailnetJoined` spans Machine and Bridge: "the Bridge records the tailnet its
 Machine joined, so the picker can name it before the Machine exists again".
 Today that is `model.recordBridgeTailnet` (`tui.go:421`), which reaches into
-`Manager.Tailnet(bridgeID)` and then `g.SetBridgeTailnet`. The TUI is loading,
+`Machine.Tailnet` and then `g.SetBridgeTailnet`, now inside `Bridging.Commit`. Before that the TUI was loading,
 calling and committing, which is orchestration, but it is also deciding the
 rule, which is not.
 
@@ -116,7 +118,7 @@ not, and the gap is deliberate rather than unfinished:
 | `PhaseEntered` | Built, payload reduced to `Phase` | `Progress` is derivable: the connect screen already stamps every line with elapsed time from the Attempt's start, so carrying a duration in the event would be a second copy of the same clock, computed earlier and able to disagree. Add it when something off-screen needs the number. |
 | `LoginRequired` | Built as specified | |
 | `Noted` | Built as specified | |
-| `TailnetJoined` | Not built | Blocked on the Bridge/tailnet ownership decision above. `Manager.Tailnet` and `recordBridgeTailnet` still carry it. |
+| `TailnetJoined` | Not built | `Bridging.Commit` carries the fact as a field of `Verified`; no event yet. |
 | `Ready`, `Failed` | Not built | Both already travel as `endpointActivationResult` on the same channel, typed, with the same single consumer. Converting them buys nothing until the Gateway owner exists, and `Ready`'s payload is that owner's to define. |
 
 Six `Phase` values are built, not nine. `Ready`, `Failed` and `Cancelled` are

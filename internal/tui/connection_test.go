@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 )
@@ -35,7 +36,7 @@ func TestEndpointEditPreservesVerifiedConnection(t *testing.T) {
 			} else {
 				m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 				// The cancelled request can still deliver a success already queued.
-				m.Update(endpointActivationResult{id: m.activationSeq, endpoint: config.Endpoint{URL: srv.URL}, host: srv.URL})
+				m.Update(endpointActivationResult{id: m.activationSeq, verified: bridges.Verified{Gateway: srv.URL}})
 			}
 			if got := m.g.ActiveEndpoint(); got != old {
 				t.Errorf("%s replaced verified endpoint: got %+v, want %+v", outcome, got, old)
@@ -88,7 +89,7 @@ func TestTailnetSwitchInvalidatesSharedConnection(t *testing.T) {
 				if outcome == "cancel" {
 					m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 				} else {
-					m.Update(endpointActivationResult{id: m.act.id, endpoint: target, err: fmt.Errorf("model check failed after logout")})
+					m.Update(endpointActivationResult{id: m.act.id, err: fmt.Errorf("model check failed after logout")})
 					if outcome == "remove" {
 						_, item := findItem(t, m.top().Items, "Remove endpoint")
 						m.applyResult(item.Action())
@@ -151,8 +152,8 @@ func TestEndpointEditRetryAndOverrideKeepOriginal(t *testing.T) {
 			srv := modelsServer(t)
 			m.promptEditEndpoint(old)
 			m.inputOnSave(srv.URL)
-			first := m.act.endpoint
-			m.Update(endpointActivationResult{id: m.act.id, endpoint: first, err: fmt.Errorf("temporary failure")})
+			first := m.act.endpoint()
+			m.Update(endpointActivationResult{id: m.act.id, err: fmt.Errorf("temporary failure")})
 			var cmd tea.Cmd
 			switch action {
 			case "retry":
@@ -182,8 +183,8 @@ func TestEndpointEditSameCandidateCancellation(t *testing.T) {
 	original := m.g.ActiveEndpoint()
 	m.promptEditEndpoint(original)
 	m.inputOnSave("http://candidate")
-	candidate := m.act.endpoint
-	m.Update(endpointActivationResult{id: m.act.id, endpoint: candidate, err: fmt.Errorf("temporary failure")})
+	candidate := m.act.endpoint()
+	m.Update(endpointActivationResult{id: m.act.id, err: fmt.Errorf("temporary failure")})
 	m.promptEditEndpoint(candidate)
 	m.inputOnSave(candidate.URL)
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})

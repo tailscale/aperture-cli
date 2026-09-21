@@ -208,8 +208,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	bridgeManager := bridges.NewManager(g.Debug)
-	p := tea.NewProgram(tui.NewModel(g, buildVersion, bridgeManager, start))
+	machines := bridges.NewMachines(g.Debug)
+	p := tea.NewProgram(tui.NewModel(g, buildVersion, machines, start))
 
 	var exitCode int
 	if _, err := p.Run(); err != nil {
@@ -217,7 +217,7 @@ func main() {
 		reportFailure(err)
 		exitCode = 1
 	}
-	if err := bridgeManager.Close(); err != nil {
+	if err := machines.Close(); err != nil {
 		slog.Error("shutting down bridges", "err", err)
 		reportFailure(err)
 		exitCode = 1

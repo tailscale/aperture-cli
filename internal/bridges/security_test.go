@@ -80,13 +80,13 @@ func TestProxyRequiresExplicitSharedPeerName(t *testing.T) {
 	status := tailnetStatus("ai.attacker-tail.ts.net.", "100.64.0.99")
 	status.CurrentTailnet = &ipnstate.TailnetStatus{MagicDNSSuffix: "work-tail.ts.net"}
 	node := &sharedPeerNode{fakeNode: &fakeNode{status: status}, backend: backend.Listener.Addr().String()}
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.peerWait = 0
 	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return node }
 	defer m.Close()
 	for _, target := range []string{"http://ai", "http://ai.attacker-tail.ts.net"} {
 		t.Run(target, func(t *testing.T) {
-			localURL, err := m.Activate(context.Background(), config.Bridge{ID: "bridge-abcdef", Name: "Work"}, target, nil)
+			localURL, err := activateMachine(m, context.Background(), config.Bridge{ID: "bridge-abcdef", Name: "Work"}, target, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,13 +150,13 @@ func TestRunLogOmitsLoginCapabilities(t *testing.T) {
 					r := loginReporter{ev: sink(nil)}
 					r.notify(unhealthyLogin("request failed: " + authURL))
 				case "backend and startup error":
-					m := NewManager(true)
+					m := NewMachines(true)
 					m.newNode = func(_ config.Bridge, _ string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 						userLogf("To authenticate, visit: %s", authURL)
 						debugLogf("Received auth URL: %q", "HTTPS://login.tailscale.com/a/"+secret)
 						return &fakeNode{upErr: errors.New("authorization failed at " + authURL)}
 					}
-					_, _ = m.Activate(context.Background(), config.Bridge{ID: "bridge-abcdef"}, "http://ai", nil)
+					_, _ = activateMachine(m, context.Background(), config.Bridge{ID: "bridge-abcdef"}, "http://ai", nil)
 					_ = m.Close()
 				}
 				data, err := os.ReadFile(f.Name())

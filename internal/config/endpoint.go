@@ -43,6 +43,6 @@ func ParseEndpoint(value, bridgeID string) (Endpoint, error) {
 	return Endpoint{URL: strings.TrimRight(value, "/"), BridgeID: bridgeID}, nil
 }
 
-func sameEndpoint(a, b Endpoint) bool {
+func SameEndpoint(a, b Endpoint) bool {
 	return a.URL == b.URL && a.BridgeID == b.BridgeID
 }

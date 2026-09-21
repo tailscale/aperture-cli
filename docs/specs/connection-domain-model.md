@@ -22,48 +22,53 @@ before entering that log, including backend debug output and login errors;
 this deliberately loses URL detail. The SDK's separate logtail pipeline is
 upstream of these callbacks and is not changed by this correction.
 
-Manager's shutdown is one session-lifetime operation. Its transient
-`shutdown func() error` uses the standard library's once-result primitive to
-join concurrent callers and retain the same error. The first caller stops new
-acquisitions and cancels operations; every caller waits until all Machines have
-finished closing. No new domain event, JSON field, or migration is introduced.
+Shutting the Machines down is one session-lifetime operation. `Machines.Close`
+uses the standard library's once-result primitive to join concurrent callers
+and retain the same error. The first caller refuses new members and closes
+each Machine, which cancels the operation it is running; every caller waits
+until all Machines have finished closing. No new domain event, JSON field, or
+migration is introduced.
 
 ## Lifecycle correction implemented in this pass
 
 The following is the concrete model for [ADR 0003](../adr/0003-preserve-verified-connections.md).
 The later sections retain the wider proposed event model.
 
-`activation` remains the ConnectionAttempt entity. Its fields are `id int`,
-`endpoint config.Endpoint`, `label string`, `started time.Time`,
-`cancel context.CancelFunc`, `ephemeral bool`, `replaces *config.Endpoint`,
-`logCh chan bridgeLine`, `logCtx context.Context`, `phase connection.Phase`,
-`phaseSet bool`, `authURL string`, `copied bool`, and `override textField`.
+`bridges.Attempt` is the ConnectionAttempt entity as built. Its fields are
+`Endpoint config.Endpoint`, `InvalidatesActive bool`, `bridge config.Bridge`,
+`ephemeral bool`, `replaces *config.Endpoint` and `switchTailnet bool`.
 `replaces` is the original endpoint value, optional for a URL edit. Retry and
 inline override retain it; success commits the new endpoint and removes the
 original in one settings write. Failure leaves the original and the candidate;
 cancellation removes only a candidate this attempt added. Neither outcome
-changes a verified runtime destination or its providers.
+changes a verified runtime destination or its providers. The TUI's
+`activation` is the presentation of one Attempt: `id`, `label`, `started`,
+`cancel`, the log tail, the phase shown, the login link and the inline
+override editor. It holds no domain fields.
 
-`Machine` is an entity, identified by the Bridge ID key in `Manager.nodes`.
-It owns `node tailnetNode`, `proxies map[string]*proxyRuntime`, `ev *liveEvents`,
-`turn chan struct{}`, and `cancel context.CancelFunc`. The first three are the
-existing runtime; `turn` grants one operation at a time and `cancel` allows
-manager shutdown to interrupt that operation. These adapter fields remain in
+`Machine` is an entity, identified by its Bridge and held in `Machines`. It
+owns `tailnet string`, `routes map[string]*Route`, `node tailnetNode`, `ev
+*liveEvents`, the turn it grants one operation at a time and the `cancel` that
+lets `Close` interrupt that operation. Its behaviours are `Open`, `RouteTo`,
+`LeaveTailnet`, `Destroy`, `Close` and `Tailnet`. The adapter fields stay in
 `internal/bridges`; no vendor type enters a public signature.
 
-States are idle (no node), starting, open, and closing. Activation holds the
-Machine's turn through startup and proxy creation. A failed startup closes the
-node before releasing the turn. Logout initializes the LocalAPI without waiting
-for authorization, then closes the node and all proxies. The Machine returns
-to idle and may create a new node on the next activation. Manager shutdown
-cancels current operations, waits for their turns, closes Machines, and rejects
-new operations. A waiting operation can cancel without affecting the owner.
+States are idle (no node), starting, open, and closing. `Open` holds the
+Machine through startup; `RouteTo` through proxy creation and requires an open
+Machine. A failed startup closes the node before releasing the Machine.
+`LeaveTailnet` initializes the LocalAPI without waiting for authorization,
+logs out, then closes the node and all Routes; the Machine returns to idle and
+may create a new node on the next `Open`. `Destroy` is `LeaveTailnet` plus the
+state directory. `Machines.Close` closes each Machine, which cancels the
+operation it is running, waits for it, and rejects new operations. An
+operation waiting its turn can be cancelled without affecting the one running.
 
-Before dispatching a tailnet switch, the TUI marks the active destination
-unverified if it shares that Bridge ID. This is conservative when cancellation
-beats logout, since cancellation cannot prove logout did not start. Failure,
-Escape and removal must not re-enable launches; only verification does. A
-switch on a different bridge leaves the active destination usable.
+`Bridging.Begin` marks the attempt as invalidating the active destination when
+a tailnet switch is on the Bridge the active endpoint uses; the TUI shows that
+as unverified before dispatch. This is conservative when cancellation beats
+logout, since cancellation cannot prove logout did not start. Failure, Escape
+and removal must not re-enable launches; only verification does. A switch on a
+different bridge leaves the active destination usable.
 
 ## ConnectionAttempt
 
@@ -220,23 +225,25 @@ two a URL is, which `ApertureHost` cannot.
 
 Entity, aggregate root. What this program runs on the user's tailnet for one
 Bridge, and what their admin console lists under Machines. Separate aggregate
-from ConnectionAttempt because it is cached by bridge id and reused across
-Attempts (`Manager.nodes`), so it cannot be owned by any one of them.
+from ConnectionAttempt because it is held by Bridge in `Machines` and reused
+across Attempts, so it cannot be owned by any one of them.
 
 | Field | Type | Note |
 |---|---|---|
-| `BridgeID` | `string` | Identity. At most one Machine per Bridge. |
-| `Tailnet` | `string` | The network joined, empty until the netmap lands. |
-| `Routes` | `map[string]*Route` | Keyed by target URL. |
+| `bridge` | `config.Bridge` | Identity is its ID. At most one Machine per Bridge. |
+| `tailnet` | `string` | The network joined, empty until the netmap lands and after leaving. |
+| `routes` | `map[string]*Route` | Keyed by target URL. |
 
-Behaviors: `Open(ctx) (<-chan Event, error)`, `RouteTo(Endpoint) (Route, error)`,
-`LeaveTailnet(ctx) error`, `Close() error`.
+Behaviors: `Open(ctx, emit) error`, `RouteTo(ctx, url, emit) (*Route, error)`,
+`LeaveTailnet(ctx, emit) error`, `Destroy(ctx, emit) error`, `Close() error`,
+`Tailnet() string`. Each reports what it waits on to `emit`.
 
 Invariants:
-- A Route can only be created through an open Machine.
-- `LeaveTailnet` destroys the Machine: credentials live behind the node's own LocalAPI, so a close without a logout silently reuses them next time.
+- A Route can only be created through an open Machine. `RouteTo` fails rather than starts a node.
+- One operation at a time, cleanup included. Two Machines for one Bridge would open the same state directory, so only `Machines` creates them.
+- `LeaveTailnet` logs out before closing: credentials live behind the node's own LocalAPI, so a close without a logout silently reuses them next time. `Destroy` also discards the state directory, last and only on success, because it holds the key a later attempt needs to deregister.
 - Closing closes every Route first.
-- Exactly one IPN bus watch per Machine. Today there are two of ours plus one of tsnet's; see the ADR.
+- Exactly one IPN bus watch per Machine.
 
 ### States
 
@@ -261,15 +268,51 @@ Entity, inside the Machine aggregate. The local door to one Endpoint.
 
 | Field | Type |
 |---|---|
-| `LocalURL` | `string`, a `127.0.0.1:<port>` listener |
-| `Target` | `config.Endpoint` |
+| `LocalURL` | `string`, a `127.0.0.1:<port>` listener. The Gateway a client uses. |
 
-Behaviors: `Gateway() Gateway`, `Close() error`.
+Behaviors: `close() error`, reached only through its Machine.
 
 Invariants: belongs to exactly one Machine and one Endpoint. Its listener is
 bound to loopback only. Resolves the target against the Machine's own peer map
 before dialing, never the host resolver, because the host may itself be on a
 tailnet with a same-named node.
+
+## Machines
+
+Collection. The process's Machines, one per Bridge, and the only place a
+Machine is created. Getting a member does no network work.
+
+Behaviors: `For(Bridge) (*Machine, error)`, which creates an idle member on
+first use and refuses after `Close`; `Close() error`, which closes every
+member and lets concurrent callers share one result.
+
+Invariants: at most one Machine per Bridge ID. A Bridge ID that is not the
+generated `bridge-<hex>` shape is refused before it can become a hostname.
+
+## Bridging
+
+Domain service. Stateless over `Machines` and Settings. It exists because the
+transitions it owns belong to no single aggregate: an Attempt reaches an
+Endpoint through a Machine and then commits to Settings; joining a tailnet is
+a Machine fact recorded on a Bridge; removing a Bridge destroys its Machine
+first (ADR 0002). Before it, the TUI decided all three.
+
+| Operation | Runs on | Does |
+|---|---|---|
+| `Begin(ep, switchTailnet, replacing)` | update loop | Writes an unsaved Endpoint as the attempt's candidate, clears the Bridge's recorded tailnet before a switch, marks the attempt as invalidating the active destination. |
+| `Retarget(a, next)`, `Edit(current, ep, next)` | update loop | Replace a candidate nobody chose; keep the original of a pending edit. |
+| `Run(ctx, a, emit)` | any goroutine | Leaves the tailnet if asked, opens the Machine, routes, asks the Aperture for models. Writes nothing. |
+| `Commit(a, verified)` | update loop | One settings write for the edit; records the tailnet on the Bridge; sets the Gateway and providers clients launch against. |
+| `Fail(a)` | update loop | Keeps the candidate; reports whether the active destination is now unverified. |
+| `Abandon(a)` | update loop | Removes the candidate this attempt added, never the active endpoint. |
+| `Destroys(rem)` | update loop | Whether rem takes a device off a tailnet, and whether rem may go at all. |
+| `Destroy(ctx, rem, emit)` | any goroutine | The bounded logout (ADR 0002 decision 6). Writes nothing. |
+| `Forget(rem, destroyErr)` | update loop | Drops endpoint then bridge, or keeps both when the tailnet refused; an expired wait drops them and returns `*Unconfirmed`. |
+| `Tailnet(bridge)` | update loop | What the running Machine reports, else what was saved. |
+
+The split into a waiting half and a writing half is not stylistic. Nothing
+serializes access to `config.Global`; the bubbletea update loop is the only
+place settings are read, so it is the only place they may be written.
 
 ## Event
 
@@ -384,11 +427,12 @@ classDiagram
 
 ## Open, not assumed
 
-- Two cross-aggregate reactions have no owning object, found by the
-  [contracts pass](connection-contracts.md): recording the tailnet a Machine
-  joined onto its Bridge, and deciding which Gateway is current for the next
-  client launch. Both live in the TUI today, which orchestrates but should not
-  decide. Needs resolving before the events are implemented.
+- Which Gateway is current for the next client launch is now `Bridging.Commit`
+  writing `Global.ApertureHost`, and recording the tailnet a Machine joined is
+  the same commit. Whether that Gateway is still verified is the TUI's
+  `connected` flag, set from what `Begin` and `Fail` report. No object owns
+  "the current Gateway and whether it is verified"; `Global` holds the URL and
+  the TUI holds the bit.
 - Whether a reused Machine should replay its phases to a second Attempt or
   report a single `FindingEndpoint`. Today it reports nothing, which looks like
   a hang for as long as the peer wait takes.

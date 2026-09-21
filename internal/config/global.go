@@ -76,7 +76,7 @@ func (g *Global) ActiveEndpoint() Endpoint {
 func (g *Global) SetActiveEndpoint(ep Endpoint, replacing *Endpoint) error {
 	eps := []Endpoint{ep}
 	for _, existing := range g.Settings.Endpoints {
-		if !sameEndpoint(existing, ep) && (replacing == nil || !sameEndpoint(existing, *replacing)) {
+		if !SameEndpoint(existing, ep) && (replacing == nil || !SameEndpoint(existing, *replacing)) {
 			eps = append(eps, existing)
 		}
 	}
@@ -100,7 +100,7 @@ func (g *Global) SetApertureHost(url string) error {
 // without changing which endpoint is active, and persists.
 func (g *Global) UpsertEndpoint(ep Endpoint) error {
 	for _, existing := range g.Settings.Endpoints {
-		if sameEndpoint(existing, ep) {
+		if SameEndpoint(existing, ep) {
 			return nil
 		}
 	}
@@ -119,7 +119,7 @@ func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
 	eps := append([]Endpoint(nil), g.Settings.Endpoints...)
 	oldIdx := -1
 	for i, existing := range eps {
-		if !sameEndpoint(existing, old) {
+		if !SameEndpoint(existing, old) {
 			continue
 		}
 		oldIdx = i
@@ -133,7 +133,7 @@ func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
 	for _, ep := range eps {
 		duplicate := false
 		for _, existing := range deduped {
-			if sameEndpoint(existing, ep) {
+			if SameEndpoint(existing, ep) {
 				duplicate = true
 				break
 			}
@@ -172,6 +172,19 @@ func (g *Global) RemoveEndpoint(idx int) error {
 	g.Settings = next
 	if idx == 0 && len(eps) > 0 {
 		g.ApertureHost = eps[0].URL
+	}
+	return nil
+}
+
+// DropEndpoint removes ep from the list unless it is the active endpoint,
+// which is the connection the user falls back to. An endpoint not in the list
+// is not an error.
+func (g *Global) DropEndpoint(ep Endpoint) error {
+	for i, existing := range g.Settings.Endpoints {
+		if i == 0 || !SameEndpoint(existing, ep) {
+			continue
+		}
+		return g.RemoveEndpoint(i)
 	}
 	return nil
 }

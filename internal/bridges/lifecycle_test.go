@@ -52,7 +52,7 @@ func TestActivateWaitsForCancelledNodeCleanup(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	defer backend.Close()
 	replacement := &fakeNode{backendAddr: backend.Listener.Addr().String()}
-	m := NewManager(false)
+	m := NewMachines(false)
 	calls := 0
 	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
 		calls++
@@ -66,7 +66,7 @@ func TestActivateWaitsForCancelledNodeCleanup(t *testing.T) {
 	defer cancel()
 	first := make(chan error, 1)
 	go func() {
-		_, err := m.Activate(ctx, bridge, "http://ai", nil)
+		_, err := activateMachine(m, ctx, bridge, "http://ai", nil)
 		first <- err
 	}()
 	<-n.started
@@ -78,7 +78,7 @@ func TestActivateWaitsForCancelledNodeCleanup(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 		defer cancel()
-		url, err := m.Activate(ctx, bridge, "http://100.64.0.2", nil)
+		url, err := activateMachine(m, ctx, bridge, "http://100.64.0.2", nil)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("during %s, replacement = %q, %v; want cancellable wait", stage, url, err)
 		}
@@ -91,7 +91,7 @@ func TestActivateWaitsForCancelledNodeCleanup(t *testing.T) {
 	if err := <-first; !errors.Is(err, context.Canceled) {
 		t.Errorf("first activation: %v", err)
 	}
-	url, err := m.Activate(context.Background(), bridge, "http://100.64.0.2", nil)
+	url, err := activateMachine(m, context.Background(), bridge, "http://100.64.0.2", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,12 +120,12 @@ func (n *needsLoginNode) BringUp(ctx context.Context, _ events) (*ipnstate.Statu
 func TestSwitchTailnetDoesNotRequireAuthorization(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	n := &needsLoginNode{fakeNode: &fakeNode{}}
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	defer m.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	err := m.SwitchTailnet(ctx, config.Bridge{ID: "bridge-abcdef", Name: "Work"}, nil)
+	err := switchTailnet(m, ctx, config.Bridge{ID: "bridge-abcdef", Name: "Work"}, nil)
 	if err != nil || n.loggedOut != 1 || n.up != 0 || !n.closed {
 		t.Fatalf("switch = %v, up=%d logout=%d closed=%v; want logout without authorization", err, n.up, n.loggedOut, n.closed)
 	}
@@ -138,14 +138,14 @@ func TestCloseCancelsStartupBeforeClosingNode(t *testing.T) {
 	}
 	close(n.releaseUp)
 	close(n.releaseClose)
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	activationDone := make(chan error, 1)
 	go func() {
-		_, err := m.Activate(ctx, bridge, "http://ai", nil)
+		_, err := activateMachine(m, ctx, bridge, "http://ai", nil)
 		activationDone <- err
 	}()
 	<-n.started
@@ -165,7 +165,7 @@ func TestCloseCancelsStartupBeforeClosingNode(t *testing.T) {
 	if !n.closed {
 		t.Error("Close returned with a live node")
 	}
-	if _, err := m.Activate(context.Background(), bridge, "http://ai", nil); !errors.Is(err, net.ErrClosed) {
+	if _, err := activateMachine(m, context.Background(), bridge, "http://ai", nil); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("activation after shutdown = %v, want net.ErrClosed", err)
 	}
 }
@@ -188,9 +188,9 @@ func TestConcurrentCloseSharesCompletionAndError(t *testing.T) {
 		t.Run(fmt.Sprint(closeErr), func(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			node := &closingNode{fakeNode: &fakeNode{}, closing: make(chan struct{}), release: make(chan struct{}), err: closeErr}
-			m := NewManager(false)
+			m := NewMachines(false)
 			m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return node }
-			if _, err := m.Activate(context.Background(), config.Bridge{ID: "bridge-abcdef"}, "http://100.64.0.2", nil); err != nil {
+			if _, err := activateMachine(m, context.Background(), config.Bridge{ID: "bridge-abcdef"}, "http://100.64.0.2", nil); err != nil {
 				t.Fatal(err)
 			}
 			release := sync.OnceFunc(func() { close(node.release) })
@@ -198,7 +198,7 @@ func TestConcurrentCloseSharesCompletionAndError(t *testing.T) {
 			results := make(chan error, 2)
 			go func() { results <- m.Close() }()
 			<-node.closing
-			if _, err := m.Activate(context.Background(), config.Bridge{ID: "bridge-abcdef"}, "http://ai", nil); !errors.Is(err, net.ErrClosed) {
+			if _, err := activateMachine(m, context.Background(), config.Bridge{ID: "bridge-abcdef"}, "http://ai", nil); !errors.Is(err, net.ErrClosed) {
 				t.Errorf("activation during shutdown = %v", err)
 			}
 			go func() { results <- m.Close() }()
@@ -224,7 +224,7 @@ func TestConcurrentCloseSharesCompletionAndError(t *testing.T) {
 }
 
 func TestCloseEmptyManager(t *testing.T) {
-	for _, m := range []*Manager{nil, new(Manager), NewManager(false)} {
+	for _, m := range []*Machines{nil, new(Machines), NewMachines(false)} {
 		if err := m.Close(); err != nil {
 			t.Errorf("closing an unused manager: %v", err)
 		}
@@ -256,11 +256,11 @@ func TestDestroyLeavesNoMachineBehind(t *testing.T) {
 		t.Fatal("a started bridge reports no machine")
 	}
 	n := &fakeNode{}
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	defer m.Close()
 
-	if err := m.Destroy(context.Background(), bridge, nil); err != nil {
+	if err := destroyMachine(m, context.Background(), bridge, nil); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 	if n.loggedOut != 1 || !n.closed || n.up != 0 {
@@ -281,11 +281,11 @@ func TestDestroyKeepsStateWhenTheTailnetRefuses(t *testing.T) {
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	dir := stateDir(t, bridge.ID)
 	n := &fakeNode{logoutErr: errors.New("control plane said no")}
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	defer m.Close()
 
-	if err := m.Destroy(context.Background(), bridge, nil); err == nil || !strings.Contains(err.Error(), "control plane said no") {
+	if err := destroyMachine(m, context.Background(), bridge, nil); err == nil || !strings.Contains(err.Error(), "control plane said no") {
 		t.Fatalf("Destroy = %v, want the logout failure", err)
 	}
 	if _, err := os.Stat(dir); err != nil {
@@ -301,14 +301,14 @@ func TestDestroySkipsABridgeThatNeverStarted(t *testing.T) {
 	if HasMachine(bridge.ID) {
 		t.Fatal("an unstarted bridge reports a machine")
 	}
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
 		t.Error("started a node to remove a bridge that never had one")
 		return &fakeNode{}
 	}
 	defer m.Close()
 
-	if err := m.Destroy(context.Background(), bridge, nil); err != nil {
+	if err := destroyMachine(m, context.Background(), bridge, nil); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 }

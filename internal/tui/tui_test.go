@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/connection"
@@ -417,7 +418,9 @@ func TestPreflightFailure_ShowsSetupGuide(t *testing.T) {
 		g:    &config.Global{ApertureHost: "http://ai"},
 		step: stepPreflight,
 	}
-	m.Update(preflightResult{err: fmt.Errorf("connection refused")})
+	m.activationSeq = 1
+	m.act = &activation{id: 1, attempt: &bridges.Attempt{Endpoint: config.Endpoint{URL: "http://ai"}}}
+	m.Update(endpointActivationResult{id: 1, err: fmt.Errorf("connection refused")})
 	if !m.forcedToEndpoint {
 		t.Error("forcedToEndpoint should be true")
 	}
@@ -438,11 +441,7 @@ func TestEndpointActivationFailure_ShowsSetupGuide(t *testing.T) {
 		g: &config.Global{ApertureHost: "http://ai"},
 	}
 	m.activateEndpointCmd(ep)
-	m.Update(endpointActivationResult{
-		id:       m.act.id,
-		endpoint: ep,
-		err:      fmt.Errorf("timeout"),
-	})
+	m.Update(endpointActivationResult{id: m.act.id, err: fmt.Errorf("timeout")})
 	if !m.forcedToEndpoint {
 		t.Error("forcedToEndpoint should be true")
 	}
@@ -572,10 +571,10 @@ func TestEndpointBridgeMenu_AddsFirstBridgeInline(t *testing.T) {
 		t.Fatalf("step = %v, want stepPreflight", m.step)
 	}
 	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridgeID}
-	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+	if m.act == nil || !config.SameEndpoint(m.act.endpoint(), want) {
 		t.Fatalf("activation = %+v, want %+v", m.act, want)
 	}
-	if !m.act.ephemeral {
+	if !m.act.attempt.Ephemeral() {
 		t.Error("guessed endpoint is not marked ephemeral, so abandoning it would leave it behind")
 	}
 	if !m.endpointConfigured(want) {
@@ -610,7 +609,7 @@ func TestEndpointBridgeMenu_ConnectsExistingBridgeWithoutPrompting(t *testing.T)
 	if m.step != stepPreflight {
 		t.Fatalf("step = %v, want stepPreflight", m.step)
 	}
-	if m.act == nil || m.act.endpoint.URL != config.DefaultLocation || m.act.endpoint.BridgeID != bridge.ID {
+	if m.act == nil || m.act.endpoint().URL != config.DefaultLocation || m.act.endpoint().BridgeID != bridge.ID {
 		t.Fatalf("activation = %+v, want %s via %s", m.act, config.DefaultLocation, bridge.ID)
 	}
 	if !m.act.overridable() {
@@ -636,13 +635,13 @@ func TestInitOpensOnTheStartEndpoint(t *testing.T) {
 	if cmd := m.Init(); cmd == nil {
 		t.Fatal("Init did not start a connection")
 	}
-	if m.act == nil || !sameEndpoint(m.act.endpoint, named) {
+	if m.act == nil || !config.SameEndpoint(m.act.endpoint(), named) {
 		t.Fatalf("activation = %+v, want %+v", m.act, named)
 	}
-	if !m.act.ephemeral {
+	if !m.act.attempt.Ephemeral() {
 		t.Error("an endpoint named on the command line should come back out if the attempt is abandoned")
 	}
-	if got := m.g.ActiveEndpoint(); !sameEndpoint(got, saved) {
+	if got := m.g.ActiveEndpoint(); !config.SameEndpoint(got, saved) {
 		t.Errorf("active endpoint = %+v, want %+v until the attempt succeeds", got, saved)
 	}
 }
@@ -660,10 +659,10 @@ func TestInitOpensOnTheSavedEndpointWhenNothingIsNamed(t *testing.T) {
 	if cmd := m.Init(); cmd == nil {
 		t.Fatal("Init did not start a connection")
 	}
-	if m.act == nil || !sameEndpoint(m.act.endpoint, saved) {
+	if m.act == nil || !config.SameEndpoint(m.act.endpoint(), saved) {
 		t.Fatalf("activation = %+v, want %+v", m.act, saved)
 	}
-	if m.act.ephemeral {
+	if m.act.attempt.Ephemeral() {
 		t.Error("the saved endpoint is not ephemeral; cancelling must not delete it")
 	}
 }
@@ -697,14 +696,14 @@ func TestPreflightOverrideReplacesGuessedEndpoint(t *testing.T) {
 		t.Error("guessed attempt was not cancelled")
 	}
 	want := config.Endpoint{URL: "http://aperture.example.ts.net", BridgeID: bridge.ID}
-	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+	if m.act == nil || !config.SameEndpoint(m.act.endpoint(), want) {
 		t.Fatalf("activation = %+v, want %+v", m.act, want)
 	}
 	if m.act.id == guessed.id {
 		t.Error("override reused the cancelled attempt's id, so its stale result would be applied")
 	}
 	// The guess is replaced, not accumulated, and the working endpoint stays.
-	if got := m.g.Settings.Endpoints; len(got) != 2 || !sameEndpoint(got[0], previous) || !sameEndpoint(got[1], want) {
+	if got := m.g.Settings.Endpoints; len(got) != 2 || !config.SameEndpoint(got[0], previous) || !config.SameEndpoint(got[1], want) {
 		t.Fatalf("endpoints = %+v, want the previous one plus the typed one", got)
 	}
 }
@@ -787,11 +786,11 @@ func TestPreflightEscapeAbandonsDiscovery(t *testing.T) {
 	if m.step != stepMenu || m.top().Title != "Choose a bridge" {
 		t.Fatalf("Esc did not return to the bridge chooser: step=%v top=%+v", m.step, m.top())
 	}
-	if got := m.g.Settings.Endpoints; len(got) != 1 || !sameEndpoint(got[0], previous) {
+	if got := m.g.Settings.Endpoints; len(got) != 1 || !config.SameEndpoint(got[0], previous) {
 		t.Fatalf("endpoints = %+v, want the abandoned guess removed", got)
 	}
 	// A late result from the abandoned attempt must not take over the screen.
-	m.Update(endpointActivationResult{id: guessed.id, endpoint: guessed.endpoint, err: fmt.Errorf("too late")})
+	m.Update(endpointActivationResult{id: guessed.id, err: fmt.Errorf("too late")})
 	if m.step != stepMenu || m.top().Title != "Choose a bridge" {
 		t.Fatalf("stale result was applied: step=%v top=%+v", m.step, m.top())
 	}
@@ -877,10 +876,10 @@ func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 	if got := m.g.ActiveEndpoint(); got != connected {
 		t.Fatalf("active endpoint = %+v, want %+v until verification", got, connected)
 	}
-	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+	if m.act == nil || !config.SameEndpoint(m.act.endpoint(), want) {
 		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
 	}
-	m.Update(endpointActivationResult{id: m.act.id, endpoint: want, host: "http://127.0.0.1:12345"})
+	m.Update(endpointActivationResult{id: m.act.id, verified: bridges.Verified{Gateway: "http://127.0.0.1:12345"}})
 	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0] != want {
 		t.Fatalf("endpoints = %+v, want verified replacement %+v", got, want)
 	}
@@ -976,7 +975,7 @@ func TestConnectionPicker_ConnectsViaUnusedBridge(t *testing.T) {
 	m.activate(connect)
 
 	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: "bridge-bbbbbb"}
-	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+	if m.act == nil || !config.SameEndpoint(m.act.endpoint(), want) {
 		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
 	}
 	if !m.endpointConfigured(want) {
@@ -999,7 +998,7 @@ func TestConnectionPicker_SwitchTailnetConfirmsThenReconnects(t *testing.T) {
 	yes, _ := findItem(t, m.top().Items, "Switch tailnet")
 	m.activate(yes)
 
-	if m.act == nil || m.act.endpoint.BridgeID != "bridge-aaaaaa" {
+	if m.act == nil || m.act.endpoint().BridgeID != "bridge-aaaaaa" {
 		t.Fatalf("activation = %+v, want a reconnect through the bridge", m.act)
 	}
 	// The bridge has left that tailnet whether or not the new login completes.
@@ -1102,7 +1101,7 @@ func TestBridgesMenu_ConnectsThroughBridge(t *testing.T) {
 	m.activate(idx)
 
 	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: "bridge-bbbbbb"}
-	if m.act == nil || !sameEndpoint(m.act.endpoint, want) {
+	if m.act == nil || !config.SameEndpoint(m.act.endpoint(), want) {
 		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
 	}
 }
@@ -1165,7 +1164,7 @@ func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 		t.Fatal("selecting the bridge did not begin activation")
 	}
 	want := config.Endpoint{URL: config.DefaultLocation, BridgeID: bridge.ID}
-	if got := m.g.ActiveEndpoint(); !sameEndpoint(got, old) {
+	if got := m.g.ActiveEndpoint(); !config.SameEndpoint(got, old) {
 		t.Fatalf("active endpoint changed before activation: %+v", got)
 	}
 	if !m.endpointConfigured(want) {
@@ -1177,11 +1176,11 @@ func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 	if !ok {
 		t.Fatalf("activation message = %T", msg)
 	}
-	if !sameEndpoint(result.endpoint, want) || result.err == nil {
+	if !config.SameEndpoint(m.act.endpoint(), want) || result.err == nil {
 		t.Fatalf("activation result = %+v, want failed second bridge endpoint", result)
 	}
 	m.Update(result)
-	if got := m.g.ActiveEndpoint(); !sameEndpoint(got, old) {
+	if got := m.g.ActiveEndpoint(); !config.SameEndpoint(got, old) {
 		t.Fatalf("failed activation changed active endpoint: %+v", got)
 	}
 	if m.g.ApertureHost != "http://old" || len(m.g.Providers) != 1 || m.g.Providers[0].ID != "old-provider" {
@@ -1218,7 +1217,7 @@ func TestDirectEndpointIsPromotedOnlyAfterModelsSucceed(t *testing.T) {
 
 	m.addEndpointConnectionMenu().Items[0].Action()
 	cmd := m.inputOnSave(srv.URL)
-	if got := m.g.ActiveEndpoint(); !sameEndpoint(got, old) {
+	if got := m.g.ActiveEndpoint(); !config.SameEndpoint(got, old) {
 		t.Fatalf("active endpoint changed before /v1/models: %+v", got)
 	}
 	m.Update(activationResult(t, cmd))
@@ -1438,10 +1437,10 @@ func TestAuthFooterCopyKey(t *testing.T) {
 		width: 100,
 		step:  stepPreflight,
 		act: &activation{
-			id:       3,
-			authURL:  testAuthURL,
-			endpoint: config.Endpoint{BridgeID: "b1"},
-			cancel:   func() {},
+			id:      3,
+			authURL: testAuthURL,
+			attempt: &bridges.Attempt{Endpoint: config.Endpoint{BridgeID: "b1"}},
+			cancel:  func() {},
 		},
 	}
 	if !m.act.overridable() {
@@ -1518,63 +1517,6 @@ func TestAuthFooterLinksEveryWrappedLine(t *testing.T) {
 	}
 	if got := strings.Count(footer, ansi.ResetHyperlink()); got != 2 {
 		t.Errorf("footer closes the hyperlink %d times, want one per wrapped line: %q", got, footer)
-	}
-}
-
-func TestFetchProvidersIncludesErrorResponseBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "bridge proxy error: lookup aperture", http.StatusBadGateway)
-	}))
-	defer srv.Close()
-
-	_, err := fetchProviders(srv.URL)
-	if err == nil || !strings.Contains(err.Error(), "lookup aperture") {
-		t.Fatalf("fetchProviders error = %v, want response detail", err)
-	}
-}
-
-func TestFetchProvidersUsesModelsEndpoint(t *testing.T) {
-	srv := modelsServerWithHandler(t, func(r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("method = %q, want GET", r.Method)
-		}
-		if r.URL.Path != "/v1/models" {
-			t.Errorf("path = %q, want /v1/models", r.URL.Path)
-		}
-		if got := r.Header.Get("User-Agent"); got != "aperture-cli" {
-			t.Errorf("User-Agent = %q, want aperture-cli", got)
-		}
-	})
-	defer srv.Close()
-
-	got, err := fetchProviders(srv.URL + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].ID != "anthropic" || !got[0].SupportsEndpoint(config.EndpointAnthropicMessages) {
-		t.Fatalf("fetchProviders() = %#v, want Anthropic Messages provider", got)
-	}
-}
-
-func TestFetchProvidersContextHonorsCancellation(t *testing.T) {
-	requestStarted := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(requestStarted)
-		<-r.Context().Done()
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() {
-		_, err := fetchProvidersContext(ctx, srv.URL, time.Minute)
-		result <- err
-	}()
-	<-requestStarted
-	cancel()
-
-	if err := <-result; !errors.Is(err, context.Canceled) {
-		t.Fatalf("fetchProvidersContext error = %v, want context canceled", err)
 	}
 }
 

@@ -50,6 +50,7 @@ Model, language and the anti-corruption layer:
    and `internal/profiles`.
 6. `ConnectionAttempt` and `Machine` are their own types. `Manager` does not
    grow fields; `Machine` takes the node, its routes and its tailnet.
+   [ADR 0005](0005-machine-owns-its-operations.md) retires `Manager`.
 
 ## Consequences
 

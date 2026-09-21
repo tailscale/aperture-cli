@@ -131,7 +131,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 		},
 	}
 	node := &fakeNode{status: status, dialErr: errors.New("lookup aperture on 127.0.0.53:53: no such host")}
-	m := NewManager(true)
+	m := NewMachines(true)
 	m.peerWait, m.peerWaitInterval = 5*time.Millisecond, time.Millisecond
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
@@ -139,7 +139,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 	defer m.Close()
 
 	var logs []string
-	localURL, err := m.Activate(
+	localURL, err := activateMachine(m,
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture",
@@ -181,12 +181,12 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 
 func TestActivateClosesNodeWhenUpFails(t *testing.T) {
 	node := &fakeNode{upErr: errors.New("login failed")}
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 
-	_, err := m.Activate(
+	_, err := activateMachine(m,
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://ai",
@@ -223,14 +223,14 @@ func TestActivateNormalLoggingOmitsDebugDiagnostics(t *testing.T) {
 	defer backend.Close()
 	backendAddr := strings.TrimPrefix(backend.URL, "http://")
 	node := &fakeNode{status: status, backendAddr: backendAddr}
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 	defer m.Close()
 
 	var logs []string
-	localURL, err := m.Activate(
+	localURL, err := activateMachine(m,
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture",
@@ -271,7 +271,7 @@ func TestActivateWaitsForPeerMapBeforeDialing(t *testing.T) {
 		return tailnetStatus("ai.example.ts.net.", "100.64.0.2"), nil
 	}
 
-	m := NewManager(true)
+	m := NewMachines(true)
 	m.peerWaitInterval = time.Millisecond
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
@@ -279,7 +279,7 @@ func TestActivateWaitsForPeerMapBeforeDialing(t *testing.T) {
 	defer m.Close()
 
 	var logs []string
-	localURL, err := m.Activate(
+	localURL, err := activateMachine(m,
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://ai",
@@ -326,7 +326,7 @@ func TestActivateLogsTheLoginLinkBeforeItIsUsable(t *testing.T) {
 		ev.login(link)
 	}
 
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
@@ -334,7 +334,7 @@ func TestActivateLogsTheLoginLinkBeforeItIsUsable(t *testing.T) {
 
 	var mu sync.Mutex
 	var logs []string
-	if _, err := m.Activate(
+	if _, err := activateMachine(m,
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://ai",
@@ -530,7 +530,7 @@ func TestActivateRecordsTailnet(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer backend.Close()
 
-	m := NewManager(false)
+	m := NewMachines(false)
 	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return &fakeNode{
 			backendAddr: backend.Listener.Addr().String(),
@@ -540,10 +540,10 @@ func TestActivateRecordsTailnet(t *testing.T) {
 	defer m.Close()
 
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
-	if _, err := m.Activate(context.Background(), bridge, "http://aperture.tailnet", nil); err != nil {
+	if _, err := activateMachine(m, context.Background(), bridge, "http://aperture.tailnet", nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.Tailnet(bridge.ID); got != "corp.example.com" {
+	if got := tailnetOf(m, bridge.ID); got != "corp.example.com" {
 		t.Errorf("Tailnet = %q, want corp.example.com", got)
 	}
 }
@@ -557,10 +557,10 @@ func TestSwitchTailnet(t *testing.T) {
 	f := activate(t, backend)
 	defer f.manager.Close()
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
-	f.manager.tailnets[bridge.ID] = "corp.example.com"
+	f.manager.lookup(bridge.ID).setTailnet("corp.example.com")
 	first := f.node
 
-	if err := f.manager.SwitchTailnet(context.Background(), bridge, nil); err != nil {
+	if err := switchTailnet(f.manager, context.Background(), bridge, nil); err != nil {
 		t.Fatal(err)
 	}
 	if first.loggedOut != 1 {
@@ -569,7 +569,7 @@ func TestSwitchTailnet(t *testing.T) {
 	if !first.closed {
 		t.Error("node was not closed")
 	}
-	if got := f.manager.Tailnet(bridge.ID); got != "" {
+	if got := tailnetOf(f.manager, bridge.ID); got != "" {
 		t.Errorf("Tailnet = %q, want empty after a switch", got)
 	}
 	if _, err := http.Get(f.localURL + "/"); err == nil {
@@ -581,7 +581,7 @@ func TestSwitchTailnet(t *testing.T) {
 		replacement = &fakeNode{backendAddr: backend.Listener.Addr().String()}
 		return replacement
 	}
-	if _, err := f.manager.Activate(context.Background(), bridge, "http://aperture.tailnet", nil); err != nil {
+	if _, err := activateMachine(f.manager, context.Background(), bridge, "http://aperture.tailnet", nil); err != nil {
 		t.Fatal(err)
 	}
 	if replacement == nil {
@@ -600,7 +600,7 @@ func TestSwitchTailnetReportsLogoutFailure(t *testing.T) {
 	defer f.manager.Close()
 	f.node.logoutErr = errors.New("not logged in")
 
-	err := f.manager.SwitchTailnet(context.Background(), config.Bridge{ID: "bridge-abcdef", Name: "Work"}, nil)
+	err := switchTailnet(f.manager, context.Background(), config.Bridge{ID: "bridge-abcdef", Name: "Work"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "not logged in") {
 		t.Fatalf("err = %v, want it to name the logout failure", err)
 	}
@@ -619,7 +619,7 @@ func (n *fakeNode) Close() error {
 // activatedManager creates a Manager with a fake node wired to backend,
 // activates the bridge once, and returns everything tests need.
 type activatedFixture struct {
-	manager  *Manager
+	manager  *Machines
 	node     *fakeNode
 	localURL string
 	logs     []string
@@ -628,7 +628,7 @@ type activatedFixture struct {
 func activate(t *testing.T, backend *httptest.Server) activatedFixture {
 	t.Helper()
 	var f activatedFixture
-	f.manager = NewManager(false)
+	f.manager = NewMachines(false)
 	f.manager.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		f.node = &fakeNode{
 			backendAddr: backend.Listener.Addr().String(),
@@ -638,7 +638,7 @@ func activate(t *testing.T, backend *httptest.Server) activatedFixture {
 	}
 
 	var err error
-	f.localURL, err = f.manager.Activate(
+	f.localURL, err = activateMachine(f.manager,
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture.tailnet",
@@ -749,7 +749,7 @@ func TestActivate(t *testing.T) {
 				f := activate(t, backend)
 				defer f.manager.Close()
 
-				localURL2, err := f.manager.Activate(
+				localURL2, err := activateMachine(f.manager,
 					context.Background(),
 					config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 					"http://aperture.tailnet",
@@ -881,7 +881,7 @@ func TestAProxyReportsToTheAttemptUsingItNow(t *testing.T) {
 	// node and the proxy the first one built.
 	var mu sync.Mutex
 	var second []string
-	if _, err := f.manager.Activate(
+	if _, err := activateMachine(f.manager,
 		context.Background(),
 		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
 		"http://aperture.tailnet",

@@ -9,9 +9,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 	"unicode"
@@ -52,27 +49,22 @@ var (
 	dotRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("●")
 )
 
-const (
-	providerFetchTimeout       = 10 * time.Second
-	bridgeProviderFetchTimeout = 30 * time.Second
-)
-
 // NewModel returns the TUI model. start is the endpoint to open on, which is
 // the saved active one unless the invocation named another.
-func NewModel(g *config.Global, buildVersion string, bridgeManager *bridges.Manager, start config.Endpoint) tea.Model {
+func NewModel(g *config.Global, buildVersion string, machines *bridges.Machines, start config.Endpoint) tea.Model {
 	return &model{
-		g:             g,
-		buildVersion:  buildVersion,
-		bridgeManager: bridgeManager,
-		start:         start,
-		step:          stepPreflight,
+		g:            g,
+		buildVersion: buildVersion,
+		machines:     machines,
+		start:        start,
+		step:         stepPreflight,
 	}
 }
 
 type model struct {
-	g             *config.Global
-	buildVersion  string
-	bridgeManager *bridges.Manager
+	g            *config.Global
+	buildVersion string
+	machines     *bridges.Machines
 	// start is not necessarily in settings yet: one named on the command line
 	// is written on the way in and taken back out if the attempt is abandoned,
 	// same as one typed into the connection picker.
@@ -116,19 +108,15 @@ type model struct {
 // cancel is nil for attempts that cannot be interrupted (the post-launch
 // re-check), which is what makes Esc and the inline override inert there.
 type activation struct {
-	id       int
-	endpoint config.Endpoint
-	label    string
-	started  time.Time
-	cancel   context.CancelFunc
-	// ephemeral records that this flow is what put endpoint into settings,
-	// so abandoning or overriding the attempt takes it back out instead of
-	// leaving an endpoint nobody chose.
-	ephemeral bool
-	// replaces is removed only when this edited endpoint verifies successfully.
-	replaces *config.Endpoint
-	logCh    chan bridgeLine
-	logCtx   context.Context
+	id int
+	// attempt is the ConnectionAttempt this screen shows. Nil for the wait a
+	// bridge removal puts on the same screen.
+	attempt *bridges.Attempt
+	label   string
+	started time.Time
+	cancel  context.CancelFunc
+	logCh   chan bridgeLine
+	logCtx  context.Context
 	// phase is the wait this attempt is in, and phaseSet distinguishes "not
 	// started" from StartingMachine, which is the zero value.
 	phase    connection.Phase
@@ -164,12 +152,27 @@ func (a *activation) entered(p connection.Phase) bool {
 	return true
 }
 
+// endpoint is the Endpoint the attempt on screen is trying, zero when the
+// screen is showing something else.
+func (a *activation) endpoint() config.Endpoint {
+	if a == nil || a.attempt == nil {
+		return config.Endpoint{}
+	}
+	return a.attempt.Endpoint
+}
+
 // cancelable reports whether Esc can interrupt this attempt.
 func (a *activation) cancelable() bool { return a != nil && a.cancel != nil }
 
 // overridable reports whether the attempt accepts a typed URL in place of the
 // one being probed. Only bridge attempts start from a guessed URL.
-func (a *activation) overridable() bool { return a.cancelable() && a.endpoint.BridgeID != "" }
+func (a *activation) overridable() bool { return a.cancelable() && a.endpoint().BridgeID != "" }
+
+// bridging is the Connection context's service over this program's settings
+// and Machines. Stateless, so built where it is used.
+func (m *model) bridging() bridges.Bridging {
+	return bridges.Bridging{Machines: m.machines, Settings: m.g}
+}
 
 // textField is the shared single-line editor behind the add-endpoint input
 // step and the inline URL override on the connect screen.
@@ -216,22 +219,15 @@ func (m *model) Init() tea.Cmd {
 	return m.connectVia(m.start, false)
 }
 
-// preflightResult is emitted when the /v1/models check completes.
-type preflightResult struct {
-	host      string
-	providers []config.ProviderInfo
-	err       error
-}
-
+// endpointActivationResult is how an attempt's outcome reaches the update
+// loop, where settings may be written.
 type endpointActivationResult struct {
 	// id identifies the attempt this result belongs to. A result whose id no
 	// longer matches the current attempt is stale: the user cancelled it or
 	// typed a different URL over it, and its outcome must not be applied.
-	id        int
-	endpoint  config.Endpoint
-	host      string
-	providers []config.ProviderInfo
-	err       error
+	id       int
+	verified bridges.Verified
+	err      error
 }
 
 // bridgeLine is one thing the attempt reported and how far into the attempt it
@@ -287,175 +283,74 @@ func activationTick(id int) tea.Cmd {
 
 type quitMsg struct{ Err error }
 
-func runPreflight(host string) tea.Cmd {
-	return func() tea.Msg {
-		provs, err := fetchProviders(host)
-		return preflightResult{host: host, providers: provs, err: err}
-	}
-}
-
-func fetchProviders(host string) ([]config.ProviderInfo, error) {
-	return fetchProvidersContext(context.Background(), host, providerFetchTimeout)
-}
-
-func fetchProvidersContext(ctx context.Context, host string, timeout time.Duration) ([]config.ProviderInfo, error) {
-	client := &http.Client{Timeout: timeout}
-	url := strings.TrimRight(host, "/") + "/v1/models"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	// Aperture intentionally filters model results for Claude Code user agents.
-	// Discovery needs the full grant-filtered model list for every harness.
-	req.Header.Set("User-Agent", "aperture-cli")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		detail := strings.TrimSpace(string(body))
-		if detail != "" {
-			return nil, fmt.Errorf("unexpected status %d from %s: %s", resp.StatusCode, url, detail)
-		}
-		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	provs, err := config.ParseProviders(body)
-	if err != nil {
-		return nil, fmt.Errorf("could not parse models response: %w", err)
-	}
-	return provs, nil
-}
-
+// activateEndpointCmd connects to ep. When ep is the attempt already on
+// screen, this is a retry and keeps what that attempt knows: the original of
+// a pending edit and whether it wrote ep into settings.
 func (m *model) activateEndpointCmd(ep config.Endpoint) tea.Cmd {
-	var replaces *config.Endpoint
-	var ephemeral bool
-	if m.act != nil && sameEndpoint(m.act.endpoint, ep) {
-		replaces, ephemeral = m.act.replaces, m.act.ephemeral
+	if m.act != nil && m.act.attempt != nil && config.SameEndpoint(m.act.endpoint(), ep) {
+		return m.startAttempt(m.act.attempt.Retry())
 	}
-	cmd := m.activateEndpoint(ep, ephemeral, false)
-	m.act.replaces = replaces
-	return cmd
+	return m.connect(ep, false, nil)
 }
 
-// activateEndpoint starts a cancellable attempt to connect to ep. ephemeral
-// marks an endpoint this flow wrote to settings on the user's behalf, so
-// cancelling can take it back out. switchTailnet logs the bridge out first, so
-// the attempt starts from a login prompt rather than the tailnet it is on.
-func (m *model) activateEndpoint(ep config.Endpoint, ephemeral, switchTailnet bool) tea.Cmd {
-	cmd := m.beginActivation(ep, ephemeral, switchTailnet)
-	return tea.Batch(cmd, activationTick(m.act.id))
+// connect begins an attempt at ep and puts it on screen. switchTailnet logs
+// the bridge out first, so the attempt starts from a login prompt rather than
+// the tailnet it is on. replacing is the original of a URL edit.
+func (m *model) connect(ep config.Endpoint, switchTailnet bool, replacing *config.Endpoint) tea.Cmd {
+	a, err := m.bridging().Begin(ep, switchTailnet, replacing)
+	if err != nil {
+		return simpleErrorCmd(err)
+	}
+	return m.startAttempt(a)
 }
 
-func (m *model) beginActivation(ep config.Endpoint, ephemeral, switchTailnet bool) tea.Cmd {
+// start puts a prepared attempt on the connect screen and runs it. The
+// attempt's outcome comes back as an endpointActivationResult and is applied
+// there, on this loop, where settings are read.
+func (m *model) startAttempt(a *bridges.Attempt) tea.Cmd {
 	m.stopActivation()
 	m.step = stepPreflight
 	m.preflightErr = ""
 	m.bridgeLogs = nil
-	if switchTailnet && ep.BridgeID != "" && ep.BridgeID == m.g.ActiveEndpoint().BridgeID {
-		// Cancellation cannot prove that Logout did not run. Any endpoint
-		// using this bridge must verify a new gateway before launching again.
+	if a.InvalidatesActive {
 		m.connected = false
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.activationSeq++
 	act := &activation{
-		id:        m.activationSeq,
-		endpoint:  ep,
-		label:     "Checking " + ep.URL + " ...",
-		started:   time.Now(),
-		cancel:    cancel,
-		ephemeral: ephemeral,
+		id:      m.activationSeq,
+		attempt: a,
+		label:   "Checking " + a.Endpoint.URL + " ...",
+		started: time.Now(),
+		cancel:  cancel,
 	}
 	m.act = act
+	bridging := m.bridging()
 
-	bridge, ok := m.g.Bridge(ep.BridgeID)
-	switch {
-	case ep.BridgeID == "":
-		return func() tea.Msg {
+	if a.Endpoint.BridgeID == "" {
+		run := func() tea.Msg {
 			defer cancel()
-			provs, err := fetchProvidersContext(ctx, ep.URL, providerFetchTimeout)
-			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, providers: provs, err: err}
+			v, err := bridging.Run(ctx, a, nil)
+			return endpointActivationResult{id: act.id, verified: v, err: err}
 		}
-	case !ok:
-		return func() tea.Msg {
-			defer cancel()
-			return endpointActivationResult{
-				id:       act.id,
-				endpoint: ep,
-				host:     ep.URL,
-				err:      fmt.Errorf("bridge %s is not configured", ep.BridgeID),
-			}
-		}
-	case m.bridgeManager == nil:
-		return func() tea.Msg {
-			defer cancel()
-			return endpointActivationResult{
-				id:       act.id,
-				endpoint: ep,
-				host:     ep.URL,
-				err:      fmt.Errorf("bridge manager is not configured"),
-			}
-		}
+		return tea.Batch(run, activationTick(act.id))
 	}
 
 	ch := make(chan bridgeLine, 32)
 	act.logCh = ch
 	act.logCtx = ctx
-	act.label = "Connecting bridge " + bridge.Name + " to " + ep.URL + " ..."
-	if switchTailnet {
-		act.label = "Switching bridge " + bridge.Name + " to a different tailnet ..."
+	act.label = "Connecting bridge " + a.Bridge().Name + " to " + a.Endpoint.URL + " ..."
+	if a.SwitchesTailnet() {
+		act.label = "Switching bridge " + a.Bridge().Name + " to a different tailnet ..."
 	}
 	emit := bridgeLogSink(ctx, ch, act.started)
-	activate := func() tea.Msg {
+	run := func() tea.Msg {
 		defer cancel()
-		// Stamps the moment the user committed. Without it the first bridge
-		// line is the earliest thing in the log and the gap in front of it
-		// reads as startup cost rather than someone reading the menu.
-		slog.Info("activating endpoint", "url", ep.URL, "bridge", bridge.ID, "switchTailnet", switchTailnet)
-		// Inside the attempt, so it shares the attempt's cancellation and event
-		// sink: the new login link is what the user needs on screen, and Esc
-		// has to reach a logout that stalls on the old tailnet.
-		if switchTailnet {
-			if err := m.bridgeManager.SwitchTailnet(ctx, bridge, emit); err != nil {
-				return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
-			}
-		}
-		localURL, err := m.bridgeManager.Activate(ctx, bridge, ep.URL, emit)
-		if err != nil {
-			return endpointActivationResult{id: act.id, endpoint: ep, host: ep.URL, err: err}
-		}
-		// The longest silent stretch of the attempt: the bridge is up, so tsnet
-		// has stopped logging and nothing else names the host being waited on.
-		// The phase is the attempt's own work, not the bridge's.
-		emit(connection.Entered(connection.AskingForModels))
-		provs, err := fetchProvidersContext(ctx, localURL, bridgeProviderFetchTimeout)
-		if err != nil {
-			err = fmt.Errorf("bridge %s could not reach %s: %w", bridge.Name, ep.URL, err)
-		}
-		return endpointActivationResult{id: act.id, endpoint: ep, host: localURL, providers: provs, err: err}
+		v, err := bridging.Run(ctx, a, emit)
+		return endpointActivationResult{id: act.id, verified: v, err: err}
 	}
-	return tea.Batch(activate, waitBridgeLog(ctx, ch))
-}
-
-// recordBridgeTailnet saves the tailnet a bridge connected through so the
-// picker can name it before the bridge is started again. A failed write is not
-// worth interrupting a connection that worked.
-func (m *model) recordBridgeTailnet(ep config.Endpoint) {
-	if ep.BridgeID == "" {
-		return
-	}
-	name := m.bridgeManager.Tailnet(ep.BridgeID)
-	if name == "" {
-		return
-	}
-	_ = m.g.SetBridgeTailnet(ep.BridgeID, name)
+	return tea.Batch(run, waitBridgeLog(ctx, ch), activationTick(act.id))
 }
 
 // stopActivation ends the in-flight attempt without touching settings. The
@@ -482,23 +377,7 @@ func (m *model) discardActivation() error {
 		return nil
 	}
 	m.stopActivation()
-	if !act.ephemeral {
-		return nil
-	}
-	act.ephemeral = false
-	return m.removeEndpoint(act.endpoint)
-}
-
-// removeEndpoint deletes ep from settings. The active endpoint at index 0 is
-// left alone: it is the connection the user falls back to.
-func (m *model) removeEndpoint(ep config.Endpoint) error {
-	for i, existing := range m.g.Settings.Endpoints {
-		if i == 0 || !sameEndpoint(existing, ep) {
-			continue
-		}
-		return m.g.RemoveEndpoint(i)
-	}
-	return nil
+	return m.bridging().Abandon(act.attempt)
 }
 
 // cancelActivation abandons the attempt on screen and returns to the menu the
@@ -509,7 +388,7 @@ func (m *model) cancelActivation() (tea.Model, tea.Cmd) {
 	if act == nil {
 		return m, nil
 	}
-	endpoint := act.endpoint
+	endpoint := act.endpoint()
 	if err := m.discardActivation(); err != nil {
 		m.errMsg = "could not remove endpoint: " + err.Error()
 		m.step = stepError
@@ -533,14 +412,14 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 	if act == nil {
 		return m, nil
 	}
-	next, err := config.ParseEndpoint(value, act.endpoint.BridgeID)
+	next, err := config.ParseEndpoint(value, act.endpoint().BridgeID)
 	if err != nil {
 		// Keep the running attempt: the typo costs nothing, and the guess
 		// may still land while the user fixes it.
 		act.override.err = err.Error()
 		return m, nil
 	}
-	if sameEndpoint(next, act.endpoint) {
+	if config.SameEndpoint(next, act.endpoint()) {
 		act.override.reset()
 		return m, nil
 	}
@@ -551,30 +430,17 @@ func (m *model) overrideActivationURL(value string) (tea.Model, tea.Cmd) {
 // original endpoint of a pending edit. Both URL editors use this path.
 func (m *model) retargetActivation(next config.Endpoint) tea.Cmd {
 	act := m.act
-	if sameEndpoint(next, act.endpoint) {
-		return m.activateEndpointCmd(next)
+	if act == nil || act.attempt == nil {
+		return m.connect(next, false, nil)
 	}
 	m.stopActivation()
-
-	ephemeral := !m.endpointConfigured(next)
-	if act.ephemeral {
-		// Replace rather than add: the guessed endpoint was never reachable
-		// and nobody asked for it.
-		if err := m.g.ReplaceEndpoint(act.endpoint, next); err != nil {
-			m.errMsg = err.Error()
-			m.step = stepError
-			return nil
-		}
-	} else if ephemeral {
-		if err := m.g.UpsertEndpoint(next); err != nil {
-			m.errMsg = err.Error()
-			m.step = stepError
-			return nil
-		}
+	a, err := m.bridging().Retarget(act.attempt, next)
+	if err != nil {
+		m.errMsg = err.Error()
+		m.step = stepError
+		return nil
 	}
-	cmd := m.activateEndpoint(next, ephemeral, false)
-	m.act.replaces = act.replaces
-	return cmd
+	return m.startAttempt(a)
 }
 
 // bridgeLogSink is where the attempt's events land on their way to the update
@@ -639,15 +505,12 @@ func (m *model) quitCmd() tea.Cmd {
 	if m.act != nil {
 		cancel = m.act.cancel
 	}
-	bridgeManager := m.bridgeManager
+	machines := m.machines
 	return func() tea.Msg {
 		if cancel != nil {
 			cancel()
 		}
-		if bridgeManager == nil {
-			return quitMsg{}
-		}
-		return quitMsg{Err: bridgeManager.Close()}
+		return quitMsg{Err: machines.Close()}
 	}
 }
 
@@ -658,60 +521,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
-	case preflightResult:
-		if msg.err != nil {
-			m.connected = false
-			m.preflightErr = msg.err.Error()
-			m.forcedToEndpoint = true
-			failed := m.g.ActiveEndpoint()
-			m.failedEndpoint = &failed
-			m.step = stepMenu
-			m.resetStack(m.setupGuideMenu())
-			return m, nil
-		}
-		m.g.Providers = msg.providers
-		m.connected = true
-		m.preflightErr = ""
-		m.forcedToEndpoint = false
-		m.failedEndpoint = nil
-		m.step = stepMenu
-		m.resetStack(m.rootMenu())
-		return m, tea.ClearScreen
-
 	case endpointActivationResult:
 		if m.act == nil || msg.id != m.act.id {
 			// Cancelled or overridden: a newer attempt owns the screen.
 			return m, nil
 		}
 		m.act.cancel = nil
+		bridging := m.bridging()
+		failed := m.act.endpoint()
 		if msg.err != nil {
-			if sameEndpoint(msg.endpoint, m.g.ActiveEndpoint()) {
+			if bridging.Fail(m.act.attempt) {
 				m.connected = false
 			}
 			m.preflightErr = msg.err.Error()
 			m.forcedToEndpoint = true
-			failed := msg.endpoint
 			m.failedEndpoint = &failed
 			m.step = stepMenu
 			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
-		if !sameEndpoint(m.g.ActiveEndpoint(), msg.endpoint) || m.act.replaces != nil {
-			if err := m.g.SetActiveEndpoint(msg.endpoint, m.act.replaces); err != nil {
-				m.preflightErr = "could not save active endpoint: " + err.Error()
-				m.forcedToEndpoint = true
-				failed := msg.endpoint
-				m.failedEndpoint = &failed
-				m.step = stepMenu
-				m.resetStack(m.setupGuideMenu())
-				return m, nil
-			}
+		if err := bridging.Commit(m.act.attempt, msg.verified); err != nil {
+			m.preflightErr = err.Error()
+			m.forcedToEndpoint = true
+			m.failedEndpoint = &failed
+			m.step = stepMenu
+			m.resetStack(m.setupGuideMenu())
+			return m, nil
 		}
-		m.act.replaces = nil
-		m.act.ephemeral = false
-		m.recordBridgeTailnet(msg.endpoint)
-		m.g.ApertureHost = msg.host
-		m.g.Providers = msg.providers
 		m.connected = true
 		m.preflightErr = ""
 		m.forcedToEndpoint = false
@@ -794,11 +630,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// user may have changed things outside the launcher while the
 		// agent was running.
 		m.popToRoot()
-		m.step = stepPreflight
+		cmd := m.connect(m.g.ActiveEndpoint(), false, nil)
 		// No cancel handle: this re-check owns the screen until it answers.
-		m.activationSeq++
-		m.act = &activation{id: m.activationSeq, label: "Checking " + m.g.ApertureHost + " ...", started: time.Now()}
-		return m, tea.Batch(runPreflight(m.g.ApertureHost), activationTick(m.act.id))
+		if m.act != nil {
+			m.act.cancel = nil
+		}
+		return m, cmd
 
 	case menu.InstallDoneMsg:
 		if msg.Err != nil {
