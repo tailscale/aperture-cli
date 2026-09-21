@@ -57,13 +57,13 @@ func sink(emit func(connection.Event)) events {
 // killed halfway through. Notes are debug: under -debug they carry tsnet's
 // backend logger, and a phase is worth reading without wading through that.
 func logEvent(e connection.Event) {
-	switch e.Kind {
-	case connection.PhaseEntered:
+	switch {
+	case e.Phase != 0:
 		slog.Info("bridge phase", "phase", e.Phase)
-	case connection.LoginRequired:
+	case e.Link != nil:
 		slog.Info("bridge needs login")
 	default:
-		slog.Debug("bridge note", "text", redactDiagnostic(e.Text))
+		slog.Debug("bridge note", "text", redactDiagnostic(e.Note))
 	}
 }
 
@@ -75,10 +75,10 @@ func redactDiagnostic(text string) string {
 	return diagnosticURL.ReplaceAllString(text, "[redacted URL]")
 }
 
-func (e events) note(text string)                 { e(connection.Note(text)) }
-func (e events) notef(format string, args ...any) { e(connection.Notef(format, args...)) }
-func (e events) enter(p connection.Phase)         { e(connection.Entered(p)) }
-func (e events) login(link connection.LoginLink)  { e(connection.Login(link)) }
+func (e events) note(text string)                        { e(connection.Note(text)) }
+func (e events) notef(format string, args ...any)        { e(connection.Notef(format, args...)) }
+func (e events) enter(p connection.Phase)                { e(connection.Entered(p)) }
+func (e events) loginRequired(link connection.LoginLink) { e(connection.LoginRequired(link)) }
 
 // redactURL is the part of an endpoint URL safe for the run log: scheme and
 // host. ParseEndpointURL accepts userinfo and a query, and a run log is the

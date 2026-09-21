@@ -1,11 +1,12 @@
-// Package connection carries what a connection attempt reports while it runs,
-// so the producers of those events do not own their vocabulary. Most come from
-// the bridge manager, but the attempt is wider than the bridge: the model fetch
-// after bring-up is part of the same wait, and the user cannot tell the halves
-// apart.
+// Package connection is the vocabulary a Machine reports in while a connection
+// attempt uses it: the wait it is in, the login link it needs visited, and the
+// odd line for the user that is neither. The attempt is wider than the Machine,
+// since the model fetch after bring-up is part of the same wait, so the
+// vocabulary lives here rather than with the tailnet code that produces most
+// of it.
 //
 // Nothing here may reference tsnet, ipn or ipnstate. Translating the tailnet's
-// vocabulary into this one is the bridge manager's job.
+// vocabulary into this one is internal/bridges' job.
 package connection
 
 import (
@@ -15,7 +16,8 @@ import (
 )
 
 // Phase is what an attempt is waiting on, named for what the user is waiting
-// for rather than for the backend state underneath it.
+// for rather than for the backend state underneath it. The zero value is no
+// phase.
 //
 // AwaitingLoginLink and AwaitingAuthorization are why this type exists. Both
 // are ipn.NeedsLogin and they are different problems: the control plane has not
@@ -24,9 +26,9 @@ import (
 type Phase int
 
 // Phases in the order an attempt passes through them. The order is load
-// bearing: a phase only ever moves forward, and Entered compares them.
+// bearing: a phase only ever moves forward, and consumers compare them.
 const (
-	StartingMachine Phase = iota
+	StartingMachine Phase = iota + 1
 	AwaitingLoginLink
 	AwaitingAuthorization
 	JoiningTailnet
@@ -34,22 +36,20 @@ const (
 	AskingForModels
 )
 
-// String is what the connect screen shows, so it names the wait from the
-// user's side. The attempt's elapsed clock supplies the "how long".
+var phaseNames = [...]string{
+	StartingMachine:       "StartingMachine",
+	AwaitingLoginLink:     "AwaitingLoginLink",
+	AwaitingAuthorization: "AwaitingAuthorization",
+	JoiningTailnet:        "JoiningTailnet",
+	FindingEndpoint:       "FindingEndpoint",
+	AskingForModels:       "AskingForModels",
+}
+
+// String is the phase's name, for logs and errors. What the user reads for it
+// is the presentation layer's.
 func (p Phase) String() string {
-	switch p {
-	case StartingMachine:
-		return "Starting the bridge"
-	case AwaitingLoginLink:
-		return "Waiting for a login link"
-	case AwaitingAuthorization:
-		return "Waiting for you to authorize this bridge"
-	case JoiningTailnet:
-		return "Joining the tailnet"
-	case FindingEndpoint:
-		return "Looking for the Aperture on the tailnet"
-	case AskingForModels:
-		return "Asking the Aperture for its models"
+	if p > 0 && int(p) < len(phaseNames) {
+		return phaseNames[p]
 	}
 	return fmt.Sprintf("Phase(%d)", int(p))
 }
@@ -86,63 +86,47 @@ func ParseLoginLink(raw string) (LoginLink, error) {
 	return LoginLink{url: raw}, nil
 }
 
-// Kind distinguishes the events an attempt publishes.
-type Kind int
-
-const (
-	// Noted is diagnostics with no domain meaning: tsnet backend chatter, dial
-	// detail, a health warning. The only kind a consumer may drop.
-	Noted Kind = iota
-	// PhaseEntered is the attempt moving to a new wait.
-	PhaseEntered
-	// LoginRequired is a machine asking to be authorized at a link.
-	LoginRequired
-)
-
-// Event is what an attempt publishes as it proceeds. It replaces a sink of
-// plain strings that had the TUI opening a browser on a phrase from inside a
-// vendored package, where a reworded log line silently stranded the user.
+// Event is one thing a Machine reports while an attempt uses it. Exactly one
+// field is set, and which one says what happened: the attempt entered Phase,
+// the Machine needs authorizing at Link, or Note is a line for the user with
+// no domain meaning. It replaced a sink of plain strings that had the TUI
+// opening a browser on a phrase from inside a vendored package, where a
+// reworded log line silently stranded the user.
 type Event struct {
-	Kind  Kind
-	Phase Phase     // Kind == PhaseEntered
-	Link  LoginLink // Kind == LoginRequired
-	Text  string    // Kind == Noted
+	Phase Phase
+	Link  *LoginLink
+	Note  string
 }
 
-// Note reports diagnostics, flattened to one line.
-//
-// Flattened here because String promises one line and the connect screen wraps
-// and indents each itself: an embedded newline lands unindented and miscounts
-// the rows to repaint. Control plane errors carry their request ID on a second
-// line, so this is the normal shape of a failure.
-func Note(text string) Event {
-	return Event{Kind: Noted, Text: strings.Join(strings.Fields(text), " ")}
-}
+// Note is a line for the user that is neither a phase nor a link: tsnet
+// backend chatter, dial detail, a health warning. The only event a consumer
+// may drop.
+func Note(text string) Event { return Event{Note: text} }
 
-// Notef reports diagnostics, formatted.
+// Notef is Note, formatted.
 func Notef(format string, args ...any) Event { return Note(fmt.Sprintf(format, args...)) }
 
-// Entered reports that the attempt is now waiting on p.
-func Entered(p Phase) Event { return Event{Kind: PhaseEntered, Phase: p} }
+// Entered is the attempt now waiting on p.
+func Entered(p Phase) Event { return Event{Phase: p} }
 
-// Login reports that the machine needs authorizing at link.
-func Login(link LoginLink) Event { return Event{Kind: LoginRequired, Link: link} }
+// LoginRequired is the Machine needing authorization at link.
+func LoginRequired(link LoginLink) Event { return Event{Link: &link} }
 
 // Droppable reports whether a consumer under backpressure may discard this
-// event. Only diagnostics may go: a lost phase leaves a gap in where the time
-// went, and a lost login link leaves the user waiting on a browser tab nothing
+// event. Only a Note may go: a lost phase leaves a gap in where the time went,
+// and a lost login link leaves the user waiting on a browser tab nothing
 // opened. The old sink dropped whatever arrived on a full buffer, which under
 // -debug it shared with tsnet's backend logger.
-func (e Event) Droppable() bool { return e.Kind == Noted }
+func (e Event) Droppable() bool { return e.Phase == 0 && e.Link == nil }
 
-// String renders the event as one line of the activation log.
+// String is the event's representation, for logs and test failures: the
+// phase's name, the link marked as one, or the note's text.
 func (e Event) String() string {
-	switch e.Kind {
-	case PhaseEntered:
+	switch {
+	case e.Phase != 0:
 		return e.Phase.String()
-	case LoginRequired:
-		return "Authorize this bridge at " + e.Link.String()
-	default:
-		return e.Text
+	case e.Link != nil:
+		return "LoginRequired(" + e.Link.String() + ")"
 	}
+	return e.Note
 }

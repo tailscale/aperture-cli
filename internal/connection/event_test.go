@@ -70,7 +70,7 @@ func TestOnlyNotesAreDroppable(t *testing.T) {
 		{Note("magicsock: home is derp-1"), true},
 		{Notef("dialing %s", "ai"), true},
 		{Entered(AwaitingLoginLink), false},
-		{Login(link), false},
+		{LoginRequired(link), false},
 	} {
 		if got := tt.event.Droppable(); got != tt.droppable {
 			t.Errorf("%q Droppable() = %t, want %t", tt.event, got, tt.droppable)
@@ -94,24 +94,28 @@ func TestPhasesAreOrdered(t *testing.T) {
 			t.Errorf("%v does not sort before %v", ordered[i-1], p)
 		}
 		if p.String() == "" {
-			t.Errorf("phase %d has no name for the screen", int(p))
+			t.Errorf("phase %d has no name", int(p))
 		}
 	}
 }
 
-// TestNoteIsOneLine covers the shape control plane errors actually arrive in.
-// A register failure carries its request ID on a second line, and the connect
-// screen wraps and indents each log line itself: an embedded newline puts
-// unindented text mid-block and miscounts the rows the renderer repaints.
-func TestNoteIsOneLine(t *testing.T) {
-	raw := "register request: http 502: backend not found; tn=0\nREQ-2026091717445499013f4d855ec3c0"
-	got := Note(raw).String()
-	if strings.Contains(got, "\n") {
-		t.Errorf("note = %q, want the newline flattened out", got)
+// TestEventSaysWhatItIsByItsFields is the contract consumers switch on: one
+// field set, and which one is the kind.
+func TestEventSaysWhatItIsByItsFields(t *testing.T) {
+	link, err := ParseLoginLink("https://login.tailscale.com/a/x")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"http 502", "REQ-2026091717445499013f4d855ec3c0"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("note = %q, want it to keep %q", got, want)
-		}
+	if e := Entered(JoiningTailnet); e.Phase != JoiningTailnet || e.Link != nil || e.Note != "" {
+		t.Errorf("Entered = %+v", e)
+	}
+	if e := LoginRequired(link); e.Phase != 0 || e.Link == nil || *e.Link != link || e.Note != "" {
+		t.Errorf("LoginRequired = %+v", e)
+	}
+	if e := Note("x"); e.Phase != 0 || e.Link != nil || e.Note != "x" {
+		t.Errorf("Note = %+v", e)
+	}
+	if Phase(0).String() == "" || Phase(0) == StartingMachine {
+		t.Error("the zero Phase must mean no phase")
 	}
 }

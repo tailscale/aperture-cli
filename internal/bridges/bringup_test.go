@@ -59,7 +59,7 @@ func TestBringUpReportsFromTheWatchItWaitsOn(t *testing.T) {
 	reported := strings.Join(got, "\n")
 	for _, line := range []string{
 		connection.AwaitingLoginLink.String(),
-		"Authorize this bridge at " + url,
+		connection.LoginRequired(mustLink(t, url)).String(),
 		connection.JoiningTailnet.String(),
 	} {
 		if !strings.Contains(reported, line) {

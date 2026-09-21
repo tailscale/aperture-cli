@@ -240,9 +240,43 @@ type bridgeLine struct {
 	event   connection.Event
 }
 
-// String renders a log line the way the connect screen shows it.
+// String renders a log line the way the connect screen shows it. The event's
+// text is flattened to one line because the screen wraps and indents each
+// line itself: an embedded newline lands unindented and miscounts the rows to
+// repaint, and control plane errors carry their request ID on a second line.
 func (l bridgeLine) String() string {
-	return fmt.Sprintf("+%-6s %s", l.elapsed.Round(100*time.Millisecond), l.event)
+	return fmt.Sprintf("+%-6s %s", l.elapsed.Round(100*time.Millisecond), strings.Join(strings.Fields(describe(l.event)), " "))
+}
+
+// describe is what the user reads for an event.
+func describe(e connection.Event) string {
+	switch {
+	case e.Phase != 0:
+		return phaseLabel(e.Phase)
+	case e.Link != nil:
+		return "Authorize this bridge at " + e.Link.String()
+	}
+	return e.Note
+}
+
+// phaseLabel names the wait from the user's side. The attempt's elapsed clock
+// supplies the "how long".
+func phaseLabel(p connection.Phase) string {
+	switch p {
+	case connection.StartingMachine:
+		return "Starting the bridge"
+	case connection.AwaitingLoginLink:
+		return "Waiting for a login link"
+	case connection.AwaitingAuthorization:
+		return "Waiting for you to authorize this bridge"
+	case connection.JoiningTailnet:
+		return "Joining the tailnet"
+	case connection.FindingEndpoint:
+		return "Looking for the Aperture on the tailnet"
+	case connection.AskingForModels:
+		return "Asking the Aperture for its models"
+	}
+	return p.String()
 }
 
 type bridgeLogMsg struct {
@@ -453,9 +487,9 @@ func (m *model) retargetActivation(next config.Endpoint) tea.Cmd {
 // burst of chatter could take the login link with it.
 func bridgeLogSink(ctx context.Context, ch chan<- bridgeLine, started time.Time) func(connection.Event) {
 	return func(ev connection.Event) {
-		if ev.Kind == connection.Noted {
-			ev.Text = strings.TrimSpace(ev.Text)
-			if ev.Text == "" {
+		if ev.Droppable() {
+			ev.Note = strings.TrimSpace(ev.Note)
+			if ev.Note == "" {
 				return
 			}
 		}
@@ -566,8 +600,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		next := waitBridgeLog(m.act.logCtx, m.act.logCh)
-		switch msg.line.event.Kind {
-		case connection.LoginRequired:
+		switch {
+		case msg.line.event.Link != nil:
 			url := msg.line.event.Link.String()
 			if url == m.act.authURL {
 				return m, next // the control plane re-sent the same link
@@ -577,7 +611,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.act.authURL = url
 			m.act.copied = false
 			return m, tea.Batch(next, openURLCmd(m.act.id, url))
-		case connection.PhaseEntered:
+		case msg.line.event.Phase != 0:
 			if !m.act.entered(msg.line.event.Phase) {
 				return m, next
 			}
@@ -712,7 +746,7 @@ func appendBridgeLog(logs []bridgeLine, line bridgeLine) []bridgeLine {
 // the phases are the record of where the time went, and evicting one to make
 // room for tsnet chatter puts a gap in exactly the thing the log is for.
 func (l bridgeLine) important() bool {
-	return l.event.Kind != connection.Noted || importantBridgeLog(l.event.Text)
+	return !l.event.Droppable() || importantBridgeLog(l.event.Note)
 }
 
 func importantBridgeLog(line string) bool {

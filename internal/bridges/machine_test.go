@@ -323,7 +323,7 @@ func TestActivateLogsTheLoginLinkBeforeItIsUsable(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		ev.login(link)
+		ev.loginRequired(link)
 	}
 
 	m := NewMachines(false)
@@ -815,8 +815,8 @@ func TestLoginReporterSplitsTheTwoNeedsLoginWaits(t *testing.T) {
 	want := []string{
 		connection.AwaitingLoginLink.String(),
 		connection.AwaitingAuthorization.String(),
-		"Authorize this bridge at " + url,
-		"Authorize this bridge at " + url,
+		connection.LoginRequired(mustLink(t, url)).String(),
+		connection.LoginRequired(mustLink(t, url)).String(),
 		connection.JoiningTailnet.String(),
 		connection.FindingEndpoint.String(),
 	}
@@ -836,7 +836,7 @@ func TestLoginReporterRejectsAnUnusableLink(t *testing.T) {
 	if len(got) != 1 || !strings.Contains(got[0], "unusable login link") {
 		t.Fatalf("reported %q, want one line saying the link was ignored", got)
 	}
-	if strings.Contains(got[0], "Authorize this bridge at") {
+	if strings.Contains(got[0], "LoginRequired(") {
 		t.Errorf("an http link was offered to the browser: %q", got[0])
 	}
 }
@@ -930,7 +930,7 @@ func TestSinkLogsEveryEvent(t *testing.T) {
 	var seen []connection.Event
 	ev := sink(func(e connection.Event) { seen = append(seen, e) })
 	ev.enter(connection.StartingMachine)
-	ev.login(link)
+	ev.loginRequired(link)
 	ev.note("dialing")
 	if len(seen) != 3 {
 		t.Errorf("screen saw %d events, want the tee to forward all 3", len(seen))

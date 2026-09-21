@@ -165,7 +165,7 @@ func (r *loginReporter) notify(n *ipn.Notify) {
 			return
 		}
 		r.enter(connection.AwaitingAuthorization)
-		r.ev.login(link)
+		r.ev.loginRequired(link)
 	}
 	r.health(n.Health)
 }

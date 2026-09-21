@@ -138,8 +138,8 @@ func TestRunLogOmitsLoginCapabilities(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					var shown connection.LoginLink
-					sink(func(e connection.Event) { shown = e.Link })(connection.Login(link))
+					var shown *connection.LoginLink
+					sink(func(e connection.Event) { shown = e.Link })(connection.LoginRequired(link))
 					if shown.String() != authURL {
 						t.Fatal("interactive consumer lost the authorization URL")
 					}

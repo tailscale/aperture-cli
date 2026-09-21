@@ -2,6 +2,7 @@ package bridges
 
 import (
 	"context"
+	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/connection"
@@ -47,4 +48,14 @@ func tailnetOf(ms *Machines, bridgeID string) string {
 		return ""
 	}
 	return mc.Tailnet()
+}
+
+// mustLink is a LoginLink for a test that already knows the URL is valid.
+func mustLink(t *testing.T, raw string) connection.LoginLink {
+	t.Helper()
+	link, err := connection.ParseLoginLink(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return link
 }

@@ -1277,8 +1277,8 @@ func TestBridgeLogSinkStampsElapsed(t *testing.T) {
 	emit(connection.Note("  Bridge connected.  "))
 
 	line := <-ch
-	if line.event.Text != "Bridge connected." {
-		t.Errorf("text = %q, want it trimmed", line.event.Text)
+	if line.event.Note != "Bridge connected." {
+		t.Errorf("text = %q, want it trimmed", line.event.Note)
 	}
 	if line.elapsed < 12*time.Second {
 		t.Errorf("elapsed = %s, want it measured from the attempt's start", line.elapsed)
@@ -1314,8 +1314,8 @@ func TestWaitBridgeLogDrainsBufferedLogBeforeCancellation(t *testing.T) {
 	if !ok {
 		t.Fatalf("message = %T, want bridgeLogMsg", msg)
 	}
-	if logMsg.line.event.Text != "final dial error" {
-		t.Errorf("line = %q, want final dial error", logMsg.line.event.Text)
+	if logMsg.line.event.Note != "final dial error" {
+		t.Errorf("line = %q, want final dial error", logMsg.line.event.Note)
 	}
 }
 
@@ -1385,12 +1385,12 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 		act:   &activation{id: 7, logCh: ch, logCtx: ctx},
 	}
 
-	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{event: connection.Login(link)}})
+	_, cmd := m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{event: connection.LoginRequired(link)}})
 	runCmd(t, cmd)
 	if len(opened) != 1 || opened[0] != testAuthURL {
 		t.Fatalf("browser opens = %q, want one at %q", opened, testAuthURL)
 	}
-	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{event: connection.Login(link)}})
+	_, cmd = m.Update(bridgeLogMsg{ch: ch, line: bridgeLine{event: connection.LoginRequired(link)}})
 	runCmd(t, cmd)
 	if len(opened) != 1 {
 		t.Errorf("repeated auth URL opened the browser again: %q", opened)
@@ -1410,7 +1410,7 @@ func TestBridgeAuthURLIsShownOnceAndOpened(t *testing.T) {
 	}
 
 	m.Update(browserOpenMsg{id: 7, err: errors.New("exec: \"xdg-open\": not found")})
-	if len(m.bridgeLogs) != 1 || !strings.Contains(m.bridgeLogs[0].event.Text, "Use the link below") {
+	if len(m.bridgeLogs) != 1 || !strings.Contains(m.bridgeLogs[0].event.Note, "Use the link below") {
 		t.Errorf("failed open did not tell the user to use the link: %q", m.bridgeLogs)
 	}
 	m.Update(browserOpenMsg{id: 6, err: errors.New("stale")})
@@ -1646,7 +1646,7 @@ func TestBridgeLogSinkNeverDropsTheLoginLink(t *testing.T) {
 	}
 	sent := make(chan struct{})
 	go func() {
-		emit(connection.Login(link))
+		emit(connection.LoginRequired(link))
 		close(sent)
 	}()
 
@@ -1656,7 +1656,7 @@ func TestBridgeLogSinkNeverDropsTheLoginLink(t *testing.T) {
 	for {
 		select {
 		case line := <-ch:
-			if line.event.Kind == connection.LoginRequired {
+			if line.event.Link != nil {
 				<-sent
 				return
 			}
