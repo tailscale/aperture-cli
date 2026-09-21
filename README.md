@@ -117,6 +117,20 @@ Neither is made the saved active endpoint until the connection works, so an
 unreachable URL passed on the command line does not displace the one that does
 work.
 
+### Environment variables
+
+Everything the launcher reads from the environment:
+
+| Variable | Description |
+|----------|-------------|
+| `APERTURE_ENDPOINT` | Aperture URL to open on, instead of the saved one. `-endpoint` wins over it. |
+| `APERTURE_BRIDGE` | Connect through the bridge with this name, creating it if there is none. `-bridge` wins over it. |
+| `TS_AUTHKEY` | Tailscale auth key that authorizes a fresh bridge device without the browser login. Read only when a new device registers; see [Concurrent sessions](#concurrent-sessions). |
+| `CODEX_INSTALL_DIR` | Extra directory searched for a standalone Codex binary, matching the Codex installer's own variable. |
+| `CODEX_HOME` | Extra Codex home searched for the standalone install layout, matching Codex's own variable. |
+| `TMUX`, `TERM` | Detected, not set by you for aperture: picks the escape-sequence wrapping that carries a copied login link through tmux or screen. |
+| `LOCALAPPDATA` | Windows only: locates the Claude Desktop configuration. |
+
 ## Development
 
 ```sh
