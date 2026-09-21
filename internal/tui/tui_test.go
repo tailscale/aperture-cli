@@ -879,7 +879,7 @@ func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 	if m.act == nil || m.act.endpoint() != want {
 		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
 	}
-	m.Update(endpointActivationResult{id: m.act.id, verified: bridges.Verified{Gateway: "http://127.0.0.1:12345"}})
+	m.Update(endpointActivationResult{id: m.act.id, gateway: bridges.Gateway{URL: "http://127.0.0.1:12345"}})
 	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0] != want {
 		t.Fatalf("endpoints = %+v, want verified replacement %+v", got, want)
 	}
@@ -1724,5 +1724,20 @@ func TestRemoveConnectionRowKeepsASharedBridge(t *testing.T) {
 		if !r.saved {
 			t.Errorf("unexpected bare bridge row: %+v", r)
 		}
+	}
+}
+
+// A shutdown error is memoized by Machines.Close, so a second Close from the
+// error screen's q returns the same error and the user can never leave. The
+// TUI quits regardless; main calls Close again and reports the error on
+// stderr once the terminal is back.
+func TestQuitMsgWithAnErrorStillQuits(t *testing.T) {
+	m := pickerModel(t)
+	_, cmd := m.Update(quitMsg{Err: errors.New("route close failed")})
+	if cmd == nil {
+		t.Fatal("no command after a failed shutdown")
+	}
+	if _, quitting := cmd().(tea.QuitMsg); !quitting {
+		t.Errorf("cmd() = %T, want tea.QuitMsg", cmd())
 	}
 }

@@ -9,6 +9,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -668,10 +669,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case quitMsg:
+		// A shutdown error is not shown here. Machines.Close memoizes it, so
+		// a second Close from an error screen would return the same error
+		// and the user could never leave. main calls Close again after the
+		// terminal is back and reports the error on stderr.
 		if msg.Err != nil {
-			m.errMsg = "Error shutting down bridges: " + msg.Err.Error()
-			m.step = stepError
-			return m, nil
+			slog.Error("shutting down bridges", "err", msg.Err)
 		}
 		return m, tea.Quit
 
