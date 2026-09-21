@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -47,6 +47,12 @@ type Machine struct {
 	node   tailnetNode
 	routes map[string]*Route
 	ev     *eventRelay
+
+	// slot is the bridge slot this Machine claimed when it first started a
+	// node, and release frees its lock. Both are zero while the Machine has
+	// never run one, and again after Destroy discards the slot's identity.
+	slot    int
+	release func()
 }
 
 func newMachine(bridge config.Bridge, ms *Machines) *Machine {
@@ -59,10 +65,32 @@ func newMachine(bridge config.Bridge, ms *Machines) *Machine {
 	}
 }
 
-// MachineName returns the hostname the bridge's node registers under, which
-// is the device name the tailnet shows. Removal has to name the same thing
-// the admin console does, or a user told to delete it by hand cannot find it.
-func MachineName(bridgeID string) string { return "aperture-cli-" + bridgeID }
+// MachineName returns the hostname the bridge's node registers under for a
+// slot, which is the device name the tailnet shows. Removal has to name the
+// same thing the admin console does, or a user told to delete it by hand
+// cannot find it. Slot 1 keeps the name existing devices registered under.
+func MachineName(bridgeID string, slot int) string {
+	name := "aperture-cli-" + bridgeID
+	if slot > 1 {
+		name += "-" + strconv.Itoa(slot)
+	}
+	return name
+}
+
+// MachineNames returns the device names of every slot the bridge has on
+// disk, in slot order, for screens that tell the user what a removal logs
+// out.
+func MachineNames(bridgeID string) ([]string, error) {
+	slots, err := config.BridgeStateSlots(bridgeID)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(slots))
+	for i, slot := range slots {
+		names[i] = MachineName(bridgeID, slot)
+	}
+	return names, nil
+}
 
 // HasMachine reports whether the bridge ever started a node. tsnet creates
 // the state directory on first use, so a missing directory is the only
@@ -70,12 +98,8 @@ func MachineName(bridgeID string) string { return "aperture-cli-" + bridgeID }
 // serve: it is a display hint, saved after verification and cleared before a
 // switch.
 func HasMachine(bridgeID string) bool {
-	dir, err := config.BridgeStateDir(bridgeID)
-	if err != nil {
-		return false
-	}
-	_, err = os.Stat(dir)
-	return !errors.Is(err, fs.ErrNotExist)
+	slots, err := config.BridgeStateSlots(bridgeID)
+	return err == nil && len(slots) > 0
 }
 
 // begin takes the Machine for one operation and returns the context the
@@ -255,24 +279,28 @@ func (mc *Machine) LeaveTailnet(ctx context.Context, emit func(connection.Event)
 	return nil
 }
 
-// Destroy logs the Machine out of its tailnet and deletes the state directory
-// holding its login. Destroy touches no settings. The Bridge record is the
-// only thing naming the device, so the caller removes it after Destroy
-// returns nil and keeps it otherwise (ADR 0002).
+// Destroy logs the Machine out of its tailnet and deletes the state
+// directory holding its login. Destroy touches no settings. The Bridge record
+// is the only thing naming the device, so the caller removes it after
+// Destroy returns nil and keeps it otherwise (ADR 0002). It covers the slot
+// this Machine holds; Machines.Destroy covers the slots past processes left
+// behind.
 //
 // A Machine that never started has no device and must not start one to find
 // out. Bring-up would demand the interactive login that is being removed.
 //
 // The state directory goes last and only on success. It holds the node key,
-// which a later attempt needs to deregister the device.
+// which a later attempt needs to deregister the device. The slot stays locked
+// until the work finishes: a claimant while it runs would mint a fresh
+// identity that the removal then deletes.
 //
 // Destroy returns when the work is done or ctx ends, whichever is first.
 // Logout takes ctx but the node's Close does not, and a close that hangs must
-// not hold the caller past its deadline. The Machine stays held until the
-// work finishes, so the next operation waits rather than opening the state
-// directory under a close still running.
+// not hold the caller past its deadline. Within the process the Machine stays
+// held until the work finishes; another process never opens the directory
+// under a close still running because the slot lock outlasts the return.
 func (mc *Machine) Destroy(ctx context.Context, emit func(connection.Event)) error {
-	stateDir, err := config.BridgeStateDir(mc.bridge.ID)
+	stateDir, err := config.BridgeStateDir(mc.bridge.ID, mc.slot)
 	if err != nil {
 		return err
 	}
@@ -301,12 +329,18 @@ func (mc *Machine) Destroy(ctx context.Context, emit func(connection.Event)) err
 	}
 }
 
-// destroyHeld does Destroy's work. The caller holds the Machine.
+// destroyHeld does Destroy's work. The caller holds the Machine. Whatever the
+// outcome, the slot is released when the work finishes: until then the lock
+// is the only thing keeping another process from opening the state directory
+// under a close still running, and after it the identity is gone or the
+// caller is retrying with a fresh claim. Destroy may already have returned at
+// its deadline, so nothing outside this goroutine may touch the slot.
 func (mc *Machine) destroyHeld(ctx context.Context, stateDir string, ev events) error {
-	if mc.node == nil && !HasMachine(mc.bridge.ID) {
+	if mc.node == nil && mc.slot == 0 {
 		mc.setTailnet("")
 		return nil
 	}
+	defer mc.releaseSlot()
 	if err := mc.initNode(ev); err != nil {
 		return err
 	}
@@ -327,8 +361,8 @@ func (mc *Machine) destroyHeld(ctx context.Context, stateDir string, ev events) 
 
 // Close ends the Machine for the process. It interrupts the running
 // operation, waits for that operation to finish cleaning up, closes the node
-// and every Route, and refuses further operations. Close is safe to call more
-// than once.
+// and every Route, frees the Machine's slot, and refuses further operations.
+// Close is safe to call more than once.
 func (mc *Machine) Close() error {
 	mc.mu.Lock()
 	mc.closed = true
@@ -338,11 +372,27 @@ func (mc *Machine) Close() error {
 	mc.mu.Unlock()
 	mc.turn <- struct{}{}
 	defer func() { <-mc.turn }()
-	return mc.shutdownNode()
+	err := mc.shutdownNode()
+	mc.releaseSlot()
+	return err
+}
+
+// releaseSlot frees the lock guarding the Machine's slot. The caller holds
+// the turn.
+func (mc *Machine) releaseSlot() {
+	if mc.release != nil {
+		mc.release()
+		mc.release = nil
+	}
+	mc.slot = 0
 }
 
 // initNode constructs a node without waiting for login. The caller holds the
 // turn. Only Open follows initNode with BringUp.
+//
+// Constructing a node is what claims the bridge's slot: the claim is a lock
+// on the slot number, so a second aperture process opening the same bridge
+// takes the next number and never the same node key.
 func (mc *Machine) initNode(ev events) error {
 	mc.ev.forwardTo(ev)
 	if mc.node != nil {
@@ -351,7 +401,14 @@ func (mc *Machine) initNode(ev events) error {
 	if mc.machines.newNode == nil {
 		return fmt.Errorf("bridge node is not configured")
 	}
-	stateDir, err := config.BridgeStateDir(mc.bridge.ID)
+	if mc.slot == 0 {
+		slot, release, err := claimSlot(mc.bridge.ID)
+		if err != nil {
+			return err
+		}
+		mc.slot, mc.release = slot, release
+	}
+	stateDir, err := config.BridgeStateDir(mc.bridge.ID, mc.slot)
 	if err != nil {
 		return err
 	}
@@ -365,7 +422,7 @@ func (mc *Machine) initNode(ev events) error {
 			events(mc.ev.emit).notef(format, args...)
 		}
 	}
-	mc.node = mc.machines.newNode(mc.bridge, stateDir, logNotes, logNotes)
+	mc.node = mc.machines.newNode(mc.bridge, mc.slot, stateDir, logNotes, logNotes)
 	if mc.node == nil {
 		return fmt.Errorf("bridge node is not configured")
 	}

@@ -28,7 +28,7 @@ func TestRouteDropsClientAuthorization(t *testing.T) {
 
 	node := &fakeNode{backendAddr: strings.TrimPrefix(backend.URL, "http://")}
 	m := NewMachines(false)
-	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 	defer m.Close()

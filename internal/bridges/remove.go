@@ -47,23 +47,75 @@ func WillDestroyMachine(g *config.Global, bridge config.Bridge, endpoint config.
 	return true
 }
 
-// Destroy logs the bridge's Machine out of its tailnet and discards its
-// login, waiting at most destroyTimeout for the tailnet to answer. Destroy
-// writes no settings. The caller removes the bridge's records only after
-// Destroy returns nil: the records are the only thing naming the device, and
-// a failed or timed-out logout must stay retryable (ADR 0002).
+// Destroy logs out every Machine the bridge has on disk — one per slot a
+// process has claimed — and discards their logins, waiting at most
+// destroyTimeout for the tailnet to answer. Destroy writes no settings. The
+// caller removes the bridge's records only after Destroy returns nil: the
+// records are the only thing naming the devices, and a failed or timed-out
+// logout must stay retryable (ADR 0002).
+//
+// Every slot is claimed before any logout runs: a slot another aperture
+// process holds means that process is using the bridge, and refusing the
+// whole removal beats logging a live session out from under its user.
 func (ms *Machines) Destroy(ctx context.Context, bridge config.Bridge, emit func(connection.Event)) error {
-	mc, err := ms.For(bridge)
-	if err != nil {
+	if err := validateBridgeID(bridge.ID); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, destroyTimeout)
 	defer cancel()
-	err = mc.Destroy(ctx, emit)
+	err := ms.destroySlots(ctx, bridge, emit)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("the tailnet did not answer within %s: %w", destroyTimeout, err)
 	}
 	return err
+}
+
+// destroySlots does Destroy's work without bounding it.
+func (ms *Machines) destroySlots(ctx context.Context, bridge config.Bridge, emit func(connection.Event)) error {
+	slots, err := config.BridgeStateSlots(bridge.ID)
+	if err != nil {
+		return err
+	}
+	own := ms.lookup(bridge.ID)
+	claims := map[int]func(){}
+	defer func() {
+		for _, release := range claims {
+			release()
+		}
+	}()
+	for _, slot := range slots {
+		if own != nil && slot == own.slot {
+			continue
+		}
+		release, err := claimSlotNumber(bridge.ID, slot)
+		if errors.Is(err, errSlotHeld) {
+			return fmt.Errorf("bridge %s is in use by another aperture process; close it there before removing the bridge", bridge.Name)
+		}
+		if err != nil {
+			return err
+		}
+		claims[slot] = release
+	}
+	if own != nil {
+		if err := own.Destroy(ctx, emit); err != nil {
+			return err
+		}
+	}
+	for _, slot := range slots {
+		release, claimed := claims[slot]
+		if !claimed {
+			continue
+		}
+		delete(claims, slot)
+		mc := newMachine(bridge, ms)
+		mc.slot, mc.release = slot, release
+		// The temp Machine releases the slot when its Destroy work finishes,
+		// whatever the outcome; Destroy may return at its deadline first.
+		if err := mc.Destroy(ctx, emit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Tailnet returns the tailnet name the bridge's running Machine reports,

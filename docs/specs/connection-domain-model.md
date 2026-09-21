@@ -232,7 +232,8 @@ across Attempts, so it cannot be owned by any one of them.
 
 | Field | Type | Note |
 |---|---|---|
-| `bridge` | `config.Bridge` | Identity is its ID. At most one Machine per Bridge. |
+| `bridge` | `config.Bridge` | Identity is its ID. At most one Machine per Bridge in a process. |
+| `slot` | `int` | Which Slot it holds, zero until a node is built. |
 | `tailnet` | `string` | The network joined, empty until the netmap lands and after leaving. |
 | `routes` | `map[string]*Route` | Keyed by target URL. |
 
@@ -242,7 +243,8 @@ Behaviors: `Open(ctx, emit) error`, `RouteTo(ctx, url, emit) (*Route, error)`,
 
 Invariants:
 - A Route can only be created through an open Machine. `RouteTo` fails rather than starts a node.
-- One operation at a time, cleanup included. Two Machines for one Bridge would open the same state directory, so only `Machines` creates them.
+- One operation at a time, cleanup included. Within a process only `Machines` creates Machines, one per Bridge; across processes the Slot lock keeps one state directory to one process ([ADR 0006](../adr/0006-one-machine-slot-per-process.md)).
+- The Slot is claimed when the node is built and held until `Close` or `Destroy`: a slot's directory may only be opened by a process holding its lock. `LeaveTailnet` keeps the Slot, so a reopen keeps the identity it had.
 - `LeaveTailnet` logs out before closing: credentials live behind the node's own LocalAPI, so a close without a logout silently reuses them next time. `Destroy` also discards the state directory, last and only on success, because it holds the key a later attempt needs to deregister.
 - Closing closes every Route first.
 - Exactly one IPN bus watch per Machine.
@@ -282,11 +284,14 @@ tailnet with a same-named node.
 ## Machines
 
 Collection. The process's Machines, one per Bridge, and the only place a
-Machine is created. Getting a member does no network work.
+Machine is created. Getting a member does no network work; a member claims
+its Slot only when a node is built, so `For` never takes a lock.
 
 Behaviors: `For(Bridge) (*Machine, error)`, which creates an idle member on
 first use and refuses after `Close`; `Close() error`, which closes every
-member and lets concurrent callers share one result.
+member and lets concurrent callers share one result; `Destroy(ctx, bridge,
+emit) error`, which logs out every Slot the bridge has on disk and refuses,
+before logging anything out, while a live process holds one.
 
 Invariants: at most one Machine per Bridge ID. A Bridge ID that is not the
 generated `bridge-<hex>` shape is refused before it can become a hostname.
@@ -301,7 +306,7 @@ registered for it go together, Machine first (ADR 0002). Four functions in
 |---|---|---|
 | `CheckRemovable(settings, bridge, endpoint)` | update loop | Returns an error when the endpoint, or the bare bridge, cannot be removed: the active endpoint, or a bridge an endpoint still connects through. |
 | `WillDestroyMachine(settings, bridge, endpoint)` | update loop | Reports whether removing the endpoint, or the bare bridge, logs a device out of a tailnet: the bridge started a Machine and no other endpoint connects through it. |
-| `Machines.Destroy(ctx, bridge, emit)` | any goroutine | The bounded logout (ADR 0002 decision 6). Returns an error when the tailnet refuses or does not answer in time. Writes nothing. |
+| `Machines.Destroy(ctx, bridge, emit)` | any goroutine | The bounded logout (ADR 0002 decision 6), once per Slot the bridge has on disk. Fails before any logout when another process holds a Slot, naming the conflict; otherwise returns an error when a tailnet refuses or does not answer in time. Writes nothing. |
 | `RemoveFromSettings(settings, bridge, endpoint)` | update loop | Deletes the endpoint, then the bridge when nothing connects through it. Called only after `Destroy` returned nil, or when nothing needs destroying. |
 | `Machines.Tailnet(bridge)` | update loop | The tailnet the running Machine reports, else the one saved on the bridge. |
 

@@ -34,12 +34,10 @@ func switchTailnet(ms *Machines, ctx context.Context, bridge config.Bridge, emit
 	return mc.LeaveTailnet(ctx, emit)
 }
 
+// destroyMachine removes the bridge's machines the way the TUI does: through
+// Machines.Destroy, which logs out every slot the bridge has on disk.
 func destroyMachine(ms *Machines, ctx context.Context, bridge config.Bridge, emit func(connection.Event)) error {
-	mc, err := ms.For(bridge)
-	if err != nil {
-		return err
-	}
-	return mc.Destroy(ctx, emit)
+	return ms.Destroy(ctx, bridge, emit)
 }
 
 func tailnetOf(ms *Machines, bridgeID string) string {

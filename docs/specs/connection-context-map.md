@@ -20,7 +20,8 @@ The context boundaries below also describe the proposed broader event refactor.
 | Gateway | The address a client is finally told to send requests to. The Endpoint URL when no Bridge is involved, the Route's local end when one is. | The Endpoint. Only equal to it in the direct case. |
 | Route | The local door to one Endpoint through one Machine: a `127.0.0.1:0` listener reverse-proxying over the Machine. | A tailnet route or subnet route. |
 | Bridge | The thing the user configures and sees in the picker: id, display name, last tailnet joined. Persisted. | The running tsnet node. |
-| Machine | What this program runs on the user's tailnet for one Bridge: registers, may need a login, gets an address, carries dials, and shows up under Machines in their admin console. Outlives any one Attempt. | The Bridge record. The proxy. The computer aperture is running on. |
+| Machine | What this program runs on the user's tailnet for one Bridge and one Slot: registers, may need a login, gets an address, carries dials, and shows up under Machines in their admin console. Outlives any one Attempt. | The Bridge record. The proxy. The computer aperture is running on. |
+| Slot | Which of a Bridge's Machine identities a process holds, numbered from 1. Slot 1 keeps the original unsuffixed state directory and hostname; slot N adds a `-N` suffix to both. Held by an exclusive lock on a lock file, claimed when the node is built, released when the Machine closes or is destroyed. | A tailnet device. The lock file is locked, never the state directory. |
 | Machines | The process's Machines, one per Bridge. Where a Machine is created and where they are all closed. | A manager. It does no network work of its own. |
 | Login Link | The URL that authorizes a Machine. `https` only, no whitespace, opened in a browser or copied. | Any URL in a log line. |
 | Phase | What the Attempt is waiting on right now, named for what the user is waiting for. | `ipn.State`. |
@@ -128,7 +129,8 @@ two while a login is outstanding, then to one: it exits when the state leaves
 |---|---|
 | Endpoint list, active endpoint | stored, `settings.json` |
 | Bridge id, name, last tailnet | stored, `settings.json` |
-| Machine tailnet credentials | stored by tsnet under the bridge state dir, never by us |
+| Machine tailnet credentials | stored by tsnet under the slot's bridge state dir, never by us |
+| Slot lock | a held-open file lock under `bridges/locks/`, process lifetime, file content empty |
 | Machine, Route | transient, process lifetime, keyed by bridge id |
 | Connection Attempt, Phase, Progress | transient, attempt lifetime |
 | Gateway | transient, overwritten per successful Attempt |

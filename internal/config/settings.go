@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"tailscale.com/atomicfile"
@@ -88,8 +90,15 @@ func defaultSettings() Settings {
 	}
 }
 
-// BridgeStateDir returns the tsnet state directory for a bridge ID.
-func BridgeStateDir(id string) (string, error) {
+// BridgeStateDir returns the tsnet state directory for one slot of a bridge.
+// Every concurrent aperture process running the bridge claims its own slot,
+// because one directory is one node key and the control plane hands the node
+// to whichever process registered last. Slot 1 keeps the path existing
+// bridges already have; further slots get a numeric sibling.
+func BridgeStateDir(id string, slot int) (string, error) {
+	if slot < 1 {
+		return "", fmt.Errorf("slot %d: slots number from 1", slot)
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -98,7 +107,43 @@ func BridgeStateDir(id string) (string, error) {
 	if suffix == "" {
 		return "", fmt.Errorf("bridge ID is empty")
 	}
-	return filepath.Join(dir, "aperture", "bridges", suffix), nil
+	base := filepath.Join(dir, "aperture", "bridges", suffix)
+	if slot == 1 {
+		return base, nil
+	}
+	return fmt.Sprintf("%s-%d", base, slot), nil
+}
+
+// BridgeStateSlots returns the numbers of the bridge's slots that have a
+// state directory on disk, in order. Removal walks it: every slot is a node
+// the bridge registered, and each needs its own logout.
+func BridgeStateSlots(id string) ([]int, error) {
+	base, err := BridgeStateDir(id, 1)
+	if err != nil {
+		return nil, err
+	}
+	var slots []int
+	if isDir(base) {
+		slots = append(slots, 1)
+	}
+	matches, err := filepath.Glob(base + "-*")
+	if err != nil {
+		return nil, err
+	}
+	for _, match := range matches {
+		slot, err := strconv.Atoi(strings.TrimPrefix(match, base+"-"))
+		if err != nil || slot < 2 || !isDir(match) {
+			continue
+		}
+		slots = append(slots, slot)
+	}
+	slices.Sort(slots)
+	return slots, nil
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func newBridgeID(existing []Bridge) (string, error) {

@@ -20,8 +20,9 @@ const (
 
 // Machines holds the process's Machines, one per Bridge, and is the only
 // place a Machine is created. Two Machines for one Bridge would open the same
-// state directory. Getting a member does no network work. Close ends every
-// member and refuses new ones.
+// state directory; across processes the slot lock keeps one directory to one
+// process. Getting a member does no network work. Close ends every member and
+// refuses new ones.
 type Machines struct {
 	mu       sync.Mutex
 	byBridge map[string]*Machine
@@ -33,7 +34,7 @@ type Machines struct {
 	// node's peer map before giving up and resolving it the way tsnet would.
 	peerWait         time.Duration
 	peerWaitInterval time.Duration
-	newNode          func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode
+	newNode          func(bridge config.Bridge, slot int, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode
 }
 
 // NewMachines returns an empty collection. When debug is true, verbose tsnet

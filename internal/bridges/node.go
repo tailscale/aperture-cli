@@ -216,13 +216,13 @@ func (n *tsnetNode) Close() error {
 }
 
 // newTSNetNode returns the node factory production Machines use. Each node is
-// a tsnet.Server on the bridge's state directory, named the way the admin
+// a tsnet.Server on the slot's state directory, named the way the admin
 // console will show it.
-func newTSNetNode(debug bool) func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
-	return func(bridge config.Bridge, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
+func newTSNetNode(debug bool) func(bridge config.Bridge, slot int, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
+	return func(bridge config.Bridge, slot int, stateDir string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 		s := &tsnet.Server{
 			Dir:      stateDir,
-			Hostname: MachineName(bridge.ID),
+			Hostname: MachineName(bridge.ID, slot),
 			UserLogf: userLogf,
 		}
 		if debug {

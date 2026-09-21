@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -292,7 +293,7 @@ func TestBridgeStateDir(t *testing.T) {
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
-	got, err := config.BridgeStateDir("bridge-abcdef")
+	got, err := config.BridgeStateDir("bridge-abcdef", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,6 +304,47 @@ func TestBridgeStateDir(t *testing.T) {
 	want := filepath.Join(cfgDir, "aperture", "bridges", "abcdef")
 	if got != want {
 		t.Errorf("BridgeStateDir = %q, want %q", got, want)
+	}
+
+	third, err := config.BridgeStateDir("bridge-abcdef", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := want + "-3"; third != want {
+		t.Errorf("BridgeStateDir(slot 3) = %q, want %q", third, want)
+	}
+}
+
+func TestBridgeStateSlots(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	slots, err := config.BridgeStateSlots("bridge-abcdef")
+	if err != nil || len(slots) != 0 {
+		t.Fatalf("BridgeStateSlots(nothing on disk) = %v, %v", slots, err)
+	}
+
+	base, err := config.BridgeStateDir("bridge-abcdef", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{base, base + "-10", base + "-2", base + "-junk"} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A file with a slot's name is not a slot.
+	if err := os.WriteFile(base+"-4", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	slots, err = config.BridgeStateSlots("bridge-abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(slots, []int{1, 2, 10}) {
+		t.Errorf("BridgeStateSlots = %v, want [1 2 10]", slots)
 	}
 }
 

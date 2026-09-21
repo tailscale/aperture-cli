@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func TestActivateWaitsForCancelledNodeCleanup(t *testing.T) {
 	replacement := &fakeNode{backendAddr: backend.Listener.Addr().String()}
 	m := NewMachines(false)
 	calls := 0
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode {
 		calls++
 		if calls == 1 {
 			return n
@@ -121,7 +122,7 @@ func TestSwitchTailnetDoesNotRequireAuthorization(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	n := &needsLoginNode{fakeNode: &fakeNode{}}
 	m := NewMachines(false)
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	defer m.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -139,7 +140,7 @@ func TestCloseCancelsStartupBeforeClosingNode(t *testing.T) {
 	close(n.releaseUp)
 	close(n.releaseClose)
 	m := NewMachines(false)
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
@@ -189,7 +190,7 @@ func TestConcurrentCloseSharesCompletionAndError(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			node := &closingNode{fakeNode: &fakeNode{}, closing: make(chan struct{}), release: make(chan struct{}), err: closeErr}
 			m := NewMachines(false)
-			m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return node }
+			m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return node }
 			if _, err := activateMachine(m, context.Background(), config.Bridge{ID: "bridge-abcdef"}, "http://100.64.0.2", nil); err != nil {
 				t.Fatal(err)
 			}
@@ -235,7 +236,7 @@ func TestCloseEmptyManager(t *testing.T) {
 // started once, holding the node key that names the registered device.
 func stateDir(t *testing.T, bridgeID string) string {
 	t.Helper()
-	dir, err := config.BridgeStateDir(bridgeID)
+	dir, err := config.BridgeStateDir(bridgeID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +258,7 @@ func TestDestroyLeavesNoMachineBehind(t *testing.T) {
 	}
 	n := &fakeNode{}
 	m := NewMachines(false)
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	defer m.Close()
 
 	if err := destroyMachine(m, context.Background(), bridge, nil); err != nil {
@@ -282,7 +283,7 @@ func TestDestroyKeepsStateWhenTheTailnetRefuses(t *testing.T) {
 	dir := stateDir(t, bridge.ID)
 	n := &fakeNode{logoutErr: errors.New("control plane said no")}
 	m := NewMachines(false)
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
 	defer m.Close()
 
 	if err := destroyMachine(m, context.Background(), bridge, nil); err == nil || !strings.Contains(err.Error(), "control plane said no") {
@@ -302,7 +303,7 @@ func TestDestroySkipsABridgeThatNeverStarted(t *testing.T) {
 		t.Fatal("an unstarted bridge reports a machine")
 	}
 	m := NewMachines(false)
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode {
 		t.Error("started a node to remove a bridge that never had one")
 		return &fakeNode{}
 	}
@@ -324,11 +325,12 @@ func TestDestroyReturnsAtTheDeadlineWhileCloseHangs(t *testing.T) {
 	stateDir(t, bridge.ID)
 	n := &pendingNode{fakeNode: &fakeNode{}, closing: make(chan struct{}), releaseClose: make(chan struct{})}
 	m := NewMachines(false)
-	nodes := 0
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
-		// The hanging node once; the reopen after it gets an ordinary one.
-		nodes++
-		if nodes == 1 {
+	var nodes atomic.Int32
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode {
+		// The hanging node once; the reopen after it gets an ordinary one. The
+		// reopen runs while the destroy's close is still hanging, so this count
+		// is shared between goroutines.
+		if nodes.Add(1) == 1 {
 			return n
 		}
 		return &fakeNode{status: tailnetStatus("ai.example.ts.net.", "100.64.0.2")}
@@ -347,19 +349,19 @@ func TestDestroyReturnsAtTheDeadlineWhileCloseHangs(t *testing.T) {
 		t.Fatal("Destroy did not return at its deadline while Close hung")
 	}
 
-	// Still held: a reopen waits for the close to finish.
+	// The reopen does not wait for the stuck close: slot 1 is still locked by
+	// the destroy's cleanup, so the Open claims the next slot rather than
+	// opening a state directory under a close still running.
 	opened := make(chan error, 1)
 	go func() { _, err := activateMachine(m, context.Background(), bridge, "http://ai", nil); opened <- err }()
 	select {
 	case err := <-opened:
-		t.Fatalf("Open ran while the destroy's close was still hanging: %v", err)
-	case <-time.After(100 * time.Millisecond):
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Open waited on the stuck destroy instead of taking the next slot")
 	}
 	close(n.releaseClose)
-	select {
-	case <-opened:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Open never ran after the close finished")
-	}
 	m.Close()
 }

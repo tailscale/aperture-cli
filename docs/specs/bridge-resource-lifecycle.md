@@ -1,15 +1,18 @@
 # Bridge resource lifecycle
 
-Creating a bridge produces three things. Removing one destroys one of them.
-The survivors are a device in the user's admin console and a directory on
-their disk. Decision: [ADR 0002](../adr/0002-bridge-removal-destroys-the-machine.md).
+Creating a bridge produces three things per Machine slot it opens. Removing
+one destroys all of them. The survivors are devices in the user's admin
+console and directories on their disk. Decisions:
+[ADR 0002](../adr/0002-bridge-removal-destroys-the-machine.md),
+[ADR 0006](../adr/0006-one-machine-slot-per-process.md).
 
 ## What a bridge creates
 
 | Resource | Created by | First exists | Removed by |
 |---|---|---|---|
-| Machine `aperture-cli-<bridge-id>` | `tsnet.Server` registering | first successful `Activate` | nothing |
-| `$UserConfigDir/aperture/bridges/<hex>` | tsnet, from `Server.Dir` | first `Activate`, successful or not | nothing |
+| Machine `aperture-cli-<bridge-id>[-N]` | `tsnet.Server` registering | first successful `Activate` of that slot | `Machines.Destroy` |
+| `$UserConfigDir/aperture/bridges/<hex>[-N]` | tsnet, from `Server.Dir` | first `Activate` of that slot, successful or not | `Machines.Destroy` |
+| `bridges/locks/<hex>-<slot>.lock` | the slot claim, when a node is built | first `Activate` of that slot | nothing; the lock is held open, the file content empty |
 | `config.Bridge` | `AddBridge` (`global.go:178`) | the moment a name is typed | `RemoveBridge` (`global.go:219`) |
 
 The device outlives the process because `newTSNetNode` (`node.go`) sets no
@@ -21,7 +24,9 @@ installer cleanup.
 
 `Machine.LeaveTailnet` and `Machine.Destroy` are the only callers of `Logout`, and its
 comment already names the failure mode: a close without a logout leaves the
-device orphaned rather than removed.
+device orphaned rather than removed. Each concurrent process holds its own
+slot (ADR 0006), so parallel sessions register sibling devices rather than
+evicting each other on the control plane.
 
 ## Where a bridge can be removed
 
@@ -45,12 +50,12 @@ login nobody finished, and is the one case with no device to clean up.
 
 ## What destroying it needs
 
-`Machine.destroy`, on the aggregate that owns the node
-([domain model](connection-domain-model.md#machine)): `Logout`, `Close`, then
-discard the state directory, which is the Machine's own persistence.
-`Machine.Destroy` is the entry point, reached through `Machines.Destroy`, because
-destruction has to hold the Machine like every other
-operation on that node.
+`Machines.Destroy` logs out every slot the bridge has on disk: for each, a
+Machine on that slot does `Logout`, `Close`, then discards the slot's state
+directory, which is that identity's own persistence. A slot locked by a live
+process fails the whole removal before anything is logged out — evicting a
+running session is the failure ADR 0006 exists to remove, not a removal
+feature.
 
 The state directory goes last and only when the logout succeeded: it holds the
 node key, which is what a later attempt would need to deregister the device.
