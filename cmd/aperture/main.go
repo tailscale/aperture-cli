@@ -157,12 +157,14 @@ func reportFailure(err error) {
 	}
 }
 
-// orEnv lets a dotfile, container or systemd unit make the same selection a
-// typed invocation can. The flag wins, so a one-off run can override the shell
-// it started in.
-func orEnv(value, key string) string {
-	if value != "" {
-		return value
+// flagOrEnv lets a dotfile, container or systemd unit make the same selection a
+// typed invocation can. A flag that was passed wins, even empty, so a one-off
+// run can override the shell it started in: -bridge= means no bridge.
+func flagOrEnv(fs *flag.FlagSet, name, key string) string {
+	passed := false
+	fs.Visit(func(f *flag.Flag) { passed = passed || f.Name == name })
+	if passed {
+		return fs.Lookup(name).Value.String()
 	}
 	return os.Getenv(key)
 }
@@ -198,7 +200,7 @@ func main() {
 
 	// Before the TUI takes the terminal, so a URL we cannot use exits non-zero
 	// instead of painting an error the script that passed it will never see.
-	start, err := config.EndpointFromFlags(g, orEnv(*flagEndpoint, "APERTURE_ENDPOINT"), orEnv(*flagBridge, "APERTURE_BRIDGE"))
+	start, err := config.EndpointFromFlags(g, flagOrEnv(flag.CommandLine, "endpoint", "APERTURE_ENDPOINT"), flagOrEnv(flag.CommandLine, "bridge", "APERTURE_BRIDGE"))
 	if err != nil {
 		slog.Error("resolving the endpoint to open on", "err", err)
 		reportFailure(err)
