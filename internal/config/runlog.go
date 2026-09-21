@@ -10,7 +10,7 @@ import (
 // a long history of them and still cannot grow without bound on a box nobody
 // prunes.
 //
-// ponytail: truncate at a cap, rotate if anyone ever needs the older runs.
+// Truncated at a cap; rotate if anyone ever needs the older runs.
 const runLogCap = 2 << 20
 
 // RunLogPath returns the file every run writes its diagnostics to. It sits
