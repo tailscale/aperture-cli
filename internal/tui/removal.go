@@ -136,23 +136,27 @@ func (m *model) bridgeRemoved(msg bridgeRemovedMsg) (tea.Model, tea.Cmd) {
 	m.step = stepMenu
 	err := bridges.ForgetBridge(m.g, msg.bridge, msg.endpoint, msg.err)
 	var unconfirmed *bridges.Unconfirmed
+	var cmd tea.Cmd
 	switch {
 	case errors.As(err, &unconfirmed):
-		cmd := m.afterRemoval(msg.endpoint)
+		cmd = m.afterRemoval(msg.endpoint)
 		m.step = stepError
 		m.errMsg = m.unconfirmedMessage(unconfirmed)
-		return m, cmd
 	case err != nil && errors.Is(err, msg.err):
 		m.step = stepError
 		m.errMsg = "Could not remove bridge " + msg.bridge.Name + ": " + err.Error() +
 			"\n\nThe connection is unchanged. Removing it again retries the logout."
-		return m, nil
 	case err != nil:
 		m.step = stepError
 		m.errMsg = err.Error()
-		return m, nil
+	default:
+		cmd = m.afterRemoval(msg.endpoint)
 	}
-	return m, m.afterRemoval(msg.endpoint)
+	if m.quitAfterRemoval {
+		m.quitAfterRemoval = false
+		return m, m.quitCmd()
+	}
+	return m, cmd
 }
 
 // unconfirmedMessage is what the user needs to finish the job by hand: the

@@ -222,3 +222,41 @@ func TestDestroyTimeoutRemovesLocallyAndNamesTheDevice(t *testing.T) {
 		}
 	}
 }
+
+// Ctrl+C during a removal used to close the Machines, which cancelled the
+// destroy, and could quit before the outcome dropped the records: the next
+// run then named a device that was already gone. Quitting waits for the
+// outcome to be applied.
+func TestQuitDuringRemovalWaitsForTheOutcome(t *testing.T) {
+	m := pickerModel(t)
+	withFakeClients(t, []clients.Client{})
+	startedBridge(t, "bridge-aaaaaa")
+	release := make(chan struct{})
+	withFakeDestroy(t, func(context.Context, config.Bridge) error { <-release; return nil })
+	row := bridgedRow(t, m)
+	m.resetStack(m.endpointsMenu())
+
+	res := m.removeRow(row)
+	_, item := findItem(t, res.Next.Items, "Remove")
+	_, destroy := m.applyResult(item.Action())
+	result := make(chan tea.Msg, 1)
+	go func() { result <- activationResult(t, destroy) }()
+
+	_, quit := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if quit != nil {
+		if _, quitting := quit().(quitMsg); quitting {
+			t.Fatal("Ctrl+C quit while the removal was still on the tailnet")
+		}
+	}
+	close(release)
+	_, after := m.Update(<-result)
+	if m.endpointConfigured(row.ep) || hasBridge(m, row.bridge.ID) {
+		t.Errorf("records survived the removal: %+v", m.g.Settings)
+	}
+	if after == nil {
+		t.Fatal("no quit after the removal the user asked to leave during")
+	}
+	if _, quitting := activationResult(t, after).(quitMsg); !quitting {
+		t.Error("the deferred quit did not happen once the outcome was applied")
+	}
+}

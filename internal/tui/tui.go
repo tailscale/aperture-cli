@@ -99,6 +99,8 @@ type model struct {
 	bridgeLogs       []bridgeLine
 	failedEndpoint   config.Endpoint
 	connected        bool
+	// quitAfterRemoval is Ctrl+C pressed while a removal was on the tailnet.
+	quitAfterRemoval bool
 }
 
 // activation is the connection attempt currently on screen: its identity, its
@@ -163,6 +165,10 @@ func (a *activation) endpoint() config.Endpoint {
 
 // cancelable reports whether Esc can interrupt this attempt.
 func (a *activation) cancelable() bool { return a != nil && a.cancel != nil }
+
+// removing reports whether the screen is showing a bridge removal rather than
+// a connection attempt.
+func (a *activation) removing() bool { return a != nil && a.attempt == nil && a.logCh != nil }
 
 // overridable reports whether the attempt accepts a typed URL in place of the
 // one being probed. Only bridge attempts start from a guessed URL.
@@ -538,6 +544,14 @@ func waitBridgeLog(ctx context.Context, ch chan bridgeLine) tea.Cmd {
 }
 
 func (m *model) quitCmd() tea.Cmd {
+	// A removal's outcome is what drops the records naming the device.
+	// Closing the Machines now would cancel the logout, and quitting before
+	// the outcome arrives would leave settings naming a device that may be
+	// gone. The quit happens when the outcome has been applied.
+	if m.act.removing() {
+		m.quitAfterRemoval = true
+		return nil
+	}
 	var cancel context.CancelFunc
 	if m.act != nil {
 		cancel = m.act.cancel
