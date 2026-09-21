@@ -28,7 +28,7 @@ func loadInto(t *testing.T, s config.Settings) *config.Global {
 func TestResolveFallsBackToTheSavedOne(t *testing.T) {
 	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{config.Direct("http://saved")}})
 
-	ep, err := config.Startup{}.Resolve(g)
+	ep, err := config.EndpointFromFlags(g, "", "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestResolveFallsBackToTheSavedOne(t *testing.T) {
 func TestResolveTakesABareHost(t *testing.T) {
 	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{config.Direct("http://saved")}})
 
-	ep, err := config.Startup{URL: "aperture.example.com"}.Resolve(g)
+	ep, err := config.EndpointFromFlags(g, "aperture.example.com", "")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestResolveTakesABareHost(t *testing.T) {
 func TestResolveGuessesTheLocationForANamedBridge(t *testing.T) {
 	g := loadInto(t, config.Settings{Bridges: []config.Bridge{{ID: "bridge-abc123", Name: "Work"}}})
 
-	ep, err := config.Startup{BridgeName: "work"}.Resolve(g)
+	ep, err := config.EndpointFromFlags(g, "", "work")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestResolveGuessesTheLocationForANamedBridge(t *testing.T) {
 func TestResolveCreatesAnUnknownBridge(t *testing.T) {
 	g := loadInto(t, config.Settings{})
 
-	ep, err := config.Startup{URL: "http://aperture.example.com", BridgeName: "Work"}.Resolve(g)
+	ep, err := config.EndpointFromFlags(g, "http://aperture.example.com", "Work")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -97,8 +97,7 @@ func TestResolveCreatesAnUnknownBridge(t *testing.T) {
 func TestResolveRejectsAUnusableURL(t *testing.T) {
 	g := loadInto(t, config.Settings{})
 
-	s := config.Startup{URL: "ftp://aperture.example.com"}
-	if _, err := s.Resolve(g); err == nil {
+	if _, err := config.EndpointFromFlags(g, "ftp://aperture.example.com", ""); err == nil {
 		t.Error("Resolve accepted an ftp URL, want it refused before the TUI takes the terminal")
 	}
 }
@@ -108,8 +107,7 @@ func TestResolveRejectsAUnusableURL(t *testing.T) {
 func TestResolveRejectsTheURLBeforeCreatingTheBridge(t *testing.T) {
 	g := loadInto(t, config.Settings{})
 
-	s := config.Startup{URL: "ftp://aperture.example.com", BridgeName: "Work"}
-	if _, err := s.Resolve(g); err == nil {
+	if _, err := config.EndpointFromFlags(g, "ftp://aperture.example.com", "Work"); err == nil {
 		t.Fatal("Resolve accepted an ftp URL")
 	}
 	if len(g.Settings.Bridges) != 0 {
@@ -132,7 +130,7 @@ func TestResolveRejectsAnAmbiguousBridgeName(t *testing.T) {
 		{ID: "bridge-bbb222", Name: "work"},
 	}})
 
-	_, err := config.Startup{BridgeName: "WORK"}.Resolve(g)
+	_, err := config.EndpointFromFlags(g, "", "WORK")
 	if err == nil {
 		t.Fatal("Resolve picked one of two bridges called work")
 	}

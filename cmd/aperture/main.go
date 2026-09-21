@@ -198,10 +198,7 @@ func main() {
 
 	// Before the TUI takes the terminal, so a URL we cannot use exits non-zero
 	// instead of painting an error the script that passed it will never see.
-	start, err := config.Startup{
-		URL:        orEnv(*flagEndpoint, "APERTURE_ENDPOINT"),
-		BridgeName: orEnv(*flagBridge, "APERTURE_BRIDGE"),
-	}.Resolve(g)
+	start, err := config.EndpointFromFlags(g, orEnv(*flagEndpoint, "APERTURE_ENDPOINT"), orEnv(*flagBridge, "APERTURE_BRIDGE"))
 	if err != nil {
 		slog.Error("resolving the endpoint to open on", "err", err)
 		reportFailure(err)
