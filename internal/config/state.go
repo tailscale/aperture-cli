@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 )
 
-// LaunchState records the last-used client, endpoint, provider, backend, and
-// model so the TUI can offer a one-key quick re-launch on startup.
+// LaunchState records the last client, endpoint, provider, backend and model
+// used, so the TUI can offer a one-key relaunch on startup.
 type LaunchState struct {
 	LastClientName  string `json:"lastClientName,omitempty"`
 	LastBackendType string `json:"lastBackendType,omitempty"`
@@ -26,8 +26,9 @@ func statePath() (string, error) {
 	return filepath.Join(dir, "aperture", "launcher.json"), nil
 }
 
-// LoadState reads the persisted launcher state. Errors are silently ignored
-// and a zero LaunchState is returned.
+// LoadState reads the saved launcher state. Every error yields a zero
+// LaunchState and no error: a lost relaunch hint is not worth refusing to
+// start.
 func LoadState() (LaunchState, error) {
 	path, err := statePath()
 	if err != nil {
@@ -39,8 +40,8 @@ func LoadState() (LaunchState, error) {
 	}
 	var s LaunchState
 	if err := json.Unmarshal(data, &s); err != nil {
-		// Fall back to the legacy schema used by earlier versions of the
-		// launcher, which named the field lastProfileName.
+		// Earlier launcher versions named the field lastProfileName. Read
+		// that schema when the current one does not parse.
 		var legacy struct {
 			LastProfileName string `json:"lastProfileName,omitempty"`
 			LastBackendType string `json:"lastBackendType,omitempty"`
@@ -57,7 +58,8 @@ func LoadState() (LaunchState, error) {
 			LastModel:       legacy.LastModel,
 		}
 	}
-	// Accept old-format files that only have lastProfileName set.
+	// An old file may parse as the current schema and still carry the
+	// client name only under lastProfileName.
 	if s.LastClientName == "" {
 		var legacy struct {
 			LastProfileName string `json:"lastProfileName,omitempty"`

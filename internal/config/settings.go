@@ -1,7 +1,7 @@
-// Package config holds the launcher's app-level persistent state: the list
-// of Aperture endpoints the user has configured, the active endpoint, the
-// YOLO-mode flag, and the record of the last-used client launch. Clients
-// also reach through this package for isolated per-client JSON storage.
+// Package config holds the launcher's persistent state: the Aperture
+// endpoints the user has configured, the active endpoint, the YOLO-mode flag
+// and the record of the last client launch. Clients also use this package
+// for isolated per-client JSON storage.
 package config
 
 import (
@@ -16,31 +16,14 @@ import (
 	"tailscale.com/atomicfile"
 )
 
-// DefaultLocation is the fallback Aperture endpoint URL used when the user
-// has no saved settings.
-const DefaultLocation = "http://ai"
-
-// Endpoint holds the URL and per-endpoint configuration for an Aperture proxy.
-type Endpoint struct {
-	URL      string `json:"url"`
-	BridgeID string `json:"bridgeId,omitempty"`
-}
-
-// Bridge is an embedded tsnet node used to reach Aperture without requiring
-// Tailscale to run on the host.
-type Bridge struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-// Settings holds persistent launcher configuration managed by the user.
+// Settings holds the launcher configuration the user manages.
 type Settings struct {
-	// Bridges is the set of embedded tsnet nodes the user has configured.
+	// Bridges lists the embedded tsnet nodes the user has configured.
 	Bridges []Bridge `json:"bridges,omitempty"`
 
-	// Endpoints is the ordered list of Aperture proxy endpoints.
-	// The first entry is used as the active endpoint on startup.
-	Endpoints []Endpoint `json:"endpoints,omitempty"`
+	// Endpoints lists the Aperture endpoints in order. The first entry is
+	// the active endpoint on startup.
+	Endpoints endpointList `json:"endpoints,omitempty"`
 
 	// YoloMode appends each client's skip-permissions args (e.g.
 	// --dangerously-skip-permissions for Claude Code, --yolo for Gemini)
@@ -57,9 +40,10 @@ func settingsPath() (string, error) {
 	return filepath.Join(dir, "aperture", "settings.json"), nil
 }
 
-// LoadSettings reads the persisted launcher settings. A missing file is a
-// first-run condition; other read and parse errors are returned so a later
-// settings write cannot silently replace unreadable configuration.
+// LoadSettings reads the saved launcher settings. A missing file means a
+// first run and yields the defaults. Other read and parse errors are
+// returned, so a later settings write cannot silently replace configuration
+// that could not be read.
 func LoadSettings() (Settings, error) {
 	path, err := settingsPath()
 	if err != nil {
@@ -77,7 +61,7 @@ func LoadSettings() (Settings, error) {
 		return Settings{}, fmt.Errorf("parsing settings: %w", err)
 	}
 	if len(s.Endpoints) == 0 {
-		s.Endpoints = []Endpoint{{URL: DefaultLocation}}
+		s.Endpoints = []Endpoint{Direct(DefaultLocation)}
 	}
 	return s, nil
 }
@@ -100,7 +84,7 @@ func SaveSettings(s Settings) error {
 
 func defaultSettings() Settings {
 	return Settings{
-		Endpoints: []Endpoint{{URL: DefaultLocation}},
+		Endpoints: []Endpoint{Direct(DefaultLocation)},
 	}
 }
 
@@ -115,10 +99,6 @@ func BridgeStateDir(id string) (string, error) {
 		return "", fmt.Errorf("bridge ID is empty")
 	}
 	return filepath.Join(dir, "aperture", "bridges", suffix), nil
-}
-
-func sameEndpoint(a, b Endpoint) bool {
-	return a.URL == b.URL && a.BridgeID == b.BridgeID
 }
 
 func newBridgeID(existing []Bridge) (string, error) {

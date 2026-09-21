@@ -2,11 +2,12 @@ package tui
 
 import (
 	"fmt"
-	"net/url"
 	"os"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tailscale/aperture-cli/internal/bridges"
 	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/menu"
@@ -15,6 +16,7 @@ import (
 const (
 	rootTitle       = "Which editor do you want to use?"
 	endpointsTitle  = "Aperture Endpoints"
+	bridgesTitle    = "Bridges"
 	setupGuideTitle = "Getting Started"
 )
 
@@ -49,10 +51,14 @@ func (m *model) rootMenu() *menu.Menu {
 		if it.Action == nil {
 			continue
 		}
+		if !m.connected {
+			it.Disabled = true
+			it.Action = nil
+		}
 		items = append(items, it)
 	}
 
-	hints := []string{"[s] Settings"}
+	hints := []string{"[c] Change connection", "[s] Settings"}
 	if len(uninstalled) > 0 {
 		hints = append(hints, "[i] Install agents")
 	}
@@ -60,6 +66,15 @@ func (m *model) rootMenu() *menu.Menu {
 
 	// Shortcut-only items (hidden so they don't take a number but are
 	// activated via their Shortcut key).
+	// Listed before Settings in the hints: with a reachable default the
+	// launcher connects on its own, and a second bridge or tailnet is
+	// otherwise unreachable from here.
+	items = append(items, menu.MenuItem{
+		Label:    "Change connection",
+		Shortcut: "c",
+		Hidden:   true,
+		Action:   func() menu.Result { return menu.Result{Next: m.endpointsMenu()} },
+	})
 	items = append(items, menu.MenuItem{
 		Label:    "Settings",
 		Shortcut: "s",
@@ -86,7 +101,7 @@ func (m *model) rootMenu() *menu.Menu {
 // and the human-readable label to render next to [0]. Returns nil if the
 // recorded endpoint is not active or the client selection is stale.
 func (m *model) quickSelect() (tea.Cmd, string) {
-	if m.g.LastLaunch.LastClientName == "" {
+	if !m.connected || m.g.LastLaunch.LastClientName == "" {
 		return nil, ""
 	}
 	for _, c := range registeredClients(m.g) {
@@ -99,7 +114,7 @@ func (m *model) quickSelect() (tea.Cmd, string) {
 		if !hasSavedEndpoint || !m.endpointConfigured(saved) {
 			return nil, ""
 		}
-		if !sameEndpoint(saved, m.g.ActiveEndpoint()) {
+		if saved != m.g.ActiveEndpoint() {
 			return nil, ""
 		}
 		if cmd := c.Replay(m.g); cmd != nil {
@@ -113,38 +128,18 @@ func (m *model) quickSelect() (tea.Cmd, string) {
 }
 
 func (m *model) lastLaunchEndpoint() (config.Endpoint, bool) {
-	if m.g.LastLaunch.LastEndpointURL == "" {
-		return config.Endpoint{}, false
+	last := m.g.LastLaunch
+	switch {
+	case last.LastEndpointURL == "":
+		return nil, false
+	case last.LastBridgeID != "":
+		return config.Bridged(last.LastEndpointURL, last.LastBridgeID), true
 	}
-	return config.Endpoint{
-		URL:      m.g.LastLaunch.LastEndpointURL,
-		BridgeID: m.g.LastLaunch.LastBridgeID,
-	}, true
+	return config.Direct(last.LastEndpointURL), true
 }
 
 func (m *model) endpointConfigured(want config.Endpoint) bool {
-	for _, ep := range m.g.Settings.Endpoints {
-		if sameEndpoint(ep, want) {
-			return true
-		}
-	}
-	return false
-}
-
-func sameEndpoint(a, b config.Endpoint) bool {
-	return a.URL == b.URL && a.BridgeID == b.BridgeID
-}
-
-func endpointFromInput(value, bridgeID string) (config.Endpoint, error) {
-	value = strings.TrimSpace(value)
-	if !strings.Contains(value, "://") {
-		value = "http://" + value
-	}
-	u, err := url.ParseRequestURI(value)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return config.Endpoint{}, fmt.Errorf("endpoint URL must be an absolute http or https URL")
-	}
-	return config.Endpoint{URL: strings.TrimRight(value, "/"), BridgeID: bridgeID}, nil
+	return slices.Contains(m.g.Settings.Endpoints, want)
 }
 
 func simpleErrorCmd(err error) tea.Cmd {
@@ -195,8 +190,8 @@ func (m *model) bridgesMenu() *menu.Menu {
 		p := p
 		items = append(items, menu.MenuItem{
 			Label:       p.Name,
-			Description: p.ID,
-			Action:      func() menu.Result { return menu.Result{} },
+			Description: m.bridgeRowDescription(p),
+			Action:      func() menu.Result { return menu.Result{Cmd: m.connectBridgeCmd(p)} },
 		})
 	}
 	items = append(items, menu.MenuItem{
@@ -204,7 +199,7 @@ func (m *model) bridgesMenu() *menu.Menu {
 		Shortcut: "a",
 		Hidden:   true,
 		Action: func() menu.Result {
-			m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
 				if _, err := m.g.AddBridge(v); err != nil {
 					return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 				}
@@ -223,42 +218,67 @@ func (m *model) bridgesMenu() *menu.Menu {
 			if idx < 0 || idx >= len(m.g.Settings.Bridges) {
 				return menu.Result{}
 			}
-			if err := m.g.RemoveBridge(m.g.Settings.Bridges[idx].ID); err != nil {
-				return errResult(err.Error())
-			}
-			return menu.Result{Replace: m.bridgesMenu()}
+			return m.remove(m.g.Settings.Bridges[idx], nil)
 		},
 	})
 	return &menu.Menu{
-		Title: "Bridges",
+		Title: bridgesTitle,
 		Items: items,
-		Hint:  "d to remove · a to add · Esc to go back",
+		Hint:  "Enter to connect · d to remove · a to add · Esc to go back",
 	}
 }
 
-// endpointsMenu lists configured endpoints with add/delete affordances.
-// Selecting an entry runs preflight and promotes it only after success.
+// bridgeRowDescription labels a bridge with the tailnet it reaches, falling
+// back to its ID when no connection has reported one yet.
+func (m *model) bridgeRowDescription(bridge config.Bridge) string {
+	if name := m.machines.Tailnet(bridge); name != "" {
+		return "tailnet " + name
+	}
+	return bridge.ID
+}
+
+// endpointsMenu builds the connection picker. It shows one row per Aperture
+// this launcher can reach, whether a saved endpoint or a bridge with no
+// endpoint yet. A row opens its page rather than connecting, so every action
+// is on screen instead of behind a remembered key.
 func (m *model) endpointsMenu() *menu.Menu {
-	items := make([]menu.MenuItem, 0, len(m.g.Settings.Endpoints)+3)
-	for i, ep := range m.g.Settings.Endpoints {
-		ep := ep
-		label := m.endpointLabel(ep)
-		if i == 0 {
-			label = greenStyle.Render(label + " (active)")
-		}
+	rows := m.connectionRows()
+	items := make([]menu.MenuItem, 0, len(rows)+4)
+	for _, row := range rows {
 		items = append(items, menu.MenuItem{
-			Label: label,
-			Action: func() menu.Result {
-				return menu.Result{Cmd: m.activateEndpointCmd(ep)}
-			},
+			Label:       m.connectionLabel(row),
+			Description: m.connectionDescription(row),
+			Action:      func() menu.Result { return menu.Result{Next: m.connectionMenu(row)} },
 		})
 	}
-	// Hidden: "a" opens the endpoint connection flow. Surfaced via the footer hint.
+	items = append(items, menu.MenuItem{
+		Label:  "Add a connection",
+		Action: func() menu.Result { return menu.Result{Next: m.addEndpointConnectionMenu()} },
+	})
+	// "a" still adds, as it did before the rows above existed. Surfaced via the
+	// footer hint, like the "e" and "d" aliases below it.
 	items = append(items, menu.MenuItem{
 		Label:    "add",
 		Shortcut: "a",
 		Hidden:   true,
 		Action:   func() menu.Result { return menu.Result{Next: m.addEndpointConnectionMenu()} },
+	})
+	// Hidden: "e" retargets the row under the cursor. Surfaced via the footer hint.
+	items = append(items, menu.MenuItem{
+		Label:    "edit",
+		Shortcut: "e",
+		Hidden:   true,
+		Action: func() menu.Result {
+			row, ok := m.connectionAtCursor()
+			if !ok {
+				return menu.Result{}
+			}
+			if !row.saved {
+				return errResult("connect through " + row.bridge.Name + " first, then its URL can be changed")
+			}
+			m.promptEditEndpoint(row.ep)
+			return menu.Result{}
+		},
 	})
 	// Hidden: "d" deletes the row under the cursor.
 	items = append(items, menu.MenuItem{
@@ -266,30 +286,18 @@ func (m *model) endpointsMenu() *menu.Menu {
 		Shortcut: "d",
 		Hidden:   true,
 		Action: func() menu.Result {
-			idx := m.cursor()
-			if idx < 0 || idx >= len(m.g.Settings.Endpoints) || len(m.g.Settings.Endpoints) <= 1 {
+			row, ok := m.connectionAtCursor()
+			if !ok {
 				return menu.Result{}
 			}
-			if idx == 0 {
-				return errResult("switch to another endpoint before removing the active endpoint")
-			}
-			removed := m.g.Settings.Endpoints[idx]
-			if err := m.g.RemoveEndpoint(idx); err != nil {
-				return errResult(err.Error())
-			}
-			if m.failedEndpoint != nil && sameEndpoint(*m.failedEndpoint, removed) {
-				m.clearEndpointFailure()
-				m.resetStack(m.rootMenu())
-				return menu.Result{}
-			}
-			return menu.Result{Replace: m.endpointsMenu()}
+			return m.removeRow(row)
 		},
 	})
 
 	return &menu.Menu{
 		Title: endpointsTitle,
 		Items: items,
-		Hint:  "Enter to select · d to remove · a to add · Esc to go back",
+		Hint:  "Enter for connection options · a to add · e to edit · d to remove · Esc to go back",
 		OnBack: func() tea.Cmd {
 			if len(m.stack) <= 1 {
 				if m.forcedToEndpoint {
@@ -303,37 +311,220 @@ func (m *model) endpointsMenu() *menu.Menu {
 	}
 }
 
+// connectionRow describes one line on the connection picker. A bridge no
+// endpoint points at yet gets a row too, described by the endpoint it would
+// create. That row is how a second tailnet gets reached the first time.
+type connectionRow struct {
+	ep     config.Endpoint
+	bridge config.Bridge
+	saved  bool // ep is in Settings.Endpoints
+	active bool
+}
+
+func (m *model) connectionRows() []connectionRow {
+	rows := make([]connectionRow, 0, len(m.g.Settings.Endpoints)+len(m.g.Settings.Bridges))
+	used := make(map[string]bool, len(m.g.Settings.Bridges))
+	for i, ep := range m.g.Settings.Endpoints {
+		row := connectionRow{ep: ep, saved: true, active: i == 0}
+		if bridged, ok := ep.(config.BridgeEndpoint); ok {
+			used[bridged.BridgeID()] = true
+			row.bridge, _ = m.g.Bridge(bridged.BridgeID())
+		}
+		rows = append(rows, row)
+	}
+	// Endpoint rows first: the hidden "e" and "d" aliases index
+	// Settings.Endpoints by cursor position.
+	for _, b := range m.g.Settings.Bridges {
+		if used[b.ID] {
+			continue
+		}
+		rows = append(rows, connectionRow{
+			ep:     config.Bridged(config.DefaultLocation, b.ID),
+			bridge: b,
+		})
+	}
+	return rows
+}
+
+// connectionAtCursor resolves the picker row the cursor is on. The hidden "e"
+// and "d" aliases go through it so they see the same rows the user does;
+// indexing Settings.Endpoints made them silently do nothing on a bridge row.
+func (m *model) connectionAtCursor() (connectionRow, bool) {
+	rows := m.connectionRows()
+	idx := m.cursor()
+	if idx < 0 || idx >= len(rows) {
+		return connectionRow{}, false
+	}
+	return rows[idx], true
+}
+
+func (m *model) connectionLabel(row connectionRow) string {
+	if !row.saved {
+		return "Connect via " + row.bridge.Name
+	}
+	label := m.endpointLabel(row.ep)
+	if row.active {
+		return greenStyle.Render(label + " (active)")
+	}
+	return label
+}
+
+// connectionDescription names the tailnet behind a bridge row. Which bridge to
+// use is a choice between tailnets, so the row has to say which one it reaches
+// before it is picked.
+func (m *model) connectionDescription(row connectionRow) string {
+	if row.bridge.ID == "" {
+		return ""
+	}
+	if name := m.machines.Tailnet(row.bridge); name != "" {
+		return "tailnet " + name
+	}
+	return "tailnet not known yet"
+}
+
+// connectionMenu builds one connection's page. Every action it offers is a
+// row. The picker is the only way to reach a second bridge, so its actions
+// cannot be keys the user has to already know about.
+func (m *model) connectionMenu(row connectionRow) *menu.Menu {
+	title := row.bridge.Name
+	if row.saved {
+		title = m.endpointLabel(row.ep)
+	}
+
+	connect, target := "Connect", row.ep.URL()
+	if row.active && m.connected {
+		connect = "Reconnect"
+	}
+	if !row.saved {
+		// Nothing has named a URL for this bridge yet, so the connection is
+		// about to guess one. Say so rather than showing a bare URL the user
+		// never typed.
+		target = "looks for Aperture at " + row.ep.URL()
+	}
+	items := []menu.MenuItem{{
+		Label:       connect,
+		Description: target,
+		Action: func() menu.Result {
+			return menu.Result{Cmd: m.connectVia(row.ep, false)}
+		},
+	}}
+
+	if row.saved {
+		items = append(items, menu.MenuItem{
+			Label:       "Change URL",
+			Description: "now " + row.ep.URL(),
+			Action: func() menu.Result {
+				m.promptEditEndpoint(row.ep)
+				return menu.Result{}
+			},
+		})
+	}
+
+	if row.bridge.ID != "" {
+		description := "log the bridge out and sign in to a different tailnet"
+		if name := m.machines.Tailnet(row.bridge); name != "" {
+			description = "leave " + name + " and sign in to a different tailnet"
+		}
+		items = append(items, menu.MenuItem{
+			Label:       "Switch tailnet",
+			Description: description,
+			Action:      func() menu.Result { return menu.Result{Next: m.switchTailnetMenu(row)} },
+		})
+	}
+
+	switch {
+	case row.active:
+		items = append(items, menu.MenuItem{
+			Label:       "Remove connection",
+			Description: "connect to another one first",
+			Disabled:    true,
+		})
+	case row.saved:
+		items = append(items, menu.MenuItem{
+			Label:  "Remove connection",
+			Action: func() menu.Result { return m.removeRow(row) },
+		})
+	default:
+		items = append(items, menu.MenuItem{
+			Label:       "Remove bridge",
+			Description: row.bridge.ID,
+			Action:      func() menu.Result { return m.removeRow(row) },
+		})
+	}
+
+	return &menu.Menu{
+		Title: title,
+		Items: items,
+		Hint:  "Enter to select · Esc to go back",
+	}
+}
+
+// switchTailnetMenu confirms logging a bridge out. A bridge holds one tailnet
+// at a time, so switching is destructive in a way connecting is not: the node
+// leaves the tailnet it is on, and getting back needs another login.
+func (m *model) switchTailnetMenu(row connectionRow) *menu.Menu {
+	preamble := "A bridge is on one tailnet at a time."
+	if name := m.machines.Tailnet(row.bridge); name != "" {
+		preamble += " " + row.bridge.Name + " is on " + name + " now."
+	}
+	preamble += "\n\nSwitching logs the bridge out, removing its node from that tailnet, then prints a login link. Open the link and pick the tailnet you want; " +
+		row.ep.URL() + " is looked for there."
+	return &menu.Menu{
+		Title:    "Switch tailnet for " + row.bridge.Name + "?",
+		Preamble: preamble,
+		Items: []menu.MenuItem{
+			{
+				Label:    "Switch tailnet",
+				Shortcut: "y",
+				Action: func() menu.Result {
+					return menu.Result{Cmd: m.connectVia(row.ep, true)}
+				},
+			},
+			{
+				Label:    "Cancel",
+				Shortcut: "n",
+				Action:   func() menu.Result { return menu.Result{Pop: true} },
+			},
+		},
+		Hint: "y to switch · n to cancel",
+	}
+}
+
 // setupGuideMenu is shown when endpoint activation or its /v1/models check
 // fails. A candidate endpoint remains configured, but the previous working
 // endpoint stays active until the candidate passes both stages.
 func (m *model) setupGuideMenu() *menu.Menu {
 	target := m.g.ActiveEndpoint()
 	if m.failedEndpoint != nil {
-		target = *m.failedEndpoint
+		target = m.failedEndpoint
 	}
 
 	var preamble string
-	if target.BridgeID != "" {
-		bridgeName := target.BridgeID
-		if bridge, ok := m.g.Bridge(target.BridgeID); ok {
+	if bridged, ok := target.(config.BridgeEndpoint); ok {
+		bridgeName := bridged.BridgeID()
+		if bridge, ok := m.g.Bridge(bridged.BridgeID()); ok {
 			bridgeName = bridge.Name
 		}
-		preamble = "Could not reach Aperture at " + target.URL + " through bridge " + bridgeName + ".\n\n" +
+		preamble = "Could not reach Aperture at " + target.URL() + " through bridge " + bridgeName + ".\n\n" +
 			"The bridge uses an embedded Tailscale node; this machine does not need Tailscale installed or running."
+		if target.URL() == config.DefaultLocation {
+			preamble += "\n\n" + config.DefaultLocation + " is the default Aperture location. " +
+				"If yours answers on a different hostname, edit the endpoint URL below."
+		}
 	} else {
 		switch checkTailscale() {
 		case tsNotInstalled:
-			preamble = "Could not reach Aperture at " + target.URL + ".\n\nTailscale is not installed.\nInstall it from: https://tailscale.com/download"
+			preamble = "Could not reach Aperture at " + target.URL() + ".\n\nTailscale is not installed.\nInstall it from: https://tailscale.com/download"
 		case tsNotRunning:
-			preamble = "Could not reach Aperture at " + target.URL + ".\n\nTailscale is installed but not running.\nStart Tailscale, then retry."
+			preamble = "Could not reach Aperture at " + target.URL() + ".\n\nTailscale is installed but not running.\nStart Tailscale, then retry."
 		case tsNotConnected:
-			preamble = "Could not reach Aperture at " + target.URL + ".\n\nTailscale is not connected to a network.\nLog in with: tailscale up"
+			preamble = "Could not reach Aperture at " + target.URL() + ".\n\nTailscale is not connected to a network.\nLog in with: tailscale up"
 		case tsConnected:
-			preamble = "Tailscale is connected.\n\nCould not reach Aperture at " + target.URL + ".\nEither:\n  - set up an Aperture instance at https://aperture.tailscale.com/\n  - or enter a different Aperture URL below"
+			preamble = "Tailscale is connected.\n\nCould not reach Aperture at " + target.URL() + ".\nEither:\n  - set up an Aperture instance at https://aperture.tailscale.com/\n  - or enter a different Aperture URL below"
 		}
 	}
 
-	hasPrevious := m.connected && !sameEndpoint(target, m.g.ActiveEndpoint())
+	hasPrevious := m.connected && target != m.g.ActiveEndpoint()
 	if hasPrevious {
 		preamble += "\n\nThe previous endpoint remains active: " + m.endpointLabel(m.g.ActiveEndpoint()) + "."
 	}
@@ -348,17 +539,7 @@ func (m *model) setupGuideMenu() *menu.Menu {
 		{
 			Label: "Edit endpoint URL",
 			Action: func() menu.Result {
-				m.promptForInput("Edit Endpoint:", "Current: "+target.URL, func(v string) tea.Cmd {
-					next, err := endpointFromInput(v, target.BridgeID)
-					if err != nil {
-						return simpleErrorCmd(err)
-					}
-					if err := m.g.ReplaceEndpoint(target, next); err != nil {
-						return simpleErrorCmd(err)
-					}
-					m.failedEndpoint = &next
-					return m.activateEndpointCmd(next)
-				})
+				m.promptEditEndpoint(target)
 				return menu.Result{}
 			},
 		},
@@ -378,22 +559,10 @@ func (m *model) setupGuideMenu() *menu.Menu {
 			},
 		})
 	}
-	if m.endpointConfigured(target) && !sameEndpoint(target, m.g.ActiveEndpoint()) {
+	if m.endpointConfigured(target) && target != m.g.ActiveEndpoint() {
 		items = append(items, menu.MenuItem{
-			Label: "Remove endpoint",
-			Action: func() menu.Result {
-				for i, ep := range m.g.Settings.Endpoints {
-					if !sameEndpoint(ep, target) {
-						continue
-					}
-					if err := m.g.RemoveEndpoint(i); err != nil {
-						return errResult(err.Error())
-					}
-					break
-				}
-				m.clearEndpointFailure()
-				return menu.Result{Replace: m.rootMenu()}
-			},
+			Label:  "Remove endpoint",
+			Action: func() menu.Result { return m.remove(m.bridgeOf(target), target) },
 		})
 	}
 
@@ -414,6 +583,28 @@ func (m *model) setupGuideMenu() *menu.Menu {
 	}
 }
 
+// promptEditEndpoint verifies a replacement URL before removing ep, keeping
+// its bridge. It is the only way to retarget an endpoint that connects: the
+// guessed default answers on any tailnet with a host called "ai", and a success
+// shows neither the inline override nor the setup guide.
+func (m *model) promptEditEndpoint(ep config.Endpoint) {
+	m.promptForInput("Edit Endpoint:", "URL", ep.URL(), func(v string) tea.Cmd {
+		url, err := config.ParseEndpointURL(v)
+		if err != nil {
+			return simpleErrorCmd(err)
+		}
+		var current *bridges.Attempt
+		if m.act != nil {
+			current = m.act.attempt
+		}
+		a, err := bridges.EditAttempt(m.g, current, ep, ep.WithURL(url))
+		if err != nil {
+			return simpleErrorCmd(err)
+		}
+		return m.startAttempt(a)
+	})
+}
+
 func (m *model) clearEndpointFailure() {
 	m.failedEndpoint = nil
 	m.preflightErr = ""
@@ -427,11 +618,12 @@ func (m *model) addEndpointConnectionMenu() *menu.Menu {
 			{
 				Label: "Direct",
 				Action: func() menu.Result {
-					m.promptForInput("Add Direct Endpoint:", "URL", func(v string) tea.Cmd {
-						ep, err := endpointFromInput(v, "")
+					m.promptForInput("Add Direct Endpoint:", "URL", "", func(v string) tea.Cmd {
+						url, err := config.ParseEndpointURL(v)
 						if err != nil {
 							return simpleErrorCmd(err)
 						}
+						ep := config.Direct(url)
 						if err := m.g.UpsertEndpoint(ep); err != nil {
 							return simpleErrorCmd(err)
 						}
@@ -461,24 +653,20 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 		p := p
 		items = append(items, menu.MenuItem{
 			Label:       p.Name,
-			Description: p.ID,
-			Action: func() menu.Result {
-				m.promptForBridgeEndpoint(p)
-				return menu.Result{}
-			},
+			Description: m.bridgeRowDescription(p),
+			Action:      func() menu.Result { return menu.Result{Cmd: m.connectBridgeCmd(p)} },
 		})
 	}
 	items = append(items, menu.MenuItem{
 		Label: "Add Bridge",
 		Action: func() menu.Result {
-			m.promptForInput("Add Bridge:", "Name", func(v string) tea.Cmd {
+			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
 				bridge, err := m.g.AddBridge(v)
 				if err != nil {
 					return simpleErrorCmd(err)
 				}
 				m.refreshMenuByTitle("Choose a bridge", m.endpointBridgeMenu())
-				m.promptForBridgeEndpoint(bridge)
-				return nil
+				return m.connectBridgeCmd(bridge)
 			})
 			return menu.Result{}
 		},
@@ -486,31 +674,33 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 	return &menu.Menu{
 		Title: "Choose a bridge",
 		Items: items,
-		Hint:  "Enter to select or add · Esc to go back",
+		Hint:  "Enter to connect or add · Esc to go back",
 	}
 }
 
-func (m *model) promptForBridgeEndpoint(bridge config.Bridge) {
-	m.promptForInput("Add Bridge Endpoint:", "URL", func(v string) tea.Cmd {
-		ep, err := endpointFromInput(v, bridge.ID)
-		if err != nil {
-			return simpleErrorCmd(err)
-		}
-		if err := m.g.UpsertEndpoint(ep); err != nil {
-			return simpleErrorCmd(err)
-		}
-		return m.activateEndpointCmd(ep)
-	})
+// connectBridgeCmd starts discovery through bridge: probe the well-known
+// Aperture location, the same guess a direct connection starts from, instead of
+// demanding a URL the user may not know. The connect screen takes another URL
+// while the guess runs.
+func (m *model) connectBridgeCmd(bridge config.Bridge) tea.Cmd {
+	return m.connectVia(config.Bridged(config.DefaultLocation, bridge.ID), false)
+}
+
+// connectVia connects to ep. switchTailnet logs the bridge out on the way, so
+// the connection asks for a login.
+func (m *model) connectVia(ep config.Endpoint, switchTailnet bool) tea.Cmd {
+	return m.connect(ep, switchTailnet, nil)
 }
 
 func (m *model) endpointLabel(ep config.Endpoint) string {
-	if ep.BridgeID == "" {
-		return ep.URL + " (direct)"
+	bridged, ok := ep.(config.BridgeEndpoint)
+	if !ok {
+		return ep.URL() + " (direct)"
 	}
-	if p, ok := m.g.Bridge(ep.BridgeID); ok {
-		return ep.URL + " via " + p.Name
+	if p, ok := m.g.Bridge(bridged.BridgeID()); ok {
+		return ep.URL() + " via " + p.Name
 	}
-	return ep.URL + " via " + ep.BridgeID
+	return ep.URL() + " via " + bridged.BridgeID()
 }
 
 // installAgentsMenu lists uninstalled clients and confirms/runs each install.
@@ -652,17 +842,17 @@ func installDoneMsg(client clients.Client, skipInstalledCheck bool, err error) m
 	return menu.InstallDoneMsg{Err: err}
 }
 
-// runUninstallFn returns a tea.Cmd that invokes the uninstall function and
-// emits menu.InstallDoneMsg (we reuse the install-done flow to re-scan the
-// client list on completion).
+// runUninstallFn returns a tea.Cmd that runs the uninstall function and emits
+// menu.InstallDoneMsg. The install-done flow re-scans the client list on
+// completion, so uninstall reuses it.
 func runUninstallFn(run func() error) tea.Cmd {
 	return func() tea.Msg {
 		return menu.InstallDoneMsg{Err: run()}
 	}
 }
 
-// errResult is a small helper to emit an error through the shared done-msg
-// channel from a menu builder.
+// errResult returns a menu.Result whose command reports msg as an error
+// through the shared done message, for use from a menu builder.
 func errResult(msg string) menu.Result {
 	return menu.Result{Cmd: func() tea.Msg {
 		return menu.SimpleDoneMsg{Err: fmt.Errorf("%s", msg)}
