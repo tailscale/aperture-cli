@@ -144,10 +144,10 @@ func TestRunLogOmitsLoginCapabilities(t *testing.T) {
 						t.Fatal("interactive consumer lost the authorization URL")
 					}
 				case "rejected link":
-					r := loginReporter{ev: sink(nil)}
+					r := bringUpProgress{ev: sink(nil)}
 					r.notify(browse("http://login.tailscale.com/a/" + secret))
 				case "health warning":
-					r := loginReporter{ev: sink(nil)}
+					r := bringUpProgress{ev: sink(nil)}
 					r.notify(unhealthyLogin("request failed: " + authURL))
 				case "backend and startup error":
 					m := NewMachines(true)

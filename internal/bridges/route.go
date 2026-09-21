@@ -15,18 +15,17 @@ import (
 	"tailscale.com/ipn/ipnstate"
 )
 
-// Route is the local door to one Endpoint through one Machine: a loopback
-// listener reverse-proxying over the Machine's node. LocalURL is the Gateway a
-// client is told to use. A Route belongs to exactly one Machine and closes
-// with it.
+// Route reverse-proxies a loopback listener to one Endpoint over one
+// Machine's node. LocalURL is the URL a client is told to use. A Route
+// belongs to exactly one Machine and closes with it.
 type Route struct {
 	LocalURL string
 	server   *http.Server
 	listener net.Listener
 }
 
-// close shuts the listener and server. Already closed is not a failure: Close
-// and LeaveTailnet can both reach the same Route.
+// close shuts the listener and server. An already closed Route is not a
+// failure, because Close and LeaveTailnet can both reach the same Route.
 func (r *Route) close() error {
 	var errs []error
 	if err := r.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -53,13 +52,13 @@ func parseTarget(raw string) (*url.URL, error) {
 	return target, nil
 }
 
-// openRoute builds the reverse proxy for one target on the Machine's node. It
-// reports through the Machine because the Route is cached and will still be
-// serving long after the connection that asked for it has gone. Called with
-// the Machine's turn held.
+// openRoute builds the reverse proxy for one target on the Machine's node.
+// The proxy reports through the Machine's relay because the Route is cached
+// and keeps serving long after the attempt that asked for it has gone. The
+// caller holds the Machine's turn.
 func (mc *Machine) openRoute(target *url.URL) (*Route, error) {
 	node, ev := mc.node, events(mc.ev.emit)
-	debug := mc.of.debug
+	debug := mc.machines.debug
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -77,8 +76,8 @@ func (mc *Machine) openRoute(target *url.URL) (*Route, error) {
 			network,
 			address,
 			ev,
-			mc.of.peerWait,
-			mc.of.peerWaitInterval,
+			mc.machines.peerWait,
+			mc.machines.peerWaitInterval,
 		)
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if err != nil {
@@ -117,14 +116,14 @@ func (mc *Machine) openRoute(target *url.URL) (*Route, error) {
 
 type bridgeDialFunc func(context.Context, string, string) (net.Conn, error)
 
-// dialViaNode dials address over the bridge's node, resolving a name against
-// the node's own peer map first and dialing the IP it finds.
+// dialViaNode dials address over the bridge's node. A hostname is resolved
+// against the node's own peer map first and the IP found there is dialed.
 //
-// Handing the name to tsnet is what made a first connection hang for 30s: until
-// the netmap lands its resolver falls through to the host resolver, which on a
-// machine already on a tailnet answers with a same-named node on the wrong one.
-// Short aliases use this node's current tailnet suffix; a shared peer requires
-// its full name.
+// Handing the name to tsnet made a first connection hang for 30s. Until the
+// netmap lands, tsnet's resolver falls through to the host resolver, and on a
+// machine already on a tailnet that answers with a same-named node on the
+// wrong one. A short alias gets this node's current tailnet suffix. A shared
+// peer needs its full name.
 func dialViaNode(
 	ctx context.Context,
 	node tailnetNode,
@@ -149,13 +148,13 @@ func dialViaNode(
 		// A bare name is a peer alias and nothing else. Handed to tsnet it
 		// would fall through to the host resolver, and on a machine already
 		// on another tailnet that answers with that tailnet's node of the
-		// same name; the wait above only delayed that.
+		// same name. The wait above only delayed that.
 		if !strings.Contains(host, ".") {
 			return nil, attempts, fmt.Errorf("%s is not a node on this bridge's tailnet (%v)", host, err)
 		}
-		// A qualified name can be a subnet route or the tailnet's own DNS,
-		// which resolve only the way tsnet resolves, so fall through and say
-		// so, since this path can leave the tailnet.
+		// A qualified name can be a subnet route or the tailnet's own DNS.
+		// Only tsnet can resolve those, so fall through to it and say so,
+		// because this path can leave the tailnet.
 		ev.notef("Bridge target %s is not a node on this bridge's tailnet (%v); resolving it the usual way.", host, err)
 		conn, derr := node.DialContext(ctx, network, address)
 		return conn, attempts, derr
@@ -165,9 +164,9 @@ func dialViaNode(
 	return conn, attempts, err
 }
 
-// waitForPeerAddr polls the node's status until host shows up as a peer. A node
-// that just came up reports Running before its peer map arrives, so the first
-// look usually misses.
+// waitForPeerAddr polls the node's status until host shows up as a peer. A
+// node that just came up reports Running before its peer map arrives, so the
+// first look usually misses.
 func waitForPeerAddr(
 	ctx context.Context,
 	node tailnetNode,
@@ -206,9 +205,10 @@ func waitForPeerAddr(
 	}
 }
 
-// peerAddr resolves short names only within the current tailnet's MagicDNS
-// suffix. A shared-in peer can have the same first label but belongs to another
-// tailnet; reaching it requires its explicit full name.
+// peerAddr finds host in the peer map. A short name is qualified with the
+// current tailnet's MagicDNS suffix and matched only there. A shared-in peer
+// can have the same first label but belongs to another tailnet, so reaching
+// it requires its full name.
 func peerAddr(status *ipnstate.Status, host string) (netip.Addr, bool) {
 	if status == nil {
 		return netip.Addr{}, false

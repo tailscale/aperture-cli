@@ -18,10 +18,10 @@ const (
 	bridgePeerWaitInterval = 250 * time.Millisecond
 )
 
-// Machines is the process's Machines, one per Bridge, and the only place a
-// Machine is created: two Machines for one Bridge would open the same state
-// directory. Getting a member does no network work. Close ends every member
-// and refuses new ones.
+// Machines holds the process's Machines, one per Bridge, and is the only
+// place a Machine is created. Two Machines for one Bridge would open the same
+// state directory. Getting a member does no network work. Close ends every
+// member and refuses new ones.
 type Machines struct {
 	mu       sync.Mutex
 	byBridge map[string]*Machine
@@ -37,7 +37,7 @@ type Machines struct {
 }
 
 // NewMachines returns an empty collection. When debug is true, verbose tsnet
-// backend logs are also reported to whichever attempt is using a Machine.
+// backend logs are also reported to the attempt using a Machine.
 func NewMachines(debug bool) *Machines {
 	ms := &Machines{
 		byBridge:         make(map[string]*Machine),
@@ -71,8 +71,8 @@ func (ms *Machines) For(bridge config.Bridge) (*Machine, error) {
 	return mc, nil
 }
 
-// lookup is For without the creation, for callers that only want to read a
-// Machine that already exists.
+// lookup returns the Machine for bridgeID, or nil when none exists. Unlike
+// For, lookup never creates one.
 func (ms *Machines) lookup(bridgeID string) *Machine {
 	if ms == nil {
 		return nil
@@ -104,8 +104,8 @@ func (ms *Machines) close() error {
 	return errors.Join(errs...)
 }
 
-// validateBridgeID rejects IDs that don't match the system-generated
-// "bridge-<hex>" format, so a hand-edited config can't inject arbitrary
+// validateBridgeID rejects an ID that does not match the generated
+// "bridge-<hex>" format, so a hand-edited config cannot inject arbitrary
 // content into the tailnet hostname.
 func validateBridgeID(id string) error {
 	suffix, ok := strings.CutPrefix(id, "bridge-")

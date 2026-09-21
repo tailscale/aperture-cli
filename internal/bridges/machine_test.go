@@ -805,7 +805,7 @@ func browse(u string) *ipn.Notify   { return &ipn.Notify{BrowseToURL: &u} }
 func TestLoginReporterSplitsTheTwoNeedsLoginWaits(t *testing.T) {
 	const url = "https://login.tailscale.com/a/28ba393017981"
 	var got []string
-	r := &loginReporter{ev: collect(&got)}
+	r := &bringUpProgress{ev: collect(&got)}
 
 	r.notify(state(ipn.NeedsLogin))
 	r.notify(state(ipn.NeedsLogin)) // the bus repeats itself
@@ -830,7 +830,7 @@ func TestLoginReporterSplitsTheTwoNeedsLoginWaits(t *testing.T) {
 
 func TestLoginReporterRejectsAnUnusableLink(t *testing.T) {
 	var got []string
-	r := &loginReporter{ev: collect(&got)}
+	r := &bringUpProgress{ev: collect(&got)}
 
 	// http, not https. The value is handed to a desktop opener, so this is the
 	// one thing that must not pass through untouched.
@@ -850,7 +850,7 @@ func TestLoginReporterRejectsAnUnusableLink(t *testing.T) {
 // name. Untranslated it emits nothing and the screen goes silent.
 func TestLoginReporterNamesTheWaitBeforeTheControlPlaneAnswers(t *testing.T) {
 	var lines []string
-	reporter := loginReporter{ev: collect(&lines)}
+	reporter := bringUpProgress{ev: collect(&lines)}
 
 	// NoState alone, which is all the user gets for the length of the
 	// register. NeedsLogin arrives only once control has answered, so a test
@@ -969,7 +969,7 @@ func TestNotifyLogsWhatTheScreenCollapses(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	var lines []string
-	r := &loginReporter{ev: collect(&lines)}
+	r := &bringUpProgress{ev: collect(&lines)}
 	r.notify(state(ipn.NoState))
 	r.notify(state(ipn.NeedsLogin))
 	r.notify(browse("http://evil.example.com/a/x"))
@@ -1009,7 +1009,7 @@ func TestLoginReporterReportsALoginThatIsFailing(t *testing.T) {
 	const text = "You are logged out. The last login error was: register request: http 502"
 
 	var lines []string
-	r := &loginReporter{ev: collect(&lines)}
+	r := &bringUpProgress{ev: collect(&lines)}
 	r.notify(state(ipn.NeedsLogin))
 	r.notify(unhealthyLogin(text))
 
@@ -1039,7 +1039,7 @@ func TestLoginReporterReportsALoginThatIsFailing(t *testing.T) {
 // this attempt's business.
 func TestLoginReporterIgnoresWarningsThatAreNotTheLogin(t *testing.T) {
 	var lines []string
-	r := &loginReporter{ev: collect(&lines)}
+	r := &bringUpProgress{ev: collect(&lines)}
 	r.notify(&ipn.Notify{Health: &health.State{
 		Warnings: map[health.WarnableCode]health.UnhealthyState{
 			"no-derp-home": {WarnableCode: "no-derp-home", Text: "no home DERP"},

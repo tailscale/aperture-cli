@@ -17,18 +17,19 @@ const (
 	bridgeProviderFetchTimeout = 30 * time.Second
 )
 
-// fetchProviders asks an Aperture what it serves. This is the attempt's
-// AskingForModels phase and the verification everything else waits on.
+// fetchProviders asks the Aperture at host what it serves. This request is
+// the attempt's AskingForModels phase, and its success is what verifies the
+// connection.
 func fetchProviders(ctx context.Context, host string, timeout time.Duration) ([]config.ProviderInfo, error) {
 	client := &http.Client{Timeout: timeout}
-	// On the path, not the string: ParseEndpointURL accepts a query, and
-	// appending to "host?token=x" put the models path inside the query.
+	// Append to the path, not the string. ParseEndpointURL accepts a query,
+	// and appending to "host?token=x" put the models path inside the query.
 	base, err := url.Parse(host)
 	if err != nil {
 		return nil, err
 	}
-	url := base.JoinPath("v1", "models").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	target := base.JoinPath("v1", "models").String()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -44,9 +45,9 @@ func fetchProviders(ctx context.Context, host string, timeout time.Duration) ([]
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		detail := strings.TrimSpace(string(body))
 		if detail != "" {
-			return nil, fmt.Errorf("unexpected status %d from %s: %s", resp.StatusCode, url, detail)
+			return nil, fmt.Errorf("unexpected status %d from %s: %s", resp.StatusCode, target, detail)
 		}
-		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, target)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
