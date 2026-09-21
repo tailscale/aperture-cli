@@ -91,7 +91,7 @@ func RemoveFromSettings(g *config.Global, bridge config.Bridge, endpoint config.
 		return err
 	}
 	if endpoint != nil {
-		if err := g.DropEndpoint(endpoint); err != nil {
+		if err := g.RemoveEndpoint(endpoint); err != nil {
 			return err
 		}
 	}

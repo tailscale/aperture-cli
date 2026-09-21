@@ -18,7 +18,7 @@ import (
 	"github.com/tailscale/aperture-cli/internal/profiles"
 	"github.com/tailscale/aperture-cli/internal/tui"
 
-	// Side-effect imports register each client with internal/clients.
+	// Each import registers its client with internal/clients.
 	_ "github.com/tailscale/aperture-cli/internal/clients/claudecode"
 	_ "github.com/tailscale/aperture-cli/internal/clients/codex"
 	_ "github.com/tailscale/aperture-cli/internal/clients/copilot"
@@ -54,7 +54,7 @@ func init() {
 		}
 	}
 
-	// Only fill in VCS info when ldflags haven't already set these values.
+	// ldflags may have set these already. Fill them from VCS info only then.
 	if buildCommit != "unknown" {
 		return
 	}
@@ -114,15 +114,15 @@ func gitCommitHeightInDir(dir string) string {
 	return height
 }
 
-// startRunLog points slog at the run log and returns its closer. Records are
-// written straight through, so the os.Exit paths that skip the close lose
-// nothing; the close is there to be tidy, not to flush.
+// startRunLog points slog at the run log and returns a function that closes
+// it. Records are written straight through, so the os.Exit paths that skip
+// the close lose nothing. The close is tidiness, not a flush.
 //
-// A run that cannot open the file still runs: diagnostics are not worth
-// refusing to start over. It falls back to discarding them rather than to
+// A run that cannot open the file still runs. Diagnostics are not worth
+// refusing to start over. Such a run discards them rather than writing to
 // stderr, because stderr is the TUI's screen.
 //
-// verbose only raises the level. The log is on for every run: the run worth
+// verbose only raises the level. The log is on for every run. The run worth
 // reading back is the one that went wrong, and nobody knows to pass -debug
 // before it does.
 func startRunLog(verbose bool) func() {
@@ -143,12 +143,11 @@ func startRunLog(verbose bool) func() {
 	}
 }
 
-// reportFailure puts a failure back in front of the user. Every diagnostic now
-// goes to the run log, which is the right place for a running TUI and the
-// wrong one for a run that just died: without this, a launch that fails prints
-// nothing and exits 1.
+// reportFailure prints err and the run log path to stderr. Every diagnostic
+// goes to the run log, which is right for a running TUI and wrong for a run
+// that just died. Without this, a failed launch prints nothing and exits 1.
 //
-// stderr is safe at both call sites: the TUI either never started or has
+// stderr is safe at both call sites. The TUI either never started or has
 // already given the terminal back.
 func reportFailure(err error) {
 	fmt.Fprintln(os.Stderr, "aperture:", err)
@@ -157,9 +156,11 @@ func reportFailure(err error) {
 	}
 }
 
-// flagOrEnv lets a dotfile, container or systemd unit make the same selection a
-// typed invocation can. A flag that was passed wins, even empty, so a one-off
-// run can override the shell it started in: -bridge= means no bridge.
+// flagOrEnv returns flag name when it was passed, even empty, and otherwise
+// the environment variable key. The variable lets a dotfile, container or
+// systemd unit make the same selection a typed invocation can. The flag wins
+// so a one-off run can override the shell it started in: -bridge= means no
+// bridge.
 func flagOrEnv(fs *flag.FlagSet, name, key string) string {
 	passed := false
 	fs.Visit(func(f *flag.Flag) { passed = passed || f.Name == name })
@@ -181,9 +182,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Before anything that logs. slog's default handler writes to stderr,
-	// which on a TUI that owns the terminal means a line painted over the
-	// screen, so until this runs every diagnostic is either damage or lost.
+	// Start the log before anything that logs. slog's default handler writes
+	// to stderr, and on a TUI that owns the terminal that paints a line over
+	// the screen. Until this runs every diagnostic is either damage or lost.
 	closeLog := startRunLog(*flagDebug)
 	defer closeLog()
 
@@ -198,8 +199,9 @@ func main() {
 	// Register Claude Desktop on supported platforms (darwin, windows).
 	profiles.RegisterIfSupported()
 
-	// Before the TUI takes the terminal, so a URL we cannot use exits non-zero
-	// instead of painting an error the script that passed it will never see.
+	// Resolve the flags before the TUI takes the terminal. A URL we cannot use
+	// then exits non-zero instead of painting an error the script that passed
+	// it will never see.
 	start, err := config.EndpointFromFlags(g, flagOrEnv(flag.CommandLine, "endpoint", "APERTURE_ENDPOINT"), flagOrEnv(flag.CommandLine, "bridge", "APERTURE_BRIDGE"))
 	if err != nil {
 		slog.Error("resolving the endpoint to open on", "err", err)

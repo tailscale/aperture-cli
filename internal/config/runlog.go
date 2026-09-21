@@ -5,18 +5,19 @@ import (
 	"path/filepath"
 )
 
-// runLogCap is the size the run log is allowed to reach before the next run
-// starts it over. A connect attempt writes a few hundred bytes, so this holds
-// a long history of them and still cannot grow without bound on a box nobody
+// runLogCap bounds the run log. The next run starts the file over once it
+// passes this size. A connect attempt writes a few hundred bytes, so the cap
+// holds a long history and still cannot grow without bound on a box nobody
 // prunes.
 //
-// Truncated at a cap; rotate if anyone ever needs the older runs.
+// The file is truncated, not rotated. Rotate if anyone ever needs the older
+// runs.
 const runLogCap = 2 << 20
 
-// RunLogPath returns the file every run writes its diagnostics to. It sits
-// beside the settings and bridge state rather than in a temp dir, because the
-// question it answers ("what was the last run waiting on?") gets asked after a
-// reboot as often as before one.
+// RunLogPath returns the file every run writes its diagnostics to. The file
+// sits beside the settings and bridge state rather than in a temp dir. The
+// question it answers ("what was the last run waiting on?") gets asked after
+// a reboot as often as before one.
 func RunLogPath() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

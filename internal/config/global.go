@@ -5,34 +5,33 @@ import (
 	"strings"
 )
 
-// Global is the live mutable app-level state threaded through the TUI and
-// every client package. It holds the current Aperture endpoint, the user's
-// persisted settings, the last-launch record, and the provider list fetched
-// from the active endpoint. Mutator methods persist to disk on success.
+// Global holds the live app state the TUI and every client package share:
+// the current Aperture URL, the user's saved settings, the last-launch record
+// and the providers fetched from the active endpoint. Every mutator method
+// writes to disk before it changes the in-memory copy.
 type Global struct {
-	// ApertureHost is the currently active Aperture endpoint URL.
+	// ApertureHost is the URL clients send requests to right now.
 	ApertureHost string
 
-	// Settings is the persisted user configuration (endpoint list, YOLO mode).
+	// Settings holds the saved user configuration.
 	Settings Settings
 
-	// LastLaunch is the persisted record of the last successful client launch.
+	// LastLaunch records the last successful client launch.
 	LastLaunch LaunchState
 
-	// Providers is the provider-level view aggregated from the active
-	// endpoint's /v1/models response.
-	// Populated by the TUI's preflight after a successful check.
+	// Providers lists the providers the active endpoint answered /v1/models
+	// with. The TUI's preflight fills it after a successful check.
 	Providers []ProviderInfo
 
-	// Debug enables bridge diagnostics and verbose stderr dumps of env/args
-	// before each launch. Not persisted; set from the --debug flag.
+	// Debug turns on bridge diagnostics and dumps env and args to stderr
+	// before each launch. Not saved; set from the --debug flag.
 	Debug bool
 }
 
-// Load reads Settings and LaunchState from disk and returns a populated
-// Global. The active ApertureHost is the first endpoint if any are configured,
-// otherwise DefaultLocation. Providers is left empty for the TUI to populate
-// after its preflight.
+// Load reads Settings and LaunchState from disk and returns a Global.
+// ApertureHost starts as the first configured endpoint, or DefaultLocation
+// when there is none. Providers stays empty until the TUI's preflight fills
+// it.
 func Load() (*Global, error) {
 	s, err := LoadSettings()
 	if err != nil {
@@ -53,14 +52,14 @@ func Load() (*Global, error) {
 	}, nil
 }
 
-// SetYolo toggles YOLO mode and persists the new setting.
+// SetYolo sets YOLO mode and saves it.
 func (g *Global) SetYolo(on bool) error {
 	g.Settings.YoloMode = on
 	return SaveSettings(g.Settings)
 }
 
-// ActiveEndpoint returns the persisted endpoint currently selected by the
-// user. The runtime ApertureHost may differ for bridge endpoints because it
+// ActiveEndpoint returns the saved endpoint the user selected. ApertureHost
+// can differ from its URL for a bridged endpoint, because ApertureHost then
 // points at the local reverse proxy.
 func (g *Global) ActiveEndpoint() Endpoint {
 	if len(g.Settings.Endpoints) == 0 {
@@ -69,10 +68,10 @@ func (g *Global) ActiveEndpoint() Endpoint {
 	return g.Settings.Endpoints[0]
 }
 
-// SetActiveEndpoint rotates the endpoint to the front of the endpoint list
-// (adding it if missing), updates ApertureHost to the endpoint URL, and
-// persists. replacing is the original endpoint of a verified URL edit, removed
-// in the same write. Bridge activation later rewrites ApertureHost to localhost.
+// SetActiveEndpoint moves ep to the front of the endpoint list, adding it if
+// missing, sets ApertureHost to its URL and saves. replacing is the original
+// of a verified URL edit and goes in the same write; pass nil otherwise.
+// Bridge activation later rewrites ApertureHost to the local proxy.
 func (g *Global) SetActiveEndpoint(ep Endpoint, replacing Endpoint) error {
 	eps := []Endpoint{ep}
 	for _, existing := range g.Settings.Endpoints {
@@ -90,14 +89,14 @@ func (g *Global) SetActiveEndpoint(ep Endpoint, replacing Endpoint) error {
 	return nil
 }
 
-// SetApertureHost rotates the direct URL to the front of the endpoint list
-// (adding it if missing), updates ApertureHost, and persists.
+// SetApertureHost makes the direct endpoint at url active. See
+// SetActiveEndpoint.
 func (g *Global) SetApertureHost(url string) error {
 	return g.SetActiveEndpoint(Direct(url), nil)
 }
 
-// UpsertEndpoint appends the endpoint to the endpoint list if not already present,
-// without changing which endpoint is active, and persists.
+// UpsertEndpoint appends ep to the endpoint list when it is not already
+// there and saves. The active endpoint does not change.
 func (g *Global) UpsertEndpoint(ep Endpoint) error {
 	for _, existing := range g.Settings.Endpoints {
 		if existing == ep {
@@ -113,8 +112,8 @@ func (g *Global) UpsertEndpoint(ep Endpoint) error {
 	return nil
 }
 
-// ReplaceEndpoint replaces old with next in place and persists the result.
-// It does not change which endpoint is active unless old is already active.
+// ReplaceEndpoint puts next where old was and saves. The active endpoint
+// changes only when old was the active one.
 func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
 	eps := append([]Endpoint(nil), g.Settings.Endpoints...)
 	oldIdx := -1
@@ -154,10 +153,10 @@ func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
 	return nil
 }
 
-// RemoveEndpoint deletes the endpoint at idx and persists. The active endpoint
-// is kept pointing at index 0 after removal; callers are responsible for
-// re-running preflight if the active endpoint changed.
-func (g *Global) RemoveEndpoint(idx int) error {
+// removeEndpointAt deletes the endpoint at idx and saves. Index 0 stays the
+// active endpoint, so removing index 0 promotes the next one. Callers rerun
+// preflight when the active endpoint changed.
+func (g *Global) removeEndpointAt(idx int) error {
 	if idx < 0 || idx >= len(g.Settings.Endpoints) {
 		return nil
 	}
@@ -176,20 +175,21 @@ func (g *Global) RemoveEndpoint(idx int) error {
 	return nil
 }
 
-// DropEndpoint removes ep from the list unless it is the active endpoint,
-// which is the connection the user falls back to. An endpoint not in the list
-// is not an error.
-func (g *Global) DropEndpoint(ep Endpoint) error {
+// RemoveEndpoint removes ep from the list and saves. The active endpoint is
+// never dropped: it is the connection the user falls back to. An endpoint
+// not in the list is not an error.
+func (g *Global) RemoveEndpoint(ep Endpoint) error {
 	for i, existing := range g.Settings.Endpoints {
 		if i == 0 || existing != ep {
 			continue
 		}
-		return g.RemoveEndpoint(i)
+		return g.removeEndpointAt(i)
 	}
 	return nil
 }
 
-// AddBridge creates, saves, and returns a bridge with a generated stable ID.
+// AddBridge creates a bridge named name with a generated ID, saves it and
+// returns it.
 func (g *Global) AddBridge(name string) (Bridge, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -209,8 +209,8 @@ func (g *Global) AddBridge(name string) (Bridge, error) {
 	return p, nil
 }
 
-// SetBridgeTailnet records the tailnet a bridge logged in to and persists it.
-// An unknown bridge is not an error: the user may have deleted it while the
+// SetBridgeTailnet records the tailnet bridge id logged in to and saves. An
+// unknown bridge is not an error. The user may have deleted it while the
 // connection that reported the name was still coming up.
 func (g *Global) SetBridgeTailnet(id, tailnet string) error {
 	for i, p := range g.Settings.Bridges {
@@ -229,7 +229,8 @@ func (g *Global) SetBridgeTailnet(id, tailnet string) error {
 	return nil
 }
 
-// RemoveBridge deletes a bridge if no endpoint still references it.
+// RemoveBridge deletes bridge id and saves. It refuses while an endpoint
+// still connects through the bridge.
 func (g *Global) RemoveBridge(id string) error {
 	for _, ep := range g.Settings.Endpoints {
 		if ep, ok := ep.(BridgeEndpoint); ok && ep.BridgeID() == id {
@@ -252,7 +253,7 @@ func (g *Global) RemoveBridge(id string) error {
 	return nil
 }
 
-// Bridge returns the configured bridge with id.
+// Bridge returns the configured bridge with id, and whether one exists.
 func (g *Global) Bridge(id string) (Bridge, bool) {
 	for _, p := range g.Settings.Bridges {
 		if p.ID == id {
@@ -262,7 +263,8 @@ func (g *Global) Bridge(id string) (Bridge, bool) {
 	return Bridge{}, false
 }
 
-// RecordLaunch stores the launch record to disk and updates the in-memory copy.
+// RecordLaunch stamps s with the active endpoint, saves it and keeps it as
+// LastLaunch.
 func (g *Global) RecordLaunch(s LaunchState) error {
 	ep := g.ActiveEndpoint()
 	s.LastEndpointURL = ep.URL()
@@ -273,8 +275,8 @@ func (g *Global) RecordLaunch(s LaunchState) error {
 	return SaveState(s)
 }
 
-// Provider returns the ProviderInfo for id, or a zero value and false if no
-// such provider is in g.Providers.
+// Provider returns the ProviderInfo for id, or a zero value and false when
+// g.Providers has no such provider.
 func (g *Global) Provider(id string) (ProviderInfo, bool) {
 	for _, p := range g.Providers {
 		if p.ID == id {

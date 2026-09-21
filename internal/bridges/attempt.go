@@ -246,7 +246,7 @@ func (a *Attempt) Abandon(g *config.Global) error {
 	if a == nil || !a.ephemeral {
 		return nil
 	}
-	if err := g.DropEndpoint(a.Endpoint); err != nil {
+	if err := g.RemoveEndpoint(a.Endpoint); err != nil {
 		return err
 	}
 	a.ephemeral = false

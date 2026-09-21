@@ -22,7 +22,7 @@ func settingsGlobal(t *testing.T, s config.Settings) (*config.Global, string) {
 	return &config.Global{Settings: s}, filepath.Join(dir, "aperture")
 }
 
-// A failed DropEndpoint has to leave the attempt still ephemeral: otherwise
+// A failed RemoveEndpoint has to leave the attempt still ephemeral: otherwise
 // the candidate it wrote stays in settings and nothing will ever take it out.
 func TestAbandonStaysEphemeralWhenTheDropFails(t *testing.T) {
 	g, settingsDir := settingsGlobal(t, config.Settings{Endpoints: []config.Endpoint{config.Direct("http://ai")}})

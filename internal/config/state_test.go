@@ -239,7 +239,7 @@ func TestGlobal_RemoveInactiveEndpointPreservesRuntimeHost(t *testing.T) {
 			config.Bridged("http://candidate", "bridge-fedcba"),
 		}},
 	}
-	if err := g.RemoveEndpoint(1); err != nil {
+	if err := g.RemoveEndpoint(config.Bridged("http://candidate", "bridge-fedcba")); err != nil {
 		t.Fatal(err)
 	}
 	if g.ApertureHost != "http://127.0.0.1:12345" {

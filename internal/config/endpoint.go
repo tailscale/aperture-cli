@@ -7,33 +7,33 @@ import (
 	"strings"
 )
 
-// DefaultLocation is the well-known Aperture location. It is the first
-// candidate every connection attempt tries, direct or bridged, and the
-// fallback when the user has no saved settings.
+// DefaultLocation is the well-known Aperture URL. Every connection attempt,
+// direct or bridged, tries it first. A user with no saved settings starts
+// here.
 const DefaultLocation = "http://ai"
 
-// Endpoint is a remote Aperture and the way to it. There are two kinds and no
-// third: a DirectEndpoint the host reaches itself, and a BridgeEndpoint
-// reached through a Bridge's Machine. Values are comparable, so two Endpoints
-// are the same when == says so.
+// Endpoint names a remote Aperture and how to reach it. Two kinds exist and
+// no third. A DirectEndpoint is reached by the host itself. A BridgeEndpoint
+// is reached through a Bridge's Machine. Values are comparable, so two
+// Endpoints are the same when == says so.
 type Endpoint interface {
 	URL() string
-	// WithURL is the same way to a different Aperture: an edit or an inline
-	// override keeps its Bridge.
+	// WithURL returns the same kind of Endpoint pointed at a different URL.
+	// An edit or an inline override keeps its Bridge.
 	WithURL(url string) Endpoint
 	endpoint()
 }
 
-// DirectEndpoint is an Aperture the host reaches over its own network.
+// DirectEndpoint reaches an Aperture over the host's own network.
 type DirectEndpoint struct{ url string }
 
-// BridgeEndpoint is an Aperture reached through the Machine of one Bridge.
+// BridgeEndpoint reaches an Aperture through the Machine of one Bridge.
 type BridgeEndpoint struct{ url, bridgeID string }
 
-// Direct is the Endpoint for an Aperture at url reached without a Bridge.
+// Direct returns the Endpoint that reaches url without a Bridge.
 func Direct(url string) DirectEndpoint { return DirectEndpoint{url: url} }
 
-// Bridged is the Endpoint for an Aperture at url reached through bridgeID.
+// Bridged returns the Endpoint that reaches url through bridgeID.
 func Bridged(url, bridgeID string) BridgeEndpoint {
 	return BridgeEndpoint{url: url, bridgeID: bridgeID}
 }
@@ -47,19 +47,19 @@ func (e BridgeEndpoint) BridgeID() string            { return e.bridgeID }
 func (e BridgeEndpoint) WithURL(url string) Endpoint { return Bridged(url, e.bridgeID) }
 func (e BridgeEndpoint) endpoint()                   {}
 
-// Bridge is an embedded tsnet node used to reach Aperture without requiring
-// Tailscale to run on the host.
+// Bridge configures an embedded tsnet node. The node reaches Aperture without
+// Tailscale running on the host.
 type Bridge struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// Tailnet is the network the node logged in to, recorded after a
-	// successful connection so the connection picker can say which tailnet a
-	// bridge reaches before it is started again.
+	// Tailnet names the tailnet the node last logged in to. Commit records it
+	// after a successful connection, so the connection picker can name the
+	// tailnet before the node starts again.
 	Tailnet string `json:"tailnet,omitempty"`
 }
 
-// ParseEndpointURL turns user input into the URL an Endpoint is made from. A
-// bare host is assumed to be http, since Aperture is reached over the tailnet.
+// ParseEndpointURL turns user input into an Endpoint URL. A bare host gets
+// http, since Aperture is reached over the tailnet.
 func ParseEndpointURL(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if !strings.Contains(value, "://") {
@@ -72,8 +72,8 @@ func ParseEndpointURL(value string) (string, error) {
 	return strings.TrimRight(value, "/"), nil
 }
 
-// endpointRecord is how an Endpoint is written to settings.json: one shape for
-// both kinds, the kind told by whether bridgeId is present. The file predates
+// endpointRecord is the settings.json form of an Endpoint. Both kinds share
+// one shape, and bridgeId being present tells them apart. The file predates
 // the two types and is not changing under existing users.
 type endpointRecord struct {
 	URL      string `json:"url"`
@@ -101,8 +101,9 @@ func (r endpointRecord) endpoint() Endpoint {
 func (e DirectEndpoint) MarshalJSON() ([]byte, error) { return json.Marshal(recordOf(e)) }
 func (e BridgeEndpoint) MarshalJSON() ([]byte, error) { return json.Marshal(recordOf(e)) }
 
-// endpointList is the settings field: a list whose elements are an interface,
-// which encoding/json cannot decode without being told the concrete types.
+// endpointList holds the Endpoints field of Settings. Its elements are an
+// interface, and encoding/json cannot decode those without being told the
+// concrete types.
 type endpointList []Endpoint
 
 func (l *endpointList) UnmarshalJSON(data []byte) error {
