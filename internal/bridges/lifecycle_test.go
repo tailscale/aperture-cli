@@ -312,3 +312,54 @@ func TestDestroySkipsABridgeThatNeverStarted(t *testing.T) {
 		t.Fatalf("Destroy: %v", err)
 	}
 }
+
+// The removal's wait has to bound cleanup too. Logout takes the context, but
+// a node.Close that hangs after it would hold the removal past its deadline
+// and the TUI with it. The Machine stays held until cleanup finishes, so the
+// next operation on it waits rather than opening the state directory under a
+// close still running.
+func TestDestroyReturnsAtTheDeadlineWhileCloseHangs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
+	stateDir(t, bridge.ID)
+	n := &pendingNode{fakeNode: &fakeNode{}, closing: make(chan struct{}), releaseClose: make(chan struct{})}
+	m := NewMachines(false)
+	nodes := 0
+	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
+		// The hanging node once; the reopen after it gets an ordinary one.
+		nodes++
+		if nodes == 1 {
+			return n
+		}
+		return &fakeNode{status: tailnetStatus("ai.example.ts.net.", "100.64.0.2")}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- destroyMachine(m, ctx, bridge, nil) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Destroy = %v, want the deadline", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Destroy did not return at its deadline while Close hung")
+	}
+
+	// Still held: a reopen waits for the close to finish.
+	opened := make(chan error, 1)
+	go func() { _, err := activateMachine(m, context.Background(), bridge, "http://ai", nil); opened <- err }()
+	select {
+	case err := <-opened:
+		t.Fatalf("Open ran while the destroy's close was still hanging: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(n.releaseClose)
+	select {
+	case <-opened:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Open never ran after the close finished")
+	}
+	m.Close()
+}

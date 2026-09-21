@@ -261,6 +261,12 @@ func (mc *Machine) LeaveTailnet(ctx context.Context, emit func(connection.Event)
 //
 // The state directory goes last and only on success: it holds the node key,
 // which is what a later attempt would need to deregister the device.
+//
+// Returns when the work is done or ctx ends, whichever is first. Logout takes
+// ctx but the node's Close does not, and a close that hangs must not hold the
+// caller past its deadline. The Machine stays held until the work finishes,
+// so the next operation waits rather than opening the state directory under a
+// close still running.
 func (mc *Machine) Destroy(ctx context.Context, emit func(connection.Event)) error {
 	stateDir, err := config.BridgeStateDir(mc.bridge.ID)
 	if err != nil {
@@ -271,7 +277,28 @@ func (mc *Machine) Destroy(ctx context.Context, emit func(connection.Event)) err
 	if err != nil {
 		return err
 	}
-	defer mc.end()
+	done := make(chan error, 1)
+	go func() {
+		defer mc.end()
+		done <- mc.destroyHeld(ctx, stateDir, ev)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		// end cancels ctx right after the result is sent, so a result that
+		// is already there wins over the cancellation it caused.
+		select {
+		case err := <-done:
+			return err
+		default:
+			return ctx.Err()
+		}
+	}
+}
+
+// destroyHeld is Destroy's work, run with the Machine held.
+func (mc *Machine) destroyHeld(ctx context.Context, stateDir string, ev events) error {
 	if mc.node == nil && !HasMachine(mc.bridge.ID) {
 		mc.setTailnet("")
 		return nil
