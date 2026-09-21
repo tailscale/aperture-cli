@@ -45,7 +45,7 @@ type Machine struct {
 	// node: idle after a logout, or never started.
 	node   tailnetNode
 	routes map[string]*Route
-	ev     *liveEvents
+	ev     *eventRelay
 }
 
 func newMachine(bridge config.Bridge, ms *Machines) *Machine {
@@ -54,7 +54,7 @@ func newMachine(bridge config.Bridge, ms *Machines) *Machine {
 		of:     ms,
 		turn:   make(chan struct{}, 1),
 		routes: make(map[string]*Route),
-		ev:     &liveEvents{},
+		ev:     &eventRelay{},
 	}
 }
 
@@ -143,7 +143,7 @@ func (mc *Machine) Open(ctx context.Context, emit func(connection.Event)) error 
 	}
 	defer mc.end()
 	if mc.node != nil {
-		mc.ev.use(ev)
+		mc.ev.forwardTo(ev)
 		return nil
 	}
 	if err := mc.initNode(ev); err != nil {
@@ -192,7 +192,7 @@ func (mc *Machine) RouteTo(ctx context.Context, remoteURL string, emit func(conn
 	if mc.node == nil {
 		return nil, fmt.Errorf("bridge %s is not open", mc.bridge.Name)
 	}
-	mc.ev.use(ev)
+	mc.ev.forwardTo(ev)
 
 	// Reported here for a reused Machine too, which would otherwise say
 	// nothing while the first dial waits for the target to appear in its
@@ -339,7 +339,7 @@ func (mc *Machine) Close() error {
 // initNode constructs a node without waiting for login. Called with the turn
 // held; only Open follows it with BringUp.
 func (mc *Machine) initNode(ev events) error {
-	mc.ev.use(ev)
+	mc.ev.forwardTo(ev)
 	if mc.node != nil {
 		return nil
 	}

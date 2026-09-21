@@ -9,40 +9,45 @@ import (
 	"github.com/tailscale/aperture-cli/internal/connection"
 )
 
-// liveEvents points a node's long-lived reporting at whichever connection is
-// using it now. Nodes and proxies outlive the connection that built them, and
-// closures that captured that connection's sink went on writing to a channel
+// eventRelay forwards a Machine's events to the attempt using the Machine
+// now. The node and its proxies outlive the attempt that built them, and a
+// closure that captured the first attempt's sink kept writing to a channel
 // nobody read, losing every later dial failure and proxy error.
 //
-// Nothing clears it when a connection ends: a finished sink discards what it is
-// given, and a clear needs a lifecycle hook only the Attempt can own.
-type liveEvents struct {
+// Nothing clears the relay when an attempt ends. A finished sink discards what
+// it is given, and clearing would need a lifecycle hook only the Attempt
+// could own.
+type eventRelay struct {
 	mu sync.Mutex
-	ev events
+	to events
 }
 
-func (l *liveEvents) use(ev events) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.ev = ev
+// forwardTo makes ev the current recipient.
+func (r *eventRelay) forwardTo(ev events) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.to = ev
 }
 
-// emit has the events signature, so callers keep note and notef.
-func (l *liveEvents) emit(e connection.Event) {
-	l.mu.Lock()
-	ev := l.ev
-	l.mu.Unlock()
+// emit has the events signature, so events(r.emit) gives callers note and
+// notef.
+func (r *eventRelay) emit(e connection.Event) {
+	r.mu.Lock()
+	ev := r.to
+	r.mu.Unlock()
 	if ev != nil {
 		ev(e)
 	}
 }
 
-// events is where a bridge reports what it is doing. This package translates
-// the tailnet's vocabulary into it and publishes nothing else, so no caller has
-// to recover meaning by matching prose from inside a vendored package.
+// events receives what a bridge reports: the phase it entered, the login
+// link it needs visited, or a note for the user. This package translates
+// tsnet's vocabulary into connection.Event and publishes nothing else, so no
+// caller has to match log lines from a vendored package.
 type events func(connection.Event)
 
-// sink returns a usable events, so callers that want none can pass nil.
+// sink wraps emit, which may be nil, as an events that also writes to the
+// run log.
 func sink(emit func(connection.Event)) events {
 	return func(e connection.Event) {
 		logEvent(e)
@@ -52,9 +57,9 @@ func sink(emit func(connection.Event)) events {
 	}
 }
 
-// logEvent copies a connection event into the run log. The connect screen dies
-// with the process, and the run anyone wants to read back is the one that was
-// killed halfway through. Notes are debug: under -debug they carry tsnet's
+// logEvent writes an event to the run log. The connect screen dies with the
+// process, and the run anyone wants to read back is the one that was killed
+// halfway through. Notes log at debug: under -debug they carry tsnet's
 // backend logger, and a phase is worth reading without wading through that.
 func logEvent(e connection.Event) {
 	switch {
@@ -67,8 +72,9 @@ func logEvent(e connection.Event) {
 	}
 }
 
-// Backend diagnostics can repeat authorization capabilities. Keep the link in
-// the interactive event only; even debug logs are routinely shared for support.
+// Backend diagnostics can repeat the login link, which authorizes a device.
+// The link stays in the interactive event only: even debug logs get shared
+// for support.
 var diagnosticURL = regexp.MustCompile(`(?i)https?://\S+`)
 
 func redactDiagnostic(text string) string {
@@ -80,9 +86,9 @@ func (e events) notef(format string, args ...any)        { e(connection.Notef(fo
 func (e events) enter(p connection.Phase)                { e(connection.Entered(p)) }
 func (e events) loginRequired(link connection.LoginLink) { e(connection.LoginRequired(link)) }
 
-// redactURL is the part of an endpoint URL safe for the run log: scheme and
-// host. ParseEndpointURL accepts userinfo and a query, and a run log is the
-// file people share when asking for help.
+// redactURL keeps only the scheme and host. ParseEndpointURL accepts userinfo
+// and a query, and the run log is the file people share when asking for
+// help.
 func redactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
