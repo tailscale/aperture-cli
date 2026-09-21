@@ -88,6 +88,12 @@ A bridge is on one tailnet at a time. `Switch tailnet` logs it out, which remove
 
 If verification fails, the endpoint remains configured for retry or editing, and any previous working endpoint remains active.
 
+### Concurrent sessions
+
+Each aperture process on a bridge is its own device on the tailnet. The first process uses the bridge's original identity; each additional one registers a numbered sibling (`aperture-cli-<bridge>-2` and up). Sharing one identity would let the control plane hand the session to whichever process registered last, silently cutting off the others.
+
+A fresh device needs one login. Set `TS_AUTHKEY` to a reusable auth key and new devices authorize without the browser; devices already registered keep their credentials on disk and never consult the key again. The key decides which tailnet a fresh device joins, so use a key from the tailnet your Aperture is on.
+
 ### Flags
 
 | Flag | Environment | Description |
