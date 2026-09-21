@@ -15,6 +15,8 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HOME", tmp)
 	os.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+	// os.UserConfigDir reads APPDATA on Windows and neither of the above.
+	os.Setenv("APPDATA", tmp+"/AppData")
 	code := m.Run()
 	os.RemoveAll(tmp)
 	os.Exit(code)
