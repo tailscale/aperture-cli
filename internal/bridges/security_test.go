@@ -173,3 +173,43 @@ func TestRunLogOmitsLoginCapabilities(t *testing.T) {
 		}
 	}
 }
+
+// A bare name that is not in this Machine's peer map is not handed to tsnet
+// to resolve. Its resolver falls through to the host resolver, which on a
+// machine already on another tailnet answers with that tailnet's node of the
+// same name, and the five second wait only delayed that. A name with a dot
+// cannot be mistaken for a peer alias, so a subnet router or the tailnet's
+// own DNS may still serve it.
+func TestDialRefusesAnUnknownShortName(t *testing.T) {
+	node := &fakeNode{status: tailnetStatus("other.work-tail.ts.net.", "100.64.0.7")}
+	_, _, err := dialViaNode(context.Background(), node, "tcp", "ai:80", sink(nil), 0, 0)
+	if err == nil {
+		t.Fatal("dial of an unknown short name succeeded")
+	}
+	if dialed := node.dialedAddrs(); len(dialed) != 0 {
+		t.Errorf("short name handed to tsnet: dialed %v", dialed)
+	}
+
+	node.dialErr = errors.New("no route")
+	_, _, err = dialViaNode(context.Background(), node, "tcp", "db.internal.example:5432", sink(nil), 0, 0)
+	if err == nil || !errors.Is(err, node.dialErr) {
+		t.Fatalf("qualified name err = %v, want the node's own dial", err)
+	}
+	if dialed := node.dialedAddrs(); len(dialed) != 1 || dialed[0] != "db.internal.example:5432" {
+		t.Errorf("qualified name dialed %v, want it resolved the way tsnet would", dialed)
+	}
+}
+
+// The run log is the file people share for help. An endpoint URL can carry
+// userinfo and a query, so the log gets the origin and nothing else.
+func TestRedactURLKeepsOnlyTheOrigin(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://user:password@ai.example.ts.net:8443/v1?token=secret": "https://ai.example.ts.net:8443",
+		"http://ai":        "http://ai",
+		"not a url at all": "[redacted URL]",
+	} {
+		if got := redactURL(raw); got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

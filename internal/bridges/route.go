@@ -99,7 +99,7 @@ func (mc *Machine) openRoute(target *url.URL) (*Route, error) {
 	}
 	proxy.Transport = transport
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		ev.notef("Bridge proxy error: target=%s path=%s error=%T: %v", target.Redacted(), r.URL.Path, err, err)
+		ev.notef("Bridge proxy error: target=%s path=%s error=%T: %v", redactURL(target.String()), r.URL.Path, err, err)
 		http.Error(w, "bridge proxy error: "+err.Error(), http.StatusBadGateway)
 	}
 
