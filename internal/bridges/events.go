@@ -2,6 +2,7 @@ package bridges
 
 import (
 	"log/slog"
+	"net/url"
 	"regexp"
 	"sync"
 
@@ -78,3 +79,14 @@ func (e events) note(text string)                 { e(connection.Note(text)) }
 func (e events) notef(format string, args ...any) { e(connection.Notef(format, args...)) }
 func (e events) enter(p connection.Phase)         { e(connection.Entered(p)) }
 func (e events) login(link connection.LoginLink)  { e(connection.Login(link)) }
+
+// redactURL is the part of an endpoint URL safe for the run log: scheme and
+// host. ParseEndpointURL accepts userinfo and a query, and a run log is the
+// file people share when asking for help.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "[redacted URL]"
+	}
+	return u.Scheme + "://" + u.Host
+}

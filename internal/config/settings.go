@@ -23,7 +23,7 @@ type Settings struct {
 
 	// Endpoints is the ordered list of Aperture proxy endpoints.
 	// The first entry is used as the active endpoint on startup.
-	Endpoints []Endpoint `json:"endpoints,omitempty"`
+	Endpoints endpointList `json:"endpoints,omitempty"`
 
 	// YoloMode appends each client's skip-permissions args (e.g.
 	// --dangerously-skip-permissions for Claude Code, --yolo for Gemini)
@@ -60,7 +60,7 @@ func LoadSettings() (Settings, error) {
 		return Settings{}, fmt.Errorf("parsing settings: %w", err)
 	}
 	if len(s.Endpoints) == 0 {
-		s.Endpoints = []Endpoint{{URL: DefaultLocation}}
+		s.Endpoints = []Endpoint{Direct(DefaultLocation)}
 	}
 	return s, nil
 }
@@ -83,7 +83,7 @@ func SaveSettings(s Settings) error {
 
 func defaultSettings() Settings {
 	return Settings{
-		Endpoints: []Endpoint{{URL: DefaultLocation}},
+		Endpoints: []Endpoint{Direct(DefaultLocation)},
 	}
 }
 

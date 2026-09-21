@@ -44,7 +44,7 @@ func Load() (*Global, error) {
 	}
 	host := DefaultLocation
 	if len(s.Endpoints) > 0 {
-		host = s.Endpoints[0].URL
+		host = s.Endpoints[0].URL()
 	}
 	return &Global{
 		ApertureHost: host,
@@ -64,7 +64,7 @@ func (g *Global) SetYolo(on bool) error {
 // points at the local reverse proxy.
 func (g *Global) ActiveEndpoint() Endpoint {
 	if len(g.Settings.Endpoints) == 0 {
-		return Endpoint{URL: DefaultLocation}
+		return Direct(DefaultLocation)
 	}
 	return g.Settings.Endpoints[0]
 }
@@ -73,10 +73,10 @@ func (g *Global) ActiveEndpoint() Endpoint {
 // (adding it if missing), updates ApertureHost to the endpoint URL, and
 // persists. replacing is the original endpoint of a verified URL edit, removed
 // in the same write. Bridge activation later rewrites ApertureHost to localhost.
-func (g *Global) SetActiveEndpoint(ep Endpoint, replacing *Endpoint) error {
+func (g *Global) SetActiveEndpoint(ep Endpoint, replacing Endpoint) error {
 	eps := []Endpoint{ep}
 	for _, existing := range g.Settings.Endpoints {
-		if !SameEndpoint(existing, ep) && (replacing == nil || !SameEndpoint(existing, *replacing)) {
+		if existing != ep && existing != replacing {
 			eps = append(eps, existing)
 		}
 	}
@@ -86,21 +86,21 @@ func (g *Global) SetActiveEndpoint(ep Endpoint, replacing *Endpoint) error {
 		return err
 	}
 	g.Settings = next
-	g.ApertureHost = ep.URL
+	g.ApertureHost = ep.URL()
 	return nil
 }
 
 // SetApertureHost rotates the direct URL to the front of the endpoint list
 // (adding it if missing), updates ApertureHost, and persists.
 func (g *Global) SetApertureHost(url string) error {
-	return g.SetActiveEndpoint(Endpoint{URL: url}, nil)
+	return g.SetActiveEndpoint(Direct(url), nil)
 }
 
 // UpsertEndpoint appends the endpoint to the endpoint list if not already present,
 // without changing which endpoint is active, and persists.
 func (g *Global) UpsertEndpoint(ep Endpoint) error {
 	for _, existing := range g.Settings.Endpoints {
-		if SameEndpoint(existing, ep) {
+		if existing == ep {
 			return nil
 		}
 	}
@@ -119,21 +119,21 @@ func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
 	eps := append([]Endpoint(nil), g.Settings.Endpoints...)
 	oldIdx := -1
 	for i, existing := range eps {
-		if !SameEndpoint(existing, old) {
+		if existing != old {
 			continue
 		}
 		oldIdx = i
 		break
 	}
 	if oldIdx < 0 {
-		return fmt.Errorf("endpoint %s is not configured", old.URL)
+		return fmt.Errorf("endpoint %s is not configured", old.URL())
 	}
 	eps[oldIdx] = next
 	deduped := eps[:0]
 	for _, ep := range eps {
 		duplicate := false
 		for _, existing := range deduped {
-			if SameEndpoint(existing, ep) {
+			if existing == ep {
 				duplicate = true
 				break
 			}
@@ -149,7 +149,7 @@ func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
 	}
 	g.Settings = updated
 	if oldIdx == 0 {
-		g.ApertureHost = next.URL
+		g.ApertureHost = next.URL()
 	}
 	return nil
 }
@@ -171,7 +171,7 @@ func (g *Global) RemoveEndpoint(idx int) error {
 	}
 	g.Settings = next
 	if idx == 0 && len(eps) > 0 {
-		g.ApertureHost = eps[0].URL
+		g.ApertureHost = eps[0].URL()
 	}
 	return nil
 }
@@ -181,7 +181,7 @@ func (g *Global) RemoveEndpoint(idx int) error {
 // is not an error.
 func (g *Global) DropEndpoint(ep Endpoint) error {
 	for i, existing := range g.Settings.Endpoints {
-		if i == 0 || !SameEndpoint(existing, ep) {
+		if i == 0 || existing != ep {
 			continue
 		}
 		return g.RemoveEndpoint(i)
@@ -232,8 +232,8 @@ func (g *Global) SetBridgeTailnet(id, tailnet string) error {
 // RemoveBridge deletes a bridge if no endpoint still references it.
 func (g *Global) RemoveBridge(id string) error {
 	for _, ep := range g.Settings.Endpoints {
-		if ep.BridgeID == id {
-			return fmt.Errorf("bridge is used by endpoint %s", ep.URL)
+		if ep, ok := ep.(BridgeEndpoint); ok && ep.BridgeID() == id {
+			return fmt.Errorf("bridge is used by endpoint %s", ep.URL())
 		}
 	}
 	for i, p := range g.Settings.Bridges {
@@ -265,8 +265,10 @@ func (g *Global) Bridge(id string) (Bridge, bool) {
 // RecordLaunch stores the launch record to disk and updates the in-memory copy.
 func (g *Global) RecordLaunch(s LaunchState) error {
 	ep := g.ActiveEndpoint()
-	s.LastEndpointURL = ep.URL
-	s.LastBridgeID = ep.BridgeID
+	s.LastEndpointURL = ep.URL()
+	if ep, ok := ep.(BridgeEndpoint); ok {
+		s.LastBridgeID = ep.BridgeID()
+	}
 	g.LastLaunch = s
 	return SaveState(s)
 }

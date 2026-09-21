@@ -82,7 +82,7 @@ func TestGlobal_RecordLaunchBindsActiveEndpoint(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	g := &config.Global{Settings: config.Settings{Endpoints: []config.Endpoint{
-		{URL: "http://aperture.example.com", BridgeID: "bridge-abcdef"},
+		config.Bridged("http://aperture.example.com", "bridge-abcdef"),
 	}}}
 	if err := g.RecordLaunch(config.LaunchState{LastClientName: "Claude Code"}); err != nil {
 		t.Fatal(err)
@@ -102,8 +102,8 @@ func TestSettings_RoundTrip(t *testing.T) {
 			{ID: "bridge-abcdef", Name: "Work"},
 		},
 		Endpoints: []config.Endpoint{
-			{URL: "http://ai"},
-			{URL: "http://aperture.example.com", BridgeID: "bridge-abcdef"},
+			config.Direct("http://ai"),
+			config.Bridged("http://aperture.example.com", "bridge-abcdef"),
 		},
 		YoloMode: true,
 	}
@@ -115,13 +115,13 @@ func TestSettings_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSettings: %v", err)
 	}
-	if len(got.Endpoints) != 2 || got.Endpoints[0].URL != "http://ai" {
+	if len(got.Endpoints) != 2 || got.Endpoints[0].URL() != "http://ai" {
 		t.Errorf("endpoints = %+v", got.Endpoints)
 	}
 	if len(got.Bridges) != 1 || got.Bridges[0].ID != "bridge-abcdef" {
 		t.Errorf("bridges = %+v", got.Bridges)
 	}
-	if got.Endpoints[1].BridgeID != "bridge-abcdef" {
+	if got.Endpoints[1] != config.Endpoint(config.Bridged("http://aperture.example.com", "bridge-abcdef")) {
 		t.Errorf("bridge endpoint = %+v", got.Endpoints[1])
 	}
 	if !got.YoloMode {
@@ -138,7 +138,7 @@ func TestSettings_MissingFileUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Endpoints) != 1 || got.Endpoints[0].URL != config.DefaultLocation {
+	if len(got.Endpoints) != 1 || got.Endpoints[0].URL() != config.DefaultLocation {
 		t.Errorf("default endpoints = %+v", got.Endpoints)
 	}
 }
@@ -183,9 +183,9 @@ func TestGlobal_SetApertureHost_RotatesToFront(t *testing.T) {
 	g := &config.Global{
 		Settings: config.Settings{
 			Endpoints: []config.Endpoint{
-				{URL: "http://a"},
-				{URL: "http://b"},
-				{URL: "http://c"},
+				config.Direct("http://a"),
+				config.Direct("http://b"),
+				config.Direct("http://c"),
 			},
 		},
 	}
@@ -195,8 +195,8 @@ func TestGlobal_SetApertureHost_RotatesToFront(t *testing.T) {
 	if g.ApertureHost != "http://b" {
 		t.Errorf("ApertureHost = %q", g.ApertureHost)
 	}
-	if g.Settings.Endpoints[0].URL != "http://b" {
-		t.Errorf("front endpoint = %q, want http://b", g.Settings.Endpoints[0].URL)
+	if g.Settings.Endpoints[0].URL() != "http://b" {
+		t.Errorf("front endpoint = %q, want http://b", g.Settings.Endpoints[0].URL())
 	}
 	if len(g.Settings.Endpoints) != 3 {
 		t.Errorf("endpoints len = %d, want 3", len(g.Settings.Endpoints))
@@ -211,15 +211,15 @@ func TestGlobal_SetActiveEndpoint_DistinguishesBridge(t *testing.T) {
 	g := &config.Global{
 		Settings: config.Settings{
 			Endpoints: []config.Endpoint{
-				{URL: "http://ai"},
-				{URL: "http://ai", BridgeID: "bridge-abcdef"},
+				config.Direct("http://ai"),
+				config.Bridged("http://ai", "bridge-abcdef"),
 			},
 		},
 	}
-	if err := g.SetActiveEndpoint(config.Endpoint{URL: "http://ai", BridgeID: "bridge-abcdef"}, nil); err != nil {
+	if err := g.SetActiveEndpoint(config.Bridged("http://ai", "bridge-abcdef"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if g.Settings.Endpoints[0].BridgeID != "bridge-abcdef" {
+	if g.Settings.Endpoints[0] != config.Endpoint(config.Bridged("http://ai", "bridge-abcdef")) {
 		t.Errorf("front endpoint = %+v, want bridge endpoint", g.Settings.Endpoints[0])
 	}
 	if len(g.Settings.Endpoints) != 2 {
@@ -235,8 +235,8 @@ func TestGlobal_RemoveInactiveEndpointPreservesRuntimeHost(t *testing.T) {
 	g := &config.Global{
 		ApertureHost: "http://127.0.0.1:12345",
 		Settings: config.Settings{Endpoints: []config.Endpoint{
-			{URL: "http://active", BridgeID: "bridge-abcdef"},
-			{URL: "http://candidate", BridgeID: "bridge-fedcba"},
+			config.Bridged("http://active", "bridge-abcdef"),
+			config.Bridged("http://candidate", "bridge-fedcba"),
 		}},
 	}
 	if err := g.RemoveEndpoint(1); err != nil {
@@ -252,8 +252,8 @@ func TestGlobal_ReplaceEndpointDeduplicates(t *testing.T) {
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
-	active := config.Endpoint{URL: "http://active"}
-	candidate := config.Endpoint{URL: "http://candidate"}
+	active := config.Direct("http://active")
+	candidate := config.Direct("http://candidate")
 	g := &config.Global{Settings: config.Settings{Endpoints: []config.Endpoint{active, candidate}}}
 	if err := g.ReplaceEndpoint(candidate, active); err != nil {
 		t.Fatal(err)

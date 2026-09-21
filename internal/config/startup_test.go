@@ -26,25 +26,25 @@ func loadInto(t *testing.T, s config.Settings) *config.Global {
 }
 
 func TestResolveFallsBackToTheSavedOne(t *testing.T) {
-	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{{URL: "http://saved"}}})
+	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{config.Direct("http://saved")}})
 
 	ep, err := config.Startup{}.Resolve(g)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if ep != (config.Endpoint{URL: "http://saved"}) {
+	if ep != (config.Direct("http://saved")) {
 		t.Errorf("endpoint = %+v, want the saved one", ep)
 	}
 }
 
 func TestResolveTakesABareHost(t *testing.T) {
-	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{{URL: "http://saved"}}})
+	g := loadInto(t, config.Settings{Endpoints: []config.Endpoint{config.Direct("http://saved")}})
 
 	ep, err := config.Startup{URL: "aperture.example.com"}.Resolve(g)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if ep != (config.Endpoint{URL: "http://aperture.example.com"}) {
+	if ep != (config.Direct("http://aperture.example.com")) {
 		t.Errorf("endpoint = %+v, want the named one, schemed", ep)
 	}
 }
@@ -59,7 +59,7 @@ func TestResolveGuessesTheLocationForANamedBridge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if ep != (config.Endpoint{URL: config.DefaultLocation, BridgeID: "bridge-abc123"}) {
+	if ep != (config.Bridged(config.DefaultLocation, "bridge-abc123")) {
 		t.Errorf("endpoint = %+v, want %s through the existing bridge", ep, config.DefaultLocation)
 	}
 	if len(g.Settings.Bridges) != 1 {
@@ -79,7 +79,7 @@ func TestResolveCreatesAnUnknownBridge(t *testing.T) {
 	if len(g.Settings.Bridges) != 1 || g.Settings.Bridges[0].Name != "Work" {
 		t.Fatalf("bridges = %+v, want one called Work", g.Settings.Bridges)
 	}
-	if ep.BridgeID != g.Settings.Bridges[0].ID || ep.URL != "http://aperture.example.com" {
+	if ep != config.Endpoint(config.Bridged("http://aperture.example.com", g.Settings.Bridges[0].ID)) {
 		t.Errorf("endpoint = %+v, want the URL through the new bridge", ep)
 	}
 

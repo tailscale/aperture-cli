@@ -66,7 +66,7 @@ func TestEndpointEditCommitsOnlyAfterSuccess(t *testing.T) {
 		t.Error("edit became active before verification")
 	}
 	m.Update(activationResult(t, cmd))
-	if m.g.ActiveEndpoint().URL != srv.URL || m.g.ApertureHost != srv.URL || m.endpointConfigured(old) {
+	if m.g.ActiveEndpoint().URL() != srv.URL || m.g.ApertureHost != srv.URL || m.endpointConfigured(old) {
 		t.Fatalf("verified edit did not replace original: %+v host=%q", m.g.Settings.Endpoints, m.g.ApertureHost)
 	}
 }
@@ -80,8 +80,7 @@ func TestTailnetSwitchInvalidatesSharedConnection(t *testing.T) {
 				withFakeTailscale(t, tsConnected)
 				target := m.g.Settings.Endpoints[1]
 				if shared {
-					m.g.Settings.Endpoints[0].BridgeID = target.BridgeID
-					m.g.Settings.Endpoints[0].URL = "http://first"
+					m.g.Settings.Endpoints[0] = config.Bridged("http://first", target.(config.BridgeEndpoint).BridgeID())
 				}
 				m.g.ApertureHost = "http://127.0.0.1:12345"
 				m.resetStack(m.rootMenu())
@@ -186,7 +185,7 @@ func TestEndpointEditSameCandidateCancellation(t *testing.T) {
 	candidate := m.act.endpoint()
 	m.Update(endpointActivationResult{id: m.act.id, err: fmt.Errorf("temporary failure")})
 	m.promptEditEndpoint(candidate)
-	m.inputOnSave(candidate.URL)
+	m.inputOnSave(candidate.URL())
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.endpointConfigured(candidate) {
 		t.Error("cancelling an unchanged edit retained its temporary candidate")

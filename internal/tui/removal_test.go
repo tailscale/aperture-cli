@@ -19,8 +19,8 @@ import (
 func withFakeDestroy(t *testing.T, fn func(context.Context, config.Bridge) error) {
 	t.Helper()
 	orig := destroyBridge
-	destroyBridge = func(ctx context.Context, _ bridges.Bridging, rem bridges.Removal, _ func(connection.Event)) error {
-		return fn(ctx, rem.Bridge)
+	destroyBridge = func(ctx context.Context, _ *bridges.Machines, b config.Bridge, _ func(connection.Event)) error {
+		return fn(ctx, b)
 	}
 	t.Cleanup(func() { destroyBridge = orig })
 }
@@ -61,7 +61,7 @@ func removeRowResult(t *testing.T, m *model, row connectionRow) tea.Msg {
 func bridgedRow(t *testing.T, m *model) connectionRow {
 	t.Helper()
 	for _, row := range m.connectionRows() {
-		if row.saved && !row.active && row.ep.BridgeID == "bridge-aaaaaa" {
+		if row.saved && !row.active && row.bridge.ID == "bridge-aaaaaa" {
 			return row
 		}
 	}

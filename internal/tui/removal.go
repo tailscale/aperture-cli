@@ -13,74 +13,77 @@ import (
 )
 
 // bridgeRemovedMsg carries the outcome of the tailnet round trip back to the
-// update loop, where the records can be dropped.
+// update loop, where the records can be dropped. endpoint is nil for a bare
+// bridge.
 type bridgeRemovedMsg struct {
-	id      int
-	removal bridges.Removal
-	err     error
+	id       int
+	bridge   config.Bridge
+	endpoint config.Endpoint
+	err      error
 }
 
 // destroyBridge is the tailnet round trip a removal makes. A seam for the
 // tests: pickerModel has no Machines, and a real Destroy would want a tailnet.
-var destroyBridge = func(ctx context.Context, b bridges.Bridging, rem bridges.Removal, emit func(connection.Event)) error {
-	return b.Destroy(ctx, rem, emit)
+var destroyBridge = func(ctx context.Context, machines *bridges.Machines, bridge config.Bridge, emit func(connection.Event)) error {
+	return machines.Destroy(ctx, bridge, emit)
 }
 
 // removeRow deletes what a picker row stands for. Shared by the row's page and
 // the "d" key, which have to agree on what removing a row means.
 func (m *model) removeRow(row connectionRow) menu.Result {
-	rem := bridges.Removal{Bridge: row.bridge}
+	var ep config.Endpoint
 	if row.saved {
-		ep := row.ep
-		rem.Endpoint = &ep
+		ep = row.ep
 	}
-	return m.remove(rem)
+	return m.remove(row.bridge, ep)
 }
 
-// removalFor is the removal a saved endpoint implies, bridge included. The
-// setup guide holds an endpoint rather than a picker row.
-func (m *model) removalFor(ep config.Endpoint) bridges.Removal {
-	rem := bridges.Removal{Endpoint: &ep}
-	rem.Bridge, _ = m.g.Bridge(ep.BridgeID)
-	return rem
+// bridgeOf is the Bridge a saved endpoint is reached through, zero for a
+// direct one. The setup guide holds an endpoint rather than a picker row.
+func (m *model) bridgeOf(ep config.Endpoint) config.Bridge {
+	if bridged, ok := ep.(config.BridgeEndpoint); ok {
+		bridge, _ := m.g.Bridge(bridged.BridgeID())
+		return bridge
+	}
+	return config.Bridge{}
 }
 
 // remove confirms before a removal that takes a device off a tailnet, and
 // otherwise drops the records at once. Every delete in the TUI comes through
 // here: the machine outlives settings, so a site that skips this leaves a
 // device on the user's tailnet that nothing names any more.
-func (m *model) remove(rem bridges.Removal) menu.Result {
-	destroys, err := m.bridging().Destroys(rem)
+func (m *model) remove(bridge config.Bridge, ep config.Endpoint) menu.Result {
+	destroys, err := bridges.DestroysMachine(m.g, bridge, ep)
 	if err != nil {
 		return errResult(err.Error())
 	}
 	if !destroys {
-		if err := m.bridging().Forget(rem, nil); err != nil {
+		if err := bridges.ForgetBridge(m.g, bridge, ep, nil); err != nil {
 			return errResult(err.Error())
 		}
-		return menu.Result{Cmd: m.afterRemoval(rem)}
+		return menu.Result{Cmd: m.afterRemoval(ep)}
 	}
-	return menu.Result{Next: m.removeBridgeMenu(rem)}
+	return menu.Result{Next: m.removeBridgeMenu(bridge, ep)}
 }
 
 // removeBridgeMenu is the confirmation. Removal is irreversible from here and
 // takes a device off the user's tailnet, so the screen names the device by the
 // name the admin console shows it under.
-func (m *model) removeBridgeMenu(rem bridges.Removal) *menu.Menu {
-	preamble := "Bridge " + rem.Bridge.Name + " is the device " + bridges.MachineName(rem.Bridge.ID)
-	if name := m.bridging().Tailnet(rem.Bridge); name != "" {
+func (m *model) removeBridgeMenu(bridge config.Bridge, ep config.Endpoint) *menu.Menu {
+	preamble := "Bridge " + bridge.Name + " is the device " + bridges.MachineName(bridge.ID)
+	if name := m.machines.Tailnet(bridge); name != "" {
 		preamble += " on " + name
 	}
 	preamble += ".\n\nRemoving it logs that device out of the tailnet and discards the login stored on this machine. " +
 		"Connecting through a bridge of this name again is a new device and a new login."
 	return &menu.Menu{
-		Title:    "Remove bridge " + rem.Bridge.Name + "?",
+		Title:    "Remove bridge " + bridge.Name + "?",
 		Preamble: preamble,
 		Items: []menu.MenuItem{
 			{
 				Label:    "Remove",
 				Shortcut: "y",
-				Action:   func() menu.Result { return menu.Result{Cmd: m.destroyBridgeCmd(rem)} },
+				Action:   func() menu.Result { return menu.Result{Cmd: m.destroyBridgeCmd(bridge, ep)} },
 			},
 			{
 				Label:    "Cancel",
@@ -96,7 +99,7 @@ func (m *model) removeBridgeMenu(rem bridges.Removal) *menu.Menu {
 // program already shows slow bridge work and its log tail. The attempt carries
 // no cancel handle: settings still name the device, and abandoning the wait
 // half way through a logout is how the record and the device disagree.
-func (m *model) destroyBridgeCmd(rem bridges.Removal) tea.Cmd {
+func (m *model) destroyBridgeCmd(bridge config.Bridge, ep config.Endpoint) tea.Cmd {
 	m.stopActivation()
 	m.step = stepPreflight
 	m.preflightErr = ""
@@ -107,18 +110,18 @@ func (m *model) destroyBridgeCmd(rem bridges.Removal) tea.Cmd {
 	m.activationSeq++
 	act := &activation{
 		id:      m.activationSeq,
-		label:   "Removing bridge " + rem.Bridge.Name + " ...",
+		label:   "Removing bridge " + bridge.Name + " ...",
 		started: time.Now(),
 		logCh:   ch,
 		logCtx:  ctx,
 	}
 	m.act = act
 	emit := bridgeLogSink(ctx, ch, act.started)
-	bridging := m.bridging()
+	machines := m.machines
 	destroy := func() tea.Msg {
 		defer cancel()
-		err := destroyBridge(ctx, bridging, rem, emit)
-		return bridgeRemovedMsg{id: act.id, removal: rem, err: err}
+		err := destroyBridge(ctx, machines, bridge, emit)
+		return bridgeRemovedMsg{id: act.id, bridge: bridge, endpoint: ep, err: err}
 	}
 	return tea.Batch(destroy, waitBridgeLog(ctx, ch), activationTick(act.id))
 }
@@ -131,17 +134,17 @@ func (m *model) bridgeRemoved(msg bridgeRemovedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.act = nil
 	m.step = stepMenu
-	err := m.bridging().Forget(msg.removal, msg.err)
+	err := bridges.ForgetBridge(m.g, msg.bridge, msg.endpoint, msg.err)
 	var unconfirmed *bridges.Unconfirmed
 	switch {
 	case errors.As(err, &unconfirmed):
-		cmd := m.afterRemoval(msg.removal)
+		cmd := m.afterRemoval(msg.endpoint)
 		m.step = stepError
 		m.errMsg = m.unconfirmedMessage(unconfirmed)
 		return m, cmd
 	case err != nil && errors.Is(err, msg.err):
 		m.step = stepError
-		m.errMsg = "Could not remove bridge " + msg.removal.Bridge.Name + ": " + err.Error() +
+		m.errMsg = "Could not remove bridge " + msg.bridge.Name + ": " + err.Error() +
 			"\n\nThe connection is unchanged. Removing it again retries the logout."
 		return m, nil
 	case err != nil:
@@ -149,7 +152,7 @@ func (m *model) bridgeRemoved(msg bridgeRemovedMsg) (tea.Model, tea.Cmd) {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	return m, m.afterRemoval(msg.removal)
+	return m, m.afterRemoval(msg.endpoint)
 }
 
 // unconfirmedMessage is what the user needs to finish the job by hand: the
@@ -158,7 +161,7 @@ func (m *model) bridgeRemoved(msg bridgeRemovedMsg) (tea.Model, tea.Cmd) {
 func (m *model) unconfirmedMessage(u *bridges.Unconfirmed) string {
 	msg := "Bridge " + u.Bridge.Name + " was removed here, but the tailnet did not confirm within " +
 		u.Wait.String() + ".\n\nThe device " + bridges.MachineName(u.Bridge.ID)
-	if name := m.bridging().Tailnet(u.Bridge); name != "" {
+	if name := m.machines.Tailnet(u.Bridge); name != "" {
 		msg += " may still be on " + name
 	} else {
 		msg += " may still be registered"
@@ -169,8 +172,8 @@ func (m *model) unconfirmedMessage(u *bridges.Unconfirmed) string {
 // afterRemoval puts the user back on a list that no longer shows what they
 // removed. A removal of the endpoint the failure screen is about leaves that
 // screen with nothing to retry, so the root menu takes its place.
-func (m *model) afterRemoval(rem bridges.Removal) tea.Cmd {
-	if rem.Endpoint != nil && m.failedEndpoint != nil && config.SameEndpoint(*m.failedEndpoint, *rem.Endpoint) {
+func (m *model) afterRemoval(ep config.Endpoint) tea.Cmd {
+	if ep != nil && m.failedEndpoint == ep {
 		m.clearEndpointFailure()
 		m.resetStack(m.rootMenu())
 		return tea.ClearScreen

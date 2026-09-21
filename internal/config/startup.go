@@ -31,23 +31,22 @@ func (s Startup) Resolve(g *Global) (Endpoint, error) {
 	// The URL is checked before the bridge is looked up, because the lookup
 	// writes: an invocation that exits with a usage error must not leave a
 	// bridge on disk that the user then has to find and delete.
-	ep := Endpoint{URL: DefaultLocation}
+	location := DefaultLocation
 	if url != "" {
-		parsed, err := ParseEndpoint(url, "")
+		parsed, err := ParseEndpointURL(url)
 		if err != nil {
-			return Endpoint{}, err
+			return nil, err
 		}
-		ep = parsed
+		location = parsed
 	}
 	if name == "" {
-		return ep, nil
+		return Direct(location), nil
 	}
 	bridge, err := s.bridge(g, name)
 	if err != nil {
-		return Endpoint{}, err
+		return nil, err
 	}
-	ep.BridgeID = bridge.ID
-	return ep, nil
+	return Bridged(location, bridge.ID), nil
 }
 
 // bridge creates the named bridge if there is none, which is what makes a first
