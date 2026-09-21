@@ -34,11 +34,12 @@ persistence schema are otherwise unchanged. See [ADR 0004](../adr/0004-contain-c
 
 ## Lifecycle correction contracts
 
-`Global.SetActiveEndpoint(ep Endpoint, replacing *Endpoint) error` atomically
-persists `ep` first, removes duplicate `ep` entries and the optional original,
-then updates in-memory settings. On a write error both settings and the runtime
-host stay unchanged. Normal selection passes nil. The existing JSON schema is
-unchanged; `activation.replaces` is a transient value, never persisted.
+`Global.SetActiveEndpoint(ep Endpoint, replacing Endpoint) error` atomically
+persists `ep` first, removes duplicate `ep` entries and the original when
+`replacing` is not nil, then updates in-memory settings. On a write error both
+settings and the runtime host stay unchanged. Normal selection passes nil. The
+existing JSON schema is unchanged; `activation.replaces` is a transient value,
+never persisted.
 
 `Machine.Open`, `Machine.RouteTo`, `Machine.LeaveTailnet` and `Machine.Destroy`
 each hold the Machine for their whole duration; a caller waiting for it can be
