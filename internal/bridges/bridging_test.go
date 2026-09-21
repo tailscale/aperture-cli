@@ -89,3 +89,20 @@ func modelsServerWithHandler(t *testing.T, check func(*http.Request)) *httptest.
 	t.Cleanup(srv.Close)
 	return srv
 }
+
+// ParseEndpointURL accepts a query, so a saved endpoint can carry one. The
+// models path has to go on the path, not after the query.
+func TestFetchProvidersKeepsTheEndpointQuery(t *testing.T) {
+	srv := modelsServerWithHandler(t, func(r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("token"); got != "x" {
+			t.Errorf("token = %q, want the endpoint's query kept", got)
+		}
+	})
+
+	if _, err := fetchProviders(context.Background(), srv.URL+"?token=x", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+}

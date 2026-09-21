@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,7 +21,13 @@ const (
 // AskingForModels phase and the verification everything else waits on.
 func fetchProviders(ctx context.Context, host string, timeout time.Duration) ([]config.ProviderInfo, error) {
 	client := &http.Client{Timeout: timeout}
-	url := strings.TrimRight(host, "/") + "/v1/models"
+	// On the path, not the string: ParseEndpointURL accepts a query, and
+	// appending to "host?token=x" put the models path inside the query.
+	base, err := url.Parse(host)
+	if err != nil {
+		return nil, err
+	}
+	url := base.JoinPath("v1", "models").String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
