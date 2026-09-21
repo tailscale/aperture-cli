@@ -298,19 +298,21 @@ generated `bridge-<hex>` shape is refused before it can become a hostname.
 ## Removing a Bridge
 
 The one transition no single aggregate owns: a Bridge record and the Machine
-registered for it go together, Machine first (ADR 0002). Three functions in
-`internal/bridges`, named for the nouns they act on, and a Settings rule.
+registered for it go together, Machine first (ADR 0002). Four functions in
+`internal/bridges` and a Settings rule.
 
 | Operation | Runs on | Does |
 |---|---|---|
-| `DestroysMachine(settings, bridge, endpoint)` | update loop | Whether removing the endpoint, or the bare bridge, takes a device off a tailnet: the Bridge's last Endpoint and a Machine that started. An error when it may not go: the active endpoint, or a bare Bridge some Endpoint still reaches through. |
-| `Machines.Destroy(ctx, bridge, emit)` | any goroutine | The bounded logout (ADR 0002 decision 6). Returns `*Unconfirmed` when the wait expires. Writes nothing. |
-| `ForgetBridge(settings, bridge, endpoint, destroyErr)` | update loop | Drops endpoint then bridge, or keeps both when the tailnet refused; an expired wait drops them and returns the `*Unconfirmed`. |
-| `Machines.Tailnet(bridge)` | update loop | What the running Machine reports, else what was saved. |
+| `CheckRemovable(settings, bridge, endpoint)` | update loop | Returns an error when the endpoint, or the bare bridge, cannot be removed: the active endpoint, or a bridge an endpoint still connects through. |
+| `WillDestroyMachine(settings, bridge, endpoint)` | update loop | Reports whether removing the endpoint, or the bare bridge, logs a device out of a tailnet: the bridge started a Machine and no other endpoint connects through it. |
+| `Machines.Destroy(ctx, bridge, emit)` | any goroutine | The bounded logout (ADR 0002 decision 6). Returns an error when the tailnet refuses or does not answer in time. Writes nothing. |
+| `RemoveFromSettings(settings, bridge, endpoint)` | update loop | Deletes the endpoint, then the bridge when nothing connects through it. Called only after `Destroy` returned nil, or when nothing needs destroying. |
+| `Machines.Tailnet(bridge)` | update loop | The tailnet the running Machine reports, else the one saved on the bridge. |
 
-`Unconfirmed` is a removal the tailnet did not confirm within the wait: the
-records are gone and the device may not be. It carries the Bridge so the user
-can be told which device to look for.
+Any failure keeps the records. They are the only thing naming the device, and
+removing the connection again retries the logout. The failure message names
+the device so the user can delete it in the admin console if the retry finds
+nothing to log out.
 
 The split between the goroutine half and the update-loop half is not
 stylistic, here or on ConnectionAttempt. Nothing serializes access to

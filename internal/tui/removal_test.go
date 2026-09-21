@@ -3,10 +3,10 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/bridges"
@@ -201,25 +201,62 @@ func TestBridgesMenuDeleteRefusesAReferencedBridge(t *testing.T) {
 	}
 }
 
-// Point 6 of ADR 0002: the wait is bounded, and what survives it is named.
-func TestDestroyTimeoutRemovesLocallyAndNamesTheDevice(t *testing.T) {
+// A logout the tailnet did not answer in time may or may not have run. The
+// records stay so the user can retry, and the message names the device in
+// case the retry finds nothing left to log out.
+func TestDestroyTimeoutKeepsTheConnectionAndNamesTheDevice(t *testing.T) {
 	m := pickerModel(t)
 	withFakeClients(t, []clients.Client{})
 	startedBridge(t, "bridge-aaaaaa")
-	withFakeDestroy(t, func(_ context.Context, b config.Bridge) error {
-		return &bridges.Unconfirmed{Bridge: b, Wait: 50 * time.Millisecond, Err: context.DeadlineExceeded}
+	withFakeDestroy(t, func(context.Context, config.Bridge) error {
+		return fmt.Errorf("the tailnet did not answer within 50ms: %w", context.DeadlineExceeded)
 	})
 	row := bridgedRow(t, m)
 	m.resetStack(m.endpointsMenu())
 
 	m.Update(removeRowResult(t, m, row))
-	if m.endpointConfigured(row.ep) || hasBridge(m, row.bridge.ID) {
-		t.Errorf("timed-out removal kept local records: %+v", m.g.Settings)
+	if !m.endpointConfigured(row.ep) || !hasBridge(m, row.bridge.ID) {
+		t.Errorf("timed-out removal dropped local records: %+v", m.g.Settings)
 	}
-	for _, want := range []string{bridges.MachineName(row.bridge.ID), "corp.example.com"} {
+	if m.step != stepError {
+		t.Errorf("step = %v, want the timeout reported", m.step)
+	}
+	for _, want := range []string{bridges.MachineName(row.bridge.ID), "corp.example.com", "did not answer"} {
 		if !strings.Contains(m.errMsg, want) {
 			t.Errorf("message %q does not name %q", m.errMsg, want)
 		}
+	}
+}
+
+// Ctrl+C during a removal that then fails must not quit: quitting would take
+// the only message naming the device that may still be on the tailnet off
+// the screen, and exit as if the removal worked.
+func TestQuitDuringFailedRemovalShowsTheFailure(t *testing.T) {
+	m := pickerModel(t)
+	withFakeClients(t, []clients.Client{})
+	startedBridge(t, "bridge-aaaaaa")
+	release := make(chan struct{})
+	withFakeDestroy(t, func(context.Context, config.Bridge) error { <-release; return errors.New("control plane said no") })
+	row := bridgedRow(t, m)
+	m.resetStack(m.endpointsMenu())
+
+	res := m.removeRow(row)
+	_, item := findItem(t, res.Next.Items, "Remove")
+	_, destroy := m.applyResult(item.Action())
+	result := make(chan tea.Msg, 1)
+	go func() { result <- activationResult(t, destroy) }()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	close(release)
+	_, after := m.Update(<-result)
+	if after != nil {
+		t.Error("quit after a removal that failed")
+	}
+	if m.step != stepError || !strings.Contains(m.errMsg, "control plane said no") {
+		t.Errorf("step=%v errMsg=%q, want the failure on screen", m.step, m.errMsg)
+	}
+	if !m.endpointConfigured(row.ep) || !hasBridge(m, row.bridge.ID) {
+		t.Errorf("failed removal dropped local records: %+v", m.g.Settings)
 	}
 }
 

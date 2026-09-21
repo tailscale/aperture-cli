@@ -37,13 +37,14 @@ decide".
    presentation state only.
 4. Removing a Bridge is the one transition no aggregate owns, and it gets
    functions named for the nouns it acts on rather than a process object:
-   `DestroysMachine`, `Machines.Destroy`, `ForgetBridge`. No service type.
+   `CheckRemovable`, `WillDestroyMachine`, `Machines.Destroy`,
+   `RemoveFromSettings`. No service type.
    The first attempt at this was a `Bridging` service and a `Removal` value,
    both names for activities rather than things, and both went in review.
 5. Every operation that waits on the network is split from the one that
    writes settings. `Run` and `Machines.Destroy` may run anywhere and write
-   nothing; `BeginAttempt`, `Commit`, `Abandon`, `DestroysMachine` and
-   `ForgetBridge` run on the update loop.
+   nothing; `BeginAttempt`, `Commit`, `Abandon`, `CheckRemovable`,
+   `WillDestroyMachine` and `RemoveFromSettings` run on the update loop.
 6. `Manager` is deleted. No compatibility wrapper.
 
 ## Consequences

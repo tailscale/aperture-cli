@@ -37,14 +37,17 @@ Destroying the last Bridge reference destroys its Machine.
    display hint, written after verification and cleared before a switch, so it
    is empty for machines that do exist.
 5. Destruction confirms, naming the device and the tailnet.
-6. The wait is bounded, and on timeout the local records go anyway and the
-   user is told which device is still theirs to delete.
+6. The wait is bounded. On timeout the local records stay, the removal is
+   reported as failed and the user is told which device to look for. Removing
+   the connection again retries the logout. Dropping the records on timeout
+   was the first version; it orphaned the login on disk with no bridge left to
+   retry through.
 
 ## Consequences
 
 Delete stops being instant and infallible: logout is a control-plane round
 trip, and that round trip was hanging past 90s on 2026-09-17. Point 6 is the
-concession, so "removed" will sometimes mean "removed locally".
+concession: a removal can fail and need a second try.
 
 Removal is irreversible from the CLI, and ACL rules naming the old device stop
 matching. Leftover devices are unpublished behaviour someone may depend on,
