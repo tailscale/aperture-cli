@@ -119,7 +119,7 @@ not, and the gap is deliberate rather than unfinished:
 | `PhaseEntered` | Built, payload reduced to `Phase` | `Progress` is derivable: the connect screen already stamps every line with elapsed time from the Attempt's start, so carrying a duration in the event would be a second copy of the same clock, computed earlier and able to disagree. Add it when something off-screen needs the number. |
 | `LoginRequired` | Built as specified | |
 | `Noted` | Built as specified | |
-| `TailnetJoined` | Not built | `Attempt.Commit` carries the fact as a field of `Verified`; no event yet. |
+| `TailnetJoined` | Not built | `Attempt.Commit` carries the fact as a field of `Gateway`; no event yet. |
 | `Ready`, `Failed` | Not built | Both already travel as `endpointActivationResult` on the same channel, typed, with the same single consumer. Converting them buys nothing until the Gateway owner exists, and `Ready`'s payload is that owner's to define. |
 
 Six `Phase` values are built, not nine. `Ready`, `Failed` and `Cancelled` are

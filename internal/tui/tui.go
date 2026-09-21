@@ -232,9 +232,9 @@ type endpointActivationResult struct {
 	// id identifies the attempt this result belongs to. A result whose id no
 	// longer matches the current attempt is stale: the user cancelled it or
 	// typed a different URL over it, and its outcome must not be applied.
-	id       int
-	verified bridges.Verified
-	err      error
+	id      int
+	gateway bridges.Gateway
+	err     error
 }
 
 // bridgeLine is one thing the attempt reported and how far into the attempt it
@@ -372,8 +372,8 @@ func (m *model) startAttempt(a *bridges.Attempt) tea.Cmd {
 	if _, bridged := a.Endpoint.(config.BridgeEndpoint); !bridged {
 		run := func() tea.Msg {
 			defer cancel()
-			v, err := a.Run(ctx, machines, nil)
-			return endpointActivationResult{id: act.id, verified: v, err: err}
+			gw, err := a.Run(ctx, machines, nil)
+			return endpointActivationResult{id: act.id, gateway: gw, err: err}
 		}
 		return tea.Batch(run, activationTick(act.id))
 	}
@@ -388,8 +388,8 @@ func (m *model) startAttempt(a *bridges.Attempt) tea.Cmd {
 	emit := bridgeLogSink(ctx, ch, act.started)
 	run := func() tea.Msg {
 		defer cancel()
-		v, err := a.Run(ctx, machines, emit)
-		return endpointActivationResult{id: act.id, verified: v, err: err}
+		gw, err := a.Run(ctx, machines, emit)
+		return endpointActivationResult{id: act.id, gateway: gw, err: err}
 	}
 	return tea.Batch(run, waitBridgeLog(ctx, ch), activationTick(act.id))
 }
@@ -590,7 +590,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetStack(m.setupGuideMenu())
 			return m, nil
 		}
-		if err := a.Commit(m.g, msg.verified); err != nil {
+		if err := a.Commit(m.g, msg.gateway); err != nil {
 			m.preflightErr = err.Error()
 			m.forcedToEndpoint = true
 			m.failedEndpoint = a.Endpoint

@@ -1,6 +1,8 @@
 package bridges
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,5 +53,59 @@ func TestAbandonStaysEphemeralWhenTheDropFails(t *testing.T) {
 	}
 	if len(g.Settings.Endpoints) != 1 {
 		t.Errorf("endpoints = %+v, want the candidate gone", g.Settings.Endpoints)
+	}
+}
+
+// switchingAttempt is an attempt through Work that has been asked to leave its
+// tailnet, on a collection whose node answers Logout with logoutErr and then
+// refuses to come up, so Run ends right after the switch.
+func switchingAttempt(t *testing.T, logoutErr error) (*Attempt, *config.Global, *Machines) {
+	t.Helper()
+	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work", Tailnet: "corp.example.com"}
+	ep := config.Bridged("http://ai", bridge.ID)
+	g, _ := settingsGlobal(t, config.Settings{Bridges: []config.Bridge{bridge}, Endpoints: []config.Endpoint{ep}})
+	a, err := BeginAttempt(g, ep, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewMachines(false)
+	t.Cleanup(func() { m.Close() })
+	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
+		return &fakeNode{logoutErr: logoutErr, upErr: errors.New("no login yet")}
+	}
+	return a, g, m
+}
+
+// A logout the control plane refused has not happened. Retrying the attempt
+// with the switch dropped would open the credentials still on disk and land
+// back on the tailnet the user asked to leave.
+func TestRetryKeepsTheSwitchUntilLogoutSucceeds(t *testing.T) {
+	a, _, m := switchingAttempt(t, errors.New("control plane said no"))
+	if _, err := a.Run(context.Background(), m, nil); err == nil {
+		t.Fatal("Run succeeded with a logout the tailnet refused")
+	}
+	if !a.Retry().SwitchesTailnet() {
+		t.Error("Retry dropped a switch whose logout never ran")
+	}
+
+	a, _, m = switchingAttempt(t, nil)
+	if _, err := a.Run(context.Background(), m, nil); err == nil {
+		t.Fatal("Run succeeded past a node that refuses to come up")
+	}
+	if a.Retry().SwitchesTailnet() {
+		t.Error("Retry repeats a logout that already succeeded")
+	}
+}
+
+// Typing a URL over a switch that has not logged out yet must not turn it
+// into a plain reconnect to the old tailnet.
+func TestRetargetKeepsAPendingSwitch(t *testing.T) {
+	a, g, _ := switchingAttempt(t, nil)
+	next, err := a.Retarget(g, config.Bridged("http://aperture.example.com", a.Bridge().ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !next.SwitchesTailnet() {
+		t.Error("Retarget dropped the switch before its logout ran")
 	}
 }

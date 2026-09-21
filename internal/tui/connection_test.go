@@ -36,7 +36,7 @@ func TestEndpointEditPreservesVerifiedConnection(t *testing.T) {
 			} else {
 				m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 				// The cancelled request can still deliver a success already queued.
-				m.Update(endpointActivationResult{id: m.activationSeq, verified: bridges.Verified{Gateway: srv.URL}})
+				m.Update(endpointActivationResult{id: m.activationSeq, gateway: bridges.Gateway{URL: srv.URL}})
 			}
 			if got := m.g.ActiveEndpoint(); got != old {
 				t.Errorf("%s replaced verified endpoint: got %+v, want %+v", outcome, got, old)

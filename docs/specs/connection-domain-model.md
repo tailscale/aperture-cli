@@ -96,8 +96,8 @@ Attempt.
 
 - `Enter(Phase) Progress` — advance, appending to `Trail`. Rejects a backwards move.
 - `Authorize(LoginLink)` — record the link and enter `AwaitingAuthorization`.
-- `Run(ctx, machines, emit) (Verified, error)` — the attempt happening: leave the tailnet if asked, open the Machine, route, ask the Aperture for models. Writes nothing, so it runs off the update loop.
-- `Commit(settings, Verified) error` — persist a verified attempt: one settings write for the edit, the tailnet recorded on the Bridge, the Gateway and providers clients launch against.
+- `Run(ctx, machines, emit) (Gateway, error)` — the attempt happening: leave the tailnet if asked, open the Machine, route, ask the Aperture for models. Writes nothing, so it runs off the update loop.
+- `Commit(settings, Gateway) error` — persist a successful attempt: one settings write for the edit, the tailnet recorded on the Bridge, the Gateway and providers clients launch against.
 - `Abandon(settings) error` — remove the candidate this attempt added, never the active endpoint. Failure is not abandonment: a failed attempt keeps its candidate for retry and edit.
 - `Retarget(settings, next)` / `Retry()` — a new URL for the same edit, or the same attempt again without repeating a tailnet switch.
 - Constructors `BeginAttempt(settings, endpoint, switchTailnet, replacing)` and `EditAttempt(settings, current, endpoint, next)`. Begin writes an unsaved Endpoint as the candidate and clears the Bridge's recorded tailnet before a switch.
@@ -212,20 +212,16 @@ upstream in `validPopBrowserURLLocked`; ours is the second gate, not the first.
 
 ## Gateway
 
-Value object. Where a client sends requests.
+Value object, `bridges.Gateway`. What a successful Attempt produced and what
+`Commit` makes current.
 
-| Field | Type |
-|---|---|
-| `URL` | `string` |
-| `ViaBridge` | `bool` |
+| Field | Type | |
+|---|---|---|
+| `URL` | `string` | Where a client sends requests: the Endpoint's URL, or a Route's `127.0.0.1:<port>` listener. |
+| `Tailnet` | `string` | The tailnet the Machine joined. Empty for a direct Endpoint. |
+| `Providers` | `[]config.ProviderInfo` | What the Aperture answered `/v1/models` with. |
 
-Behaviors: `DirectGateway(Endpoint) Gateway`, `RoutedGateway(Route) Gateway`,
-`String()`.
-
-Invariants: non-empty absolute URL with scheme and host. `ViaBridge` is true
-if and only if the URL is a Route's local end. Nothing outside the Connection
-context needs `ViaBridge`; it exists so a log or an error can say which of the
-two a URL is, which `ApertureHost` cannot.
+Invariants: `URL` is a non-empty absolute URL with scheme and host.
 
 ## Machine
 
@@ -374,8 +370,8 @@ classDiagram
         +bool Ephemeral
         +Enter(Phase) Progress
         +Authorize(LoginLink)
-        +Run(ctx, machines, emit) Verified
-        +Commit(settings, Verified)
+        +Run(ctx, machines, emit) Gateway
+        +Commit(settings, Gateway)
         +Abandon(settings)
         +Slowest() Progress
         +Supersedes(ConnectionAttempt) bool
