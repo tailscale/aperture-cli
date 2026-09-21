@@ -237,10 +237,10 @@ func (m *model) bridgeRowDescription(bridge config.Bridge) string {
 	return bridge.ID
 }
 
-// endpointsMenu is the connection picker: every Aperture this launcher can
-// reach, one row each, saved endpoint or bridge with no endpoint yet. A row
-// opens its page rather than connecting, so every action is on screen instead
-// of behind a remembered key.
+// endpointsMenu builds the connection picker. It shows one row per Aperture
+// this launcher can reach, whether a saved endpoint or a bridge with no
+// endpoint yet. A row opens its page rather than connecting, so every action
+// is on screen instead of behind a remembered key.
 func (m *model) endpointsMenu() *menu.Menu {
 	rows := m.connectionRows()
 	items := make([]menu.MenuItem, 0, len(rows)+4)
@@ -311,9 +311,9 @@ func (m *model) endpointsMenu() *menu.Menu {
 	}
 }
 
-// connectionRow is one line on the connection picker. A bridge nothing points
-// at yet is a row too, described by the endpoint it would create: that is how a
-// second tailnet gets reached the first time.
+// connectionRow describes one line on the connection picker. A bridge no
+// endpoint points at yet gets a row too, described by the endpoint it would
+// create. That row is how a second tailnet gets reached the first time.
 type connectionRow struct {
 	ep     config.Endpoint
 	bridge config.Bridge
@@ -382,9 +382,9 @@ func (m *model) connectionDescription(row connectionRow) string {
 	return "tailnet not known yet"
 }
 
-// connectionMenu is one connection's page. Every action it offers is a row:
-// the picker is the only way to reach a second bridge, so its actions cannot
-// be keys the user has to already know about.
+// connectionMenu builds one connection's page. Every action it offers is a
+// row. The picker is the only way to reach a second bridge, so its actions
+// cannot be keys the user has to already know about.
 func (m *model) connectionMenu(row connectionRow) *menu.Menu {
 	title := row.bridge.Name
 	if row.saved {
@@ -842,17 +842,17 @@ func installDoneMsg(client clients.Client, skipInstalledCheck bool, err error) m
 	return menu.InstallDoneMsg{Err: err}
 }
 
-// runUninstallFn returns a tea.Cmd that invokes the uninstall function and
-// emits menu.InstallDoneMsg (we reuse the install-done flow to re-scan the
-// client list on completion).
+// runUninstallFn returns a tea.Cmd that runs the uninstall function and emits
+// menu.InstallDoneMsg. The install-done flow re-scans the client list on
+// completion, so uninstall reuses it.
 func runUninstallFn(run func() error) tea.Cmd {
 	return func() tea.Msg {
 		return menu.InstallDoneMsg{Err: run()}
 	}
 }
 
-// errResult is a small helper to emit an error through the shared done-msg
-// channel from a menu builder.
+// errResult returns a menu.Result whose command reports msg as an error
+// through the shared done message, for use from a menu builder.
 func errResult(msg string) menu.Result {
 	return menu.Result{Cmd: func() tea.Msg {
 		return menu.SimpleDoneMsg{Err: fmt.Errorf("%s", msg)}

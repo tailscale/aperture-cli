@@ -1,9 +1,9 @@
 // Package tui is the bubbletea-driven interactive launcher. It renders a
-// generic navigable menu stack described by internal/menu; each entry on
-// the stack comes from either the root client picker (built from
-// internal/clients) or a sub-menu pushed by a client's action closure.
-// The TUI owns only the preflight HTTP check, a single-line text input
-// step, and error screens — everything else is expressed as Menu values.
+// navigable stack of menus described by internal/menu. Each entry on the
+// stack comes from the root client picker, built from internal/clients, or
+// from a sub-menu pushed by a client's action closure. The TUI owns only the
+// preflight HTTP check, a single-line text input step and the error screens.
+// Everything else is a Menu value.
 package tui
 
 import (
@@ -40,9 +40,9 @@ var (
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 	dimStyle      = lipgloss.NewStyle().Faint(true)
 	greenStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	// authStyle is the login link at the foot of the connect screen: the
-	// palette's bright green on a dark terminal, its plain green on a light
-	// one, where bright green is unreadable.
+	// authStyle colors the login link at the foot of the connect screen. It
+	// uses the palette's bright green on a dark terminal and plain green on a
+	// light one, where bright green is unreadable.
 	authStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "2", Dark: "10"})
 
 	dotYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Render("●")
@@ -100,16 +100,18 @@ type model struct {
 	bridgeLogs       []bridgeLine
 	failedEndpoint   config.Endpoint
 	connected        bool
-	// quitAfterRemoval is Ctrl+C pressed while a removal was on the tailnet.
+	// quitAfterRemoval is true when Ctrl+C was pressed while a removal was on
+	// the tailnet. bridgeRemoved quits once the outcome has been applied.
 	quitAfterRemoval bool
 }
 
-// activation is the connection attempt currently on screen: its identity, its
-// cancellation handle, and the URL the user can type over the top of it. The
-// log tail stays on the model because the failure screen outlives the attempt.
+// activation holds the presentation state of the connection attempt on
+// screen: its identity, its cancellation handle and the URL the user can type
+// over the top of it. The log tail stays on the model because the failure
+// screen outlives the attempt.
 //
-// cancel is nil for attempts that cannot be interrupted (the post-launch
-// re-check), which is what makes Esc and the inline override inert there.
+// cancel is nil for an attempt that cannot be interrupted, such as the
+// post-launch re-check. A nil cancel makes Esc and the inline override inert.
 type activation struct {
 	id int
 	// attempt is the ConnectionAttempt this screen shows. Nil for the wait a
@@ -120,13 +122,13 @@ type activation struct {
 	cancel  context.CancelFunc
 	logCh   chan bridgeLine
 	logCtx  context.Context
-	// phase is the wait this attempt is in, and phaseSet distinguishes "not
-	// started" from StartingMachine, which is the zero value.
+	// phase is the phase this attempt is in. phaseSet distinguishes "not
+	// started" from StartingMachine, because StartingMachine is the zero value.
 	phase    connection.Phase
 	phaseSet bool
-	// authURL is the Tailscale login link already surfaced for this attempt.
-	// The control plane can re-send it on the bus, so this is what keeps the
-	// browser from being opened again on each repeat.
+	// authURL is the Tailscale login link already shown for this attempt. The
+	// control plane can re-send the link on the bus. Remembering it keeps the
+	// browser from opening again on each repeat.
 	authURL string
 	// copied records that the login link reached the terminal's clipboard, so
 	// the copy button can say so. A click that does nothing visible reads as a
@@ -155,8 +157,8 @@ func (a *activation) entered(p connection.Phase) bool {
 	return true
 }
 
-// endpoint is the Endpoint the attempt on screen is trying, zero when the
-// screen is showing something else.
+// endpoint returns the Endpoint the attempt on screen is trying, or nil when
+// the screen shows something else.
 func (a *activation) endpoint() config.Endpoint {
 	if a == nil || a.attempt == nil {
 		return nil
@@ -164,18 +166,18 @@ func (a *activation) endpoint() config.Endpoint {
 	return a.attempt.Endpoint
 }
 
-// cancelable reports whether Esc can interrupt this attempt.
-func (a *activation) cancelable() bool { return a != nil && a.cancel != nil }
+// canCancel reports whether Esc can interrupt this attempt.
+func (a *activation) canCancel() bool { return a != nil && a.cancel != nil }
 
 // removing reports whether the screen is showing a bridge removal rather than
 // a connection attempt.
-func (a *activation) removing() bool { return a != nil && a.attempt == nil && a.logCh != nil }
+func (a *activation) isRemoving() bool { return a != nil && a.attempt == nil && a.logCh != nil }
 
-// overridable reports whether the attempt accepts a typed URL in place of the
+// canOverride reports whether the attempt accepts a typed URL in place of the
 // one being probed. Only bridge attempts start from a guessed URL.
-func (a *activation) overridable() bool {
+func (a *activation) canOverride() bool {
 	_, bridged := a.endpoint().(config.BridgeEndpoint)
-	return a.cancelable() && bridged
+	return a.canCancel() && bridged
 }
 
 // textField is the shared single-line editor behind the add-endpoint input
@@ -216,9 +218,9 @@ func (f *textField) backspace() {
 
 func (f *textField) reset() { *f = textField{} }
 
-// Init opens on m.start. connectVia because an endpoint off the command line
-// may not be in settings yet, and it writes it there for the failure screen to
-// name; for the saved endpoint the two calls are the same.
+// Init opens on m.start through connectVia. An endpoint from the command line
+// may not be in settings yet, and connectVia writes it there so the failure
+// screen can name it. For the saved endpoint the two calls are the same.
 func (m *model) Init() tea.Cmd {
 	start := m.start
 	if start == nil {
@@ -227,8 +229,8 @@ func (m *model) Init() tea.Cmd {
 	return m.connectVia(start, false)
 }
 
-// endpointActivationResult is how an attempt's outcome reaches the update
-// loop, where settings may be written.
+// endpointActivationResult carries an attempt's outcome to the update loop,
+// where settings may be written.
 type endpointActivationResult struct {
 	// id identifies the attempt this result belongs to. A result whose id no
 	// longer matches the current attempt is stale: the user cancelled it or
@@ -238,10 +240,11 @@ type endpointActivationResult struct {
 	err     error
 }
 
-// bridgeLine is one thing the attempt reported and how far into the attempt it
-// was. The elapsed time is why this is not a string: a bridge that takes half a
-// minute spends it in the control plane, the browser or the first dial, and an
-// unstamped log cannot say which. Three fixes were aimed without knowing.
+// bridgeLine pairs one event the attempt reported with how far into the
+// attempt it arrived. The elapsed time is the reason this is not a string. A
+// bridge that takes half a minute spends it in the control plane, the browser
+// or the first dial, and an unstamped log cannot say which. Three fixes were
+// aimed without knowing.
 type bridgeLine struct {
 	elapsed time.Duration
 	event   connection.Event
@@ -249,13 +252,14 @@ type bridgeLine struct {
 
 // String renders a log line the way the connect screen shows it. The event's
 // text is flattened to one line because the screen wraps and indents each
-// line itself: an embedded newline lands unindented and miscounts the rows to
-// repaint, and control plane errors carry their request ID on a second line.
+// line itself. An embedded newline would land unindented and miscount the
+// rows to repaint, and control plane errors carry their request ID on a
+// second line.
 func (l bridgeLine) String() string {
 	return fmt.Sprintf("+%-6s %s", l.elapsed.Round(100*time.Millisecond), strings.Join(strings.Fields(describe(l.event)), " "))
 }
 
-// describe is what the user reads for an event.
+// describe returns the text the user reads for an event.
 func describe(e connection.Event) string {
 	switch {
 	case e.Phase != 0:
@@ -487,11 +491,12 @@ func (m *model) retargetActivation(next config.Endpoint) tea.Cmd {
 	return m.startAttempt(a)
 }
 
-// bridgeLogSink is where the attempt's events land on their way to the update
-// loop. Only diagnostics are dropped when the buffer is full; everything else
-// waits for room, bounded by the attempt's cancellation. This sink used to drop
-// whatever arrived, and under -debug tsnet's backend logger shares it, so a
-// burst of chatter could take the login link with it.
+// bridgeLogSink returns the function the attempt reports events to on their
+// way to the update loop. Only diagnostics are dropped when the buffer is
+// full. Everything else waits for room, bounded by the attempt's
+// cancellation. This sink used to drop whatever arrived, and under -debug
+// tsnet's backend logger shares it, so a burst of chatter could take the
+// login link with it.
 func bridgeLogSink(ctx context.Context, ch chan<- bridgeLine, started time.Time) func(connection.Event) {
 	return func(ev connection.Event) {
 		if ev.Droppable() {
@@ -545,11 +550,12 @@ func waitBridgeLog(ctx context.Context, ch chan bridgeLine) tea.Cmd {
 }
 
 func (m *model) quitCmd() tea.Cmd {
-	// A removal's outcome is what drops the records naming the device.
-	// Closing the Machines now would cancel the logout, and quitting before
-	// the outcome arrives would leave settings naming a device that may be
-	// gone. The quit happens when the outcome has been applied.
-	if m.act.removing() {
+	// The removal's outcome decides whether the records naming the device
+	// are dropped. Closing the Machines now would cancel the logout, and
+	// quitting before the outcome arrives would leave settings naming a
+	// device that may be gone. bridgeRemoved quits once the outcome has
+	// been applied.
+	if m.act.isRemoving() {
 		m.quitAfterRemoval = true
 		return nil
 	}
@@ -749,7 +755,7 @@ func appendBridgeLog(logs []bridgeLine, line bridgeLine) []bridgeLine {
 	for len(logs) > bridgeLogLimit {
 		drop := 0
 		for i, line := range logs {
-			if !line.important() {
+			if !line.isImportant() {
 				drop = i
 				break
 			}
@@ -762,7 +768,7 @@ func appendBridgeLog(logs []bridgeLine, line bridgeLine) []bridgeLine {
 // important reports whether this line survives trimming. A phase always does:
 // the phases are the record of where the time went, and evicting one to make
 // room for tsnet chatter puts a gap in exactly the thing the log is for.
-func (l bridgeLine) important() bool {
+func (l bridgeLine) isImportant() bool {
 	return !l.event.Droppable() || importantBridgeLog(l.event.Note)
 }
 
@@ -891,10 +897,10 @@ func (m *model) activate(idx int) (tea.Model, tea.Cmd) {
 	if item.Disabled || item.Action == nil {
 		return m, nil
 	}
-	// Only move the cursor onto visible rows. Hidden shortcut handlers
-	// (e.g. endpoints menu's "d" delete) read m.cursor() to know which
-	// visible row to act on — moving the cursor onto the hidden handler
-	// itself would strand it off-screen and break subsequent actions.
+	// Only move the cursor onto visible rows. Hidden shortcut handlers, such
+	// as the endpoints menu's "d" delete, read m.cursor() to know which
+	// visible row to act on. Moving the cursor onto the hidden handler itself
+	// would strand it off-screen and break subsequent actions.
 	if !item.Hidden {
 		m.setCursor(idx)
 	}
@@ -970,13 +976,13 @@ func (m *model) updatePreflight(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+y" && m.act != nil && m.act.authURL != "" {
 		return m, copyURLCmd(m.act.id, m.act.authURL)
 	}
-	if !m.act.cancelable() {
+	if !m.act.canCancel() {
 		return m, nil
 	}
 	if msg.String() == "esc" {
 		return m.cancelActivation()
 	}
-	if !m.act.overridable() {
+	if !m.act.canOverride() {
 		return m, nil
 	}
 	switch msg.String() {
@@ -995,9 +1001,9 @@ func (m *model) updatePreflight(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// authCopyHint and authCopiedHint are the line under the login link, before
-// and after ctrl+y. The key has to be named on screen: nothing about a URL
-// suggests which chord copies it.
+// authCopyHint and authCopiedHint appear under the login link, before and
+// after ctrl+y. The key has to be named on screen, because nothing about a
+// URL suggests which chord copies it.
 const (
 	authCopyHint   = "ctrl+y to copy the link"
 	authCopiedHint = "✓ copied to the clipboard"
@@ -1007,10 +1013,11 @@ const (
 // authFooter renders the login link pinned to the foot of the connect screen.
 //
 // The link owns its lines outright. Bubble Tea truncates any line wider than
-// the terminal, so a long URL has to wrap, and prose sharing those lines lands
-// in the selection when the user drags across them; a browser strips a newline
-// out of a URL but not an indent or a label. Every line carries the same OSC 8
-// hyperlink, id-tagged so terminals rejoin the halves and ctrl-click survives.
+// the terminal, so a long URL has to wrap. Prose sharing those lines would
+// land in the selection when the user drags across them, and a browser strips
+// a newline out of a URL but not an indent or a label. Every line carries the
+// same OSC 8 hyperlink, tagged with one id so terminals rejoin the halves and
+// ctrl-click survives.
 func (m *model) authFooter() string {
 	act := m.act
 	if act == nil || act.authURL == "" {
@@ -1021,7 +1028,7 @@ func (m *model) authFooter() string {
 		hint = authCopiedHint
 	}
 	var sb strings.Builder
-	// Styled a line at a time: lipgloss pads a multi-line block out to its
+	// Styled a line at a time. lipgloss pads a multi-line block out to its
 	// widest line, which would leave trailing spaces on a wrapped link.
 	for _, line := range strings.Split(m.wrapText("", authProse), "\n") {
 		sb.WriteString(authStyle.Render(line))
@@ -1066,7 +1073,7 @@ func (m *model) viewPreflight() string {
 		sb.WriteString("\n")
 	}
 	switch {
-	case m.act.overridable():
+	case m.act.canOverride():
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render(m.wrapText("  ", "Different Aperture URL? Type it to connect there instead.")))
 		sb.WriteString("\n")
@@ -1077,7 +1084,7 @@ func (m *model) viewPreflight() string {
 		}
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Enter to switch · Esc to cancel\n"))
-	case m.act.cancelable():
+	case m.act.canCancel():
 		sb.WriteString("\n")
 		sb.WriteString(dimStyle.Render("Esc to cancel\n"))
 	}
@@ -1205,11 +1212,11 @@ func (m *model) viewMenu() string {
 	return sb.String()
 }
 
-// menuLayout decides the visible order and column layout for a menu.
-// visible is the list of Items indices that render (hidden rows skipped);
-// twoCols is true when the wide-terminal / long-list two-column layout is
-// active; half is len(visible) rounded up / 2 (the row count in each
-// column). twoCols=false means half is unused.
+// menuLayout decides the visible order and column layout for a menu. visible
+// lists the Items indices that render, skipping hidden rows. twoCols is true
+// when the terminal is wide and the list long enough for two columns. half is
+// the row count in each column, len(visible) rounded up and halved. When
+// twoCols is false, half is unused.
 func (m *model) menuLayout(top *menu.Menu) (visible []int, twoCols bool, half int) {
 	visible = make([]int, 0, len(top.Items))
 	hasZero := false
@@ -1257,10 +1264,9 @@ func visiblePos(visible []int, i int) int {
 	return -1
 }
 
-// autoTokens is the pool of single-character keys auto-assigned to menu
-// items in visible order: 1-9, then a-z, then A-Z. "0" is reserved for the
-// DigitZero pin; items that set an explicit Shortcut keep that key out of
-// the pool.
+// autoTokens holds the single-character keys auto-assigned to menu items in
+// visible order: 1-9, then a-z, then A-Z. "0" is reserved for the DigitZero
+// pin. An item that sets an explicit Shortcut keeps that key out of the pool.
 var autoTokens = func() []string {
 	var out []string
 	for c := '1'; c <= '9'; c++ {
@@ -1317,8 +1323,8 @@ func assignTokens(items []menu.MenuItem) []string {
 	return tokens
 }
 
-// menuHeader returns the one-line status banner shown above certain menus:
-// the root menu shows the connected endpoint; the endpoints menu in
+// menuHeader returns the one-line status banner shown above certain menus.
+// The root menu shows the connected endpoint. The endpoints menu in
 // preflight-failure mode shows the red "couldn't reach" banner.
 func (m *model) menuHeader(top *menu.Menu) string {
 	if len(m.stack) == 1 && top.Title == rootTitle {
@@ -1455,7 +1461,7 @@ func (m *model) promptForInput(title, prompt, initial string, onSave func(value 
 
 // --- Registered clients access ---
 
-// registeredClients is the set visible to the TUI; overridable in tests.
+// registeredClients lists the clients the TUI shows. Tests override it.
 var registeredClients = func(g *config.Global) []clients.Client {
 	return clients.All(g)
 }

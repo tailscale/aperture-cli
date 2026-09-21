@@ -612,7 +612,7 @@ func TestEndpointBridgeMenu_ConnectsExistingBridgeWithoutPrompting(t *testing.T)
 	if m.act == nil || m.act.endpoint() != config.Endpoint(config.Bridged(config.DefaultLocation, bridge.ID)) {
 		t.Fatalf("activation = %+v, want %s via %s", m.act, config.DefaultLocation, bridge.ID)
 	}
-	if !m.act.overridable() {
+	if !m.act.canOverride() {
 		t.Error("bridge discovery should accept a typed URL while it runs")
 	}
 }
@@ -1443,7 +1443,7 @@ func TestAuthFooterCopyKey(t *testing.T) {
 			cancel:  func() {},
 		},
 	}
-	if !m.act.overridable() {
+	if !m.act.canOverride() {
 		t.Fatal("the override editor is inert here, so this does not test the collision it is about")
 	}
 
