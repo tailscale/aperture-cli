@@ -37,6 +37,7 @@ func spawn(t *testing.T, bin string, args []string, env []string) *terminal {
 		t.Fatalf("spawning %s: %v", bin, err)
 	}
 	term := &terminal{cmd: cmd, ptmx: ptmx}
+	t.Cleanup(term.kill)
 	go func() {
 		var buf [4096]byte
 		for {
@@ -52,6 +53,18 @@ func spawn(t *testing.T, bin string, args []string, env []string) *terminal {
 		}
 	}()
 	return term
+}
+
+// kill ends the process if it has not already exited. Terminals parked on a
+// screen that never exits (a bridge waiting on login) are reaped here; in
+// suites that end in waitExit every call is a no-op.
+func (term *terminal) kill() {
+	if term.cmd.Process == nil {
+		return
+	}
+	_ = term.cmd.Process.Kill()
+	_ = term.cmd.Wait()
+	_ = term.ptmx.Close()
 }
 
 // send types keys into the terminal.
@@ -129,9 +142,13 @@ func run(t *testing.T, bin string, env []string, args ...string) (string, string
 func hermeticEnv(t *testing.T, binDir string) []string {
 	t.Helper()
 	home := t.TempDir()
+	// TS_AUTHKEY would authorize fresh bridge slots against the developer's
+	// real tailnet; BROWSER is set to true below rather than dropped because
+	// the login-link opener runs $BROWSER, and true is a no-op.
 	drop := map[string]bool{
 		"HOME": true, "XDG_CONFIG_HOME": true, "TERM": true, "PATH": true,
 		"APERTURE_ENDPOINT": true, "APERTURE_BRIDGE": true,
+		"TS_AUTHKEY": true, "BROWSER": true,
 	}
 	var env []string
 	for _, e := range os.Environ() {
@@ -149,6 +166,7 @@ func hermeticEnv(t *testing.T, binDir string) []string {
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
 		"TERM=dumb",
 		"PATH="+path,
+		"BROWSER=true",
 	)
 }
 
