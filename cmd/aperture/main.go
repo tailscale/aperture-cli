@@ -47,8 +47,8 @@ func init() {
 	}
 
 	if buildVersion == "B0-dev" {
-		if height := gitCommitHeight(); height != "" {
-			buildVersion = "B" + height
+		if desc := gitDescribe(); desc != "" {
+			buildVersion = desc
 		} else if info.Main.Version != "" && info.Main.Version != "(devel)" {
 			buildVersion = info.Main.Version
 		}
@@ -79,14 +79,17 @@ func init() {
 	}
 }
 
-func gitCommitHeight() string {
+// gitDescribe reports the release version of the checkout containing this
+// source file: the tag on an exact release commit, or the nearest tag with
+// the distance and commit appended. It returns "" outside a checkout.
+func gitDescribe() string {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		return ""
 	}
 	for dir := filepath.Dir(file); ; dir = filepath.Dir(dir) {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return gitCommitHeightInDir(dir)
+			return gitDescribeInDir(dir)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -95,23 +98,14 @@ func gitCommitHeight() string {
 	}
 }
 
-func gitCommitHeightInDir(dir string) string {
-	cmd := exec.Command("git", "rev-list", "--count", "HEAD")
+func gitDescribeInDir(dir string) string {
+	cmd := exec.Command("git", "describe", "--tags", "--always", "--dirty")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
-	height := strings.TrimSpace(string(out))
-	if height == "" {
-		return ""
-	}
-	for _, r := range height {
-		if r < '0' || r > '9' {
-			return ""
-		}
-	}
-	return height
+	return strings.TrimSpace(string(out))
 }
 
 // startRunLog points slog at the run log and returns a function that closes
