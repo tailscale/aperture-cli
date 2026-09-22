@@ -15,7 +15,7 @@ SHELL := /bin/bash
 	upload-mac
 
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
-GIT_HEIGHT := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
+GIT_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 GIT_DESC := $(shell git describe --always)
 ifneq ($(shell git status --porcelain),)
@@ -24,7 +24,7 @@ endif
 
 # Metadata for ordinary development builds.
 LDFLAGS := \
-	-X main.buildVersion=B$(GIT_HEIGHT) \
+	-X main.buildVersion=$(GIT_VERSION) \
 	-X main.buildCommit=$(GIT_DESC) \
 	-X main.buildDate=$(BUILD_DATE)
 
