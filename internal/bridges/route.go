@@ -95,6 +95,11 @@ func (mc *Machine) openRoute(target *url.URL) (*Route, error) {
 	proxy.Director = func(req *http.Request) {
 		director(req)
 		req.Host = target.Host
+		// Clients send a placeholder bearer because their SDKs refuse to
+		// build a request without one. Ingress auth at the Aperture is the
+		// Machine's tailnet identity, so the header is never load-bearing,
+		// and a gateway that treats it as authoritative rejects it.
+		req.Header.Del("Authorization")
 	}
 	proxy.Transport = transport
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
