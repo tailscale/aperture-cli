@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
+	github.com/creack/pty v1.1.24
 	golang.org/x/sys v0.47.0
 	tailscale.com v1.102.3
 )
