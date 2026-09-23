@@ -32,6 +32,14 @@ A CLI launcher for coding agents preconfigured to work with [Aperture](https://a
 ## Installation
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/tailscale/aperture-cli/main/install.sh | sh
+```
+
+The script downloads the matching release asset, verifies it against the release checksums and installs `aperture` to `/usr/local/bin`. Set `APERTURE_INSTALL_DIR=$HOME/.local/bin` to skip sudo, `APERTURE_VERSION=v0.0.13` to pin a release.
+
+With Go:
+
+```sh
 go install github.com/tailscale/aperture-cli/cmd/aperture@latest
 ```
 
@@ -40,6 +48,8 @@ Or build from source:
 ```sh
 make build
 ```
+
+macOS builds are Developer ID signed and notarized. curl and `go install` never set the quarantine attribute, so Gatekeeper stays out of the way. If you download the zip in a browser and double-click it instead, macOS may block the binary anyway (common on managed Macs): open System Settings > Privacy & Security and click **Open Anyway** next to the blocked entry.
 
 ## Usage
 
@@ -108,6 +118,17 @@ make build   # build ./aperture
 make test    # run tests
 make install # install to $GOPATH/bin
 make clean   # remove built binary
+```
+
+## Releasing
+
+Push a tag. The release workflow builds and publishes the Linux assets with GoReleaser, then a macOS job imports the Developer ID certificate from GitHub secrets into a temporary keychain, signs and notarizes the macOS builds, and replaces the unsigned darwin assets on the release with the signed zips, rewriting checksums.txt to match. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+
+Local fallback on a Mac that has the certificate and a stored notary profile:
+
+```sh
+make release-mac-notarized VERSION=v0.0.14   # build, sign, notarize, verify
+make upload-mac VERSION=v0.0.14              # after the tag's workflow publishes
 ```
 
 ## Contributing
