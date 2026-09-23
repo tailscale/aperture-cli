@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# setup-macos-signing.sh prepares a GitHub macOS runner for
-# `make release-mac-notarized`: it imports the Developer ID Application
-# certificate from APPLE_CERT_P12 into a fresh temporary keychain, puts that
-# keychain on the user search list so find-identity and codesign see it, and
-# stores the notarization credentials under NOTARY_PROFILE in the login
+# setup-macos-signing.sh prepares a GitHub macOS runner for the goreleaser
+# signing hook (scripts/sign-macos.sh): it imports the Developer ID
+# Application certificate from APPLE_CERT_P12 into a fresh temporary
+# keychain, puts that keychain on the user search list so codesign sees it,
+# and stores the notarization credentials under NOTARY_PROFILE in the login
 # keychain, which is where `notarytool --keychain-profile` looks.
 #
 # Required environment:
@@ -51,4 +51,7 @@ echo "Signing identity: Developer ID Application: Tailscale Inc. ($TEAM_ID)"
 echo "Notary profile: $NOTARY_PROFILE"
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+  # The goreleaser hook signs only when this is set, so PR dry runs and
+  # local snapshots pass binaries through unsigned.
+  echo "APERTURE_SIGNING_READY=1" >> "$GITHUB_ENV"
 fi
