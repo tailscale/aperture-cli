@@ -131,8 +131,8 @@ notarize-mac:
 	codesign --verify --strict --verbose=4 "$(AMD64_BIN)"; \
 	echo "==> Creating release archives"; \
 	rm -f "$(ARM64_ARCHIVE)" "$(AMD64_ARCHIVE)" "$(CHECKSUMS)"; \
-	ditto -c -k --keepParent "$(ARM64_BIN)" "$(ARM64_ARCHIVE)"; \
-	ditto -c -k --keepParent "$(AMD64_BIN)" "$(AMD64_ARCHIVE)"; \
+	ditto -c -k --keepParent --norsrc --noextattr "$(ARM64_BIN)" "$(ARM64_ARCHIVE)"; \
+	ditto -c -k --keepParent --norsrc --noextattr "$(AMD64_BIN)" "$(AMD64_ARCHIVE)"; \
 	echo "==> arm64 archive contents"; \
 	unzip -l "$(ARM64_ARCHIVE)"; \
 	echo "==> amd64 archive contents"; \
