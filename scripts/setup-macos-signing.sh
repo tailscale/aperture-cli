@@ -51,7 +51,6 @@ echo "Signing identity: Developer ID Application: Tailscale Inc. ($TEAM_ID)"
 echo "Notary profile: $NOTARY_PROFILE"
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-  # The goreleaser hook signs only when this is set, so PR dry runs and
-  # local snapshots pass binaries through unsigned.
+  # Darwin releases require this; local snapshots may remain unsigned.
   echo "APERTURE_SIGNING_READY=1" >> "$GITHUB_ENV"
 fi

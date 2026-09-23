@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+func TestReleaseWorkflowExcludesPullRequests(t *testing.T) {
+	workflow, err := os.ReadFile("../.github/workflows/release.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(workflow), "pull_request") {
+		t.Fatal("release workflow must not handle pull requests")
+	}
+}
+
 // Exercise the release hook with fake Apple tools. Signing and notarization
 // still need a credentialed macOS run; these checks cover publication gating.
 func TestSignMacOS(t *testing.T) {
