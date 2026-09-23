@@ -27,6 +27,7 @@ fi
 
 identity="${SIGN_IDENTITY:-Developer ID Application: Tailscale Inc. (W5364U7YZB)}"
 profile="${NOTARY_PROFILE:-ci-notary}"
+notary_keychain="${NOTARY_KEYCHAIN:?setup must export the temporary keychain}"
 
 codesign --sign "$identity" --options runtime --timestamp --force "$binary"
 codesign --verify --strict --verbose=2 "$binary"
@@ -37,7 +38,8 @@ submission="$binary.zip"
 trap 'rm -f "$submission"' EXIT
 zip -j -q "$submission" "$binary"
 result=$(xcrun notarytool submit "$submission" \
-  --keychain-profile "$profile" --wait --output-format json)
+  --keychain-profile "$profile" --keychain "$notary_keychain" \
+  --wait --output-format json)
 echo "$result"
 if ! printf '%s' "$result" | jq -e -s 'length == 1 and (.[0] | type == "object" and .status == "Accepted")' >/dev/null; then
   echo "notarization was not accepted for $target" >&2

@@ -3,8 +3,8 @@
 # signing hook (scripts/sign-macos.sh): it imports the Developer ID
 # Application certificate from APPLE_CERT_P12 into a fresh temporary
 # keychain, puts that keychain on the user search list so codesign sees it,
-# and stores the notarization credentials under NOTARY_PROFILE in the login
-# keychain, which is where `notarytool --keychain-profile` looks.
+# and stores the notarization credentials under NOTARY_PROFILE in the same
+# keychain, which teardown deletes.
 #
 # Required environment:
 #   APPLE_CERT_P12       base64-encoded .p12 of the certificate and private key
@@ -27,13 +27,20 @@ workdir=$(mktemp -d "${TMPDIR:-/tmp}/aperture-signing.XXXXXX")
 keychain="$workdir/signing.keychain-db"
 keychain_password=$(openssl rand -base64 32)
 
+cleanup() {
+  status=$?
+  rm -f "$workdir/certificate.p12" || true
+  security delete-keychain "$keychain" >/dev/null 2>&1 || true
+  return "$status"
+}
+trap cleanup EXIT
+
 printf '%s' "$APPLE_CERT_P12" | base64 -d > "$workdir/certificate.p12"
 security create-keychain -p "$keychain_password" "$keychain"
 security set-keychain-settings -lut 3600 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"
 security import "$workdir/certificate.p12" -k "$keychain" \
   -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
-rm "$workdir/certificate.p12"
 # Without this, codesign prompts for the keychain password on first use and
 # the headless runner hangs.
 security set-key-partition-list -S apple-tool:,apple:,codesign: \
@@ -45,12 +52,18 @@ security list-keychains -d user \
   -s "$keychain" $(security list-keychains -d user | tr -d '"')
 
 xcrun notarytool store-credentials "$NOTARY_PROFILE" \
-  --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$TEAM_ID"
+  --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$TEAM_ID" \
+  --keychain "$keychain"
 
 echo "Signing identity: Developer ID Application: Tailscale Inc. ($TEAM_ID)"
 echo "Notary profile: $NOTARY_PROFILE"
 if [ -n "${GITHUB_ENV:-}" ]; then
-  echo "SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-  # Darwin releases require this; local snapshots may remain unsigned.
-  echo "APERTURE_SIGNING_READY=1" >> "$GITHUB_ENV"
+  # Darwin releases require readiness; local snapshots may remain unsigned.
+  {
+    echo "SIGNING_KEYCHAIN=$keychain"
+    echo "APERTURE_SIGNING_READY=1"
+    echo "NOTARY_KEYCHAIN=$keychain"
+  } >> "$GITHUB_ENV"
 fi
+rm -f "$workdir/certificate.p12"
+trap - EXIT

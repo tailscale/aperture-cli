@@ -52,4 +52,4 @@ jobs:
       -
         name: Tear down signing keychain
         if: always()
-        run: security delete-keychain "$SIGNING_KEYCHAIN" || true
+        run: security delete-keychain "$SIGNING_KEYCHAIN"

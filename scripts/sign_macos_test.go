@@ -26,14 +26,15 @@ func TestSignMacOS(t *testing.T) {
 		t.Fatal(err)
 	}
 	type testCase struct {
-		name      string
-		target    string
-		ready     bool
-		snapshot  string
-		status    string
-		response  string
-		failure   string
-		wantError bool
+		name       string
+		target     string
+		ready      bool
+		snapshot   string
+		status     string
+		response   string
+		failure    string
+		noKeychain bool
+		wantError  bool
 	}
 	tests := []testCase{
 		{name: "linux", target: "linux_amd64_v1", ready: true},
@@ -41,6 +42,7 @@ func TestSignMacOS(t *testing.T) {
 		{name: "darwin missing readiness explicit false", snapshot: "false", wantError: true},
 		{name: "snapshot true missing readiness", snapshot: "true"},
 		{name: "snapshot true with readiness", ready: true, snapshot: "true"},
+		{name: "missing keychain", ready: true, noKeychain: true, wantError: true},
 		{name: "accepted compact", ready: true, response: `{"status":"Accepted"}`},
 		{name: "accepted pretty", ready: true, snapshot: "false", response: "{\n  \"status\" : \"Accepted\"\n}"},
 		{name: "invalid", ready: true, response: `{"status":"Invalid"}`, wantError: true},
@@ -87,6 +89,10 @@ func TestSignMacOS(t *testing.T) {
 			if tt.ready {
 				readyValue = "1"
 			}
+			notaryKeychain := filepath.Join(dir, "signing.keychain-db")
+			if tt.noKeychain {
+				notaryKeychain = ""
+			}
 			cmd.Env = append(os.Environ(),
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"TEST_LOG="+filepath.Join(dir, "commands"),
@@ -96,6 +102,7 @@ func TestSignMacOS(t *testing.T) {
 				"TEST_STATUS="+tt.status,
 				"TEST_RESPONSE="+tt.response,
 				"APERTURE_SIGNING_READY="+readyValue,
+				"NOTARY_KEYCHAIN="+notaryKeychain,
 			)
 			output, err := cmd.CombinedOutput()
 			if (err != nil) != tt.wantError {
@@ -120,6 +127,9 @@ func TestSignMacOS(t *testing.T) {
 				return
 			}
 			if commands == "" {
+				if tt.noKeychain {
+					return
+				}
 				t.Fatal("expected Apple tools to be called")
 			}
 			if tt.failure == "sign" || tt.failure == "verify" {
@@ -132,7 +142,7 @@ func TestSignMacOS(t *testing.T) {
 				if err != nil || string(contents) != "unsigned\nsigned\n" {
 					t.Errorf("notarization archive must contain the signed binary: %q, %v", contents, err)
 				}
-				for _, flag := range []string{"--options runtime", "--timestamp", "W5364U7YZB", "--verify --strict", "--wait"} {
+				for _, flag := range []string{"--options runtime", "--timestamp", "W5364U7YZB", "--verify --strict", "--keychain " + filepath.Join(dir, "signing.keychain-db"), "--wait"} {
 					if !strings.Contains(commands, flag) {
 						t.Errorf("missing signing requirement %q in:\n%s", flag, commands)
 					}
