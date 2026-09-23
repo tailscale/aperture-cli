@@ -11,7 +11,8 @@ SHELL := /bin/bash
 	notarize-mac \
 	verify-mac \
 	release-mac-notarized \
-	release-macos-notarized
+	release-macos-notarized \
+	upload-mac
 
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_HEIGHT := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
@@ -144,7 +145,11 @@ notarize-mac:
 	xcrun notarytool submit "$(AMD64_ARCHIVE)" \
 		--keychain-profile "$(NOTARY_PROFILE)" \
 		--wait; \
-	shasum -a 256 "$(ARM64_ARCHIVE)" "$(AMD64_ARCHIVE)" > "$(CHECKSUMS)"
+	echo "==> Writing checksums"; \
+	(cd "$(RELEASE_DIR)" && shasum -a 256 \
+		"$(notdir $(ARM64_ARCHIVE))" \
+		"$(notdir $(AMD64_ARCHIVE))" \
+		> "$(notdir $(CHECKSUMS))")
 
 # Extract and assess the exact executables that users receive. The find
 # commands intentionally locate the binary by its known filename rather than
@@ -186,7 +191,44 @@ release-mac-notarized: release-mac notarize-mac verify-mac
 	@echo "==> Complete"; \
 	echo "  $(ARM64_ARCHIVE)"; \
 	echo "  $(AMD64_ARCHIVE)"; \
-	echo "  $(CHECKSUMS)"
+	echo "  $(CHECKSUMS)"; \
+	echo "  next, once the tag's goreleaser run has published:"; \
+	echo "    make upload-mac VERSION=$(VERSION)"
+
+# Replace the unsigned darwin assets on the GitHub release for VERSION with
+# the signed, notarized archives, and rewrite checksums.txt to match: the
+# goreleaser assets are named aperture_darwin_<arch>.tar.gz while the signed
+# ones are zips, so an upload alone would leave both on the release and the
+# checksums pointing at the unsigned tarballs. Run only after the tag's
+# goreleaser workflow has published. -R is explicit so this works from a
+# checkout whose origin is not github.com.
+upload-mac:
+	@set -euo pipefail; \
+	test -f "$(ARM64_ARCHIVE)"; \
+	test -f "$(AMD64_ARCHIVE)"; \
+	test -f "$(CHECKSUMS)"; \
+	REPO=tailscale/aperture-cli; \
+	echo "==> Deleting unsigned darwin assets from $(VERSION)"; \
+	while read -r asset; do \
+		case "$$asset" in \
+			*darwin*) \
+				echo "  delete: $$asset"; \
+				gh release delete-asset "$(VERSION)" "$$asset" -R "$$REPO" --yes ;; \
+		esac; \
+	done < <(gh release view "$(VERSION)" -R "$$REPO" --json assets -q '.assets[].name'); \
+	echo "==> Uploading signed archives"; \
+	gh release upload "$(VERSION)" -R "$$REPO" \
+		"$(ARM64_ARCHIVE)" "$(AMD64_ARCHIVE)"; \
+	echo "==> Rewriting checksums.txt"; \
+	WORK="$$(mktemp -d /tmp/aperture-checksums.XXXXXX)"; \
+	trap 'rm -rf "$$WORK"' EXIT; \
+	gh release download "$(VERSION)" -R "$$REPO" \
+		--pattern checksums.txt --dir "$$WORK" --clobber; \
+	grep -v darwin "$$WORK/checksums.txt" > "$$WORK/merged" || [ $$? -eq 1 ]; \
+	cat "$(CHECKSUMS)" >> "$$WORK/merged"; \
+	mv "$$WORK/merged" "$$WORK/checksums.txt"; \
+	gh release upload "$(VERSION)" -R "$$REPO" "$$WORK/checksums.txt" --clobber; \
+	echo "==> Release $(VERSION) now carries the signed darwin builds"
 
 # Compatibility alias for the earlier target spelling.
 release-macos-notarized: release-mac-notarized
