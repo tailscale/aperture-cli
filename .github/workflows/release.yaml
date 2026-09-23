@@ -53,3 +53,51 @@ jobs:
           args: ${{ steps.goreleaser-args.outputs.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # GoReleaser publishes unsigned darwin tarballs; this job rebuilds, signs
+  # and notarizes the darwin binaries with the certificate in GitHub secrets
+  # and replaces those assets with the signed zips, rewriting checksums.txt.
+  # It runs the same Makefile targets as the local flow so both paths produce
+  # identical artifacts. Skipped on PR dry runs: no secrets, nothing to sign.
+  macos-sign:
+    name: Sign and notarize macOS builds
+    needs: goreleaser
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      -
+        name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      -
+        name: Set up signing keychain and notary credentials
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: bash scripts/setup-macos-signing.sh
+      -
+        name: Build, sign and notarize
+        run: >-
+          make release-mac-notarized VERSION="$TAG" NOTARY_PROFILE=ci-notary
+          SIGN_IDENTITY='Developer ID Application: Tailscale Inc. (W5364U7YZB)'
+      -
+        name: Replace unsigned darwin assets on the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: make upload-mac VERSION="$TAG"
+      -
+        name: Tear down signing keychain
+        if: always()
+        run: security delete-keychain "$SIGNING_KEYCHAIN" || true
