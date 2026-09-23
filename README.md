@@ -49,7 +49,7 @@ Or build from source:
 make build
 ```
 
-macOS builds are Developer ID signed and notarized. curl and `go install` never set the quarantine attribute, so Gatekeeper stays out of the way. If you download the zip in a browser and double-click it instead, macOS may block the binary anyway (common on managed Macs): open System Settings > Privacy & Security and click **Open Anyway** next to the blocked entry.
+macOS builds are Developer ID signed and notarized. curl and `go install` never set the quarantine attribute, so Gatekeeper stays out of the way. If you download the archive in a browser and double-click the binary instead, macOS may block it anyway (common on managed Macs): open System Settings > Privacy & Security and click **Open Anyway** next to the blocked entry.
 
 ## Usage
 
@@ -122,14 +122,16 @@ make clean   # remove built binary
 
 ## Releasing
 
-Push a tag. The release workflow builds and publishes the Linux assets with GoReleaser, then a macOS job imports the Developer ID certificate from GitHub secrets into a temporary keychain, signs and notarizes the macOS builds, and adds the signed zips to the release, extending checksums.txt. GoReleaser publishes Linux assets only, so nothing unsigned ever lands on the release. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so nothing unsigned is ever published. A failed signature or a rejected notarization fails the run before upload. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
 
-Local fallback on a Mac that has the certificate and a stored notary profile:
+Local fallback on a Mac that has the certificate and a stored notary profile, for when the workflow could not sign:
 
 ```sh
 make release-mac-notarized VERSION=v0.0.14   # build, sign, notarize, verify
 make upload-mac VERSION=v0.0.14              # after the tag's workflow publishes
 ```
+
+The fallback uploads signed zips and removes the unsigned tarballs, which is why the installer accepts either.
 
 ## Contributing
 

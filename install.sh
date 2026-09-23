@@ -29,7 +29,12 @@ fi
 
 case "$os" in
 	linux) asset="aperture-cli_linux_$arch.tar.gz" ;;
-	darwin) asset="aperture_${APERTURE_VERSION}_darwin_$arch.zip" ;;
+	# Releases ship tarballs; the local fallback flow (make upload-mac)
+	# uploads zips instead, so try both.
+	darwin)
+		asset="aperture-cli_darwin_$arch.tar.gz"
+		legacy="aperture_${APERTURE_VERSION}_darwin_$arch.zip"
+		;;
 	*) echo "unsupported OS: $os" >&2; exit 1 ;;
 esac
 
@@ -38,7 +43,12 @@ trap 'rm -rf "$tmp"' EXIT
 
 base="https://github.com/$REPO/releases/download/$APERTURE_VERSION"
 echo "==> Downloading $asset ($APERTURE_VERSION)"
-curl -fsSL -o "$tmp/$asset" "$base/$asset"
+if ! curl -fsSL -o "$tmp/$asset" "$base/$asset"; then
+	[ -n "${legacy:-}" ] || exit 1
+	asset=$legacy
+	echo "==> Falling back to $asset"
+	curl -fsSL -o "$tmp/$asset" "$base/$asset"
+fi
 curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
 
 echo "==> Verifying checksum"
