@@ -21,6 +21,12 @@ builds:
     goarch:
       - amd64
       - arm64
+    # Darwin releases require signatures and notarization. Only snapshots
+    # may skip these checks; Linux builds pass through unsigned.
+    hooks:
+      post:
+        - cmd: 'bash scripts/sign-macos.sh "{{ .Path }}" "{{ .Target }}" "{{ .IsSnapshot }}"'
+          output: true
 
 archives:
   - formats:
