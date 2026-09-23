@@ -122,7 +122,7 @@ make clean   # remove built binary
 
 ## Releasing
 
-Push a tag. The release workflow builds and publishes the Linux assets with GoReleaser, then a macOS job imports the Developer ID certificate from GitHub secrets into a temporary keychain, signs and notarizes the macOS builds, and replaces the unsigned darwin assets on the release with the signed zips, rewriting checksums.txt to match. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+Push a tag. The release workflow builds and publishes the Linux assets with GoReleaser, then a macOS job imports the Developer ID certificate from GitHub secrets into a temporary keychain, signs and notarizes the macOS builds, and adds the signed zips to the release, extending checksums.txt. GoReleaser publishes Linux assets only, so nothing unsigned ever lands on the release. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
 
 Local fallback on a Mac that has the certificate and a stored notary profile:
 

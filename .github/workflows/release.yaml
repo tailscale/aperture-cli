@@ -54,11 +54,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # GoReleaser publishes unsigned darwin tarballs; this job rebuilds, signs
-  # and notarizes the darwin binaries with the certificate in GitHub secrets
-  # and replaces those assets with the signed zips, rewriting checksums.txt.
-  # It runs the same Makefile targets as the local flow so both paths produce
-  # identical artifacts. Skipped on PR dry runs: no secrets, nothing to sign.
+  # GoReleaser publishes linux assets only; this job builds, signs and
+  # notarizes the darwin binaries with the certificate in GitHub secrets and
+  # adds the signed zips and their checksums to the release. It runs the
+  # same Makefile targets as the local flow so both paths produce identical
+  # artifacts. Skipped on PR dry runs: no secrets, nothing to sign.
   macos-sign:
     name: Sign and notarize macOS builds
     needs: goreleaser

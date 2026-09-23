@@ -15,9 +15,11 @@ builds:
       - -X main.buildDate={{.Date}}
     env:
       - CGO_ENABLED=0
+    # Linux only: darwin assets are built, signed and notarized by the
+    # Makefile flow (release-mac-notarized) so nothing unsigned ever
+    # reaches the release.
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
       - arm64

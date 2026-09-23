@@ -78,6 +78,7 @@ lint:
 # racing a control plane, so a data race is the failure this project actually
 # has, and `go test` will not find one.
 check: lint build
+	GOOS=darwin go build ./...
 	go test -race ./...
 
 install:
@@ -195,31 +196,22 @@ release-mac-notarized: release-mac notarize-mac verify-mac
 	echo "  next, once the tag's goreleaser run has published:"; \
 	echo "    make upload-mac VERSION=$(VERSION)"
 
-# Replace the unsigned darwin assets on the GitHub release for VERSION with
-# the signed, notarized archives, and rewrite checksums.txt to match: the
-# goreleaser assets are named aperture_darwin_<arch>.tar.gz while the signed
-# ones are zips, so an upload alone would leave both on the release and the
-# checksums pointing at the unsigned tarballs. Run only after the tag's
-# goreleaser workflow has published. -R is explicit so this works from a
-# checkout whose origin is not github.com.
+# Add the signed, notarized darwin archives to the GitHub release for
+# VERSION and extend checksums.txt with their sums. goreleaser publishes
+# linux assets only, so there is nothing unsigned to remove; the grep guard
+# stays as a tripwire in case darwin ever re-enters the goreleaser config.
+# Run only after the tag's goreleaser workflow has published. -R is explicit
+# so this works from a checkout whose origin is not github.com.
 upload-mac:
 	@set -euo pipefail; \
 	test -f "$(ARM64_ARCHIVE)"; \
 	test -f "$(AMD64_ARCHIVE)"; \
 	test -f "$(CHECKSUMS)"; \
 	REPO=tailscale/aperture-cli; \
-	echo "==> Deleting unsigned darwin assets from $(VERSION)"; \
-	while read -r asset; do \
-		case "$$asset" in \
-			*darwin*) \
-				echo "  delete: $$asset"; \
-				gh release delete-asset "$(VERSION)" "$$asset" -R "$$REPO" --yes ;; \
-		esac; \
-	done < <(gh release view "$(VERSION)" -R "$$REPO" --json assets -q '.assets[].name'); \
 	echo "==> Uploading signed archives"; \
 	gh release upload "$(VERSION)" -R "$$REPO" \
 		"$(ARM64_ARCHIVE)" "$(AMD64_ARCHIVE)"; \
-	echo "==> Rewriting checksums.txt"; \
+	echo "==> Extending checksums.txt"; \
 	WORK="$$(mktemp -d /tmp/aperture-checksums.XXXXXX)"; \
 	trap 'rm -rf "$$WORK"' EXIT; \
 	gh release download "$(VERSION)" -R "$$REPO" \
