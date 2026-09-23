@@ -21,12 +21,11 @@ builds:
     goarch:
       - amd64
       - arm64
-    # Sign and notarize each darwin binary before archiving, so nothing
-    # unsigned ever reaches the release. The hook passes linux builds and
-    # runs without a prepared keychain (PR dry runs) through unsigned.
+    # Darwin releases require signatures and notarization. Only snapshots
+    # may skip these checks; Linux builds pass through unsigned.
     hooks:
       post:
-        - cmd: 'bash scripts/sign-macos.sh "{{ .Path }}" "{{ .Target }}"'
+        - cmd: 'bash scripts/sign-macos.sh "{{ .Path }}" "{{ .Target }}" "{{ .IsSnapshot }}"'
           output: true
 
 archives:
