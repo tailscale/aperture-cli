@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -67,14 +68,15 @@ func (m *model) remove(bridge config.Bridge, ep config.Endpoint) menu.Result {
 }
 
 // removeBridgeMenu asks the user to confirm. Removal is irreversible from
-// here and logs a device out of the user's tailnet, so the screen names the
-// device the way the admin console does.
+// here and logs a device out of the user's tailnet — one per slot a process
+// has claimed — so the screen names the devices the way the admin console
+// does.
 func (m *model) removeBridgeMenu(bridge config.Bridge, ep config.Endpoint) *menu.Menu {
-	preamble := "Bridge " + bridge.Name + " is the device " + bridges.MachineName(bridge.ID)
+	preamble := "Bridge " + bridge.Name + " is " + devicePhrase(bridge.ID)
 	if name := m.machines.Tailnet(bridge); name != "" {
 		preamble += " on " + name
 	}
-	preamble += ".\n\nRemoving it logs that device out of the tailnet and discards the login stored on this machine. " +
+	preamble += ".\n\nRemoving it logs those devices out of the tailnet and discards the logins stored on this machine. " +
 		"Connecting through a bridge of this name again is a new device and a new login."
 	return &menu.Menu{
 		Title:    "Remove bridge " + bridge.Name + "?",
@@ -154,19 +156,34 @@ func (m *model) bridgeRemoved(msg bridgeRemovedMsg) (tea.Model, tea.Cmd) {
 }
 
 // removalFailedMessage tells the user the connection is unchanged and how to
-// finish the job: retry here, or delete the device by name in the admin
-// console. A bare error leaves them hunting for a machine whose name this
+// finish the job: retry here, or delete the devices by name in the admin
+// console. A bare error leaves them hunting for machines whose names this
 // program chose.
 func (m *model) removalFailedMessage(bridge config.Bridge, err error) string {
 	msg := "Could not remove bridge " + bridge.Name + ": " + err.Error() +
 		"\n\nThe connection is unchanged. Removing it again retries the logout. " +
-		"If the device " + bridges.MachineName(bridge.ID)
+		"If " + devicePhrase(bridge.ID)
 	if name := m.machines.Tailnet(bridge); name != "" {
 		msg += " is still on " + name
 	} else {
 		msg += " is still registered"
 	}
-	return msg + " after that, delete it from the Tailscale admin console."
+	return msg + " after that, delete them from the Tailscale admin console."
+}
+
+// devicePhrase names the bridge's devices the way the admin console does.
+// The names come from the state directories on disk; a bridge whose
+// directories vanished mid-removal still names its first slot, the device a
+// retry would go and find.
+func devicePhrase(bridgeID string) string {
+	names, err := bridges.MachineNames(bridgeID)
+	if err != nil || len(names) == 0 {
+		return "the device " + bridges.MachineName(bridgeID, 1)
+	}
+	if len(names) == 1 {
+		return "the device " + names[0]
+	}
+	return "the devices " + strings.Join(names, ", ")
 }
 
 // afterRemoval returns the user to a list that no longer shows what they

@@ -133,7 +133,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 	node := &fakeNode{status: status, dialErr: errors.New("lookup aperture on 127.0.0.53:53: no such host")}
 	m := NewMachines(true)
 	m.peerWait, m.peerWaitInterval = 5*time.Millisecond, time.Millisecond
-	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 	defer m.Close()
@@ -185,7 +185,7 @@ func TestActivateDebugDiagnostics(t *testing.T) {
 func TestActivateClosesNodeWhenUpFails(t *testing.T) {
 	node := &fakeNode{upErr: errors.New("login failed")}
 	m := NewMachines(false)
-	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 
@@ -227,7 +227,7 @@ func TestActivateNormalLoggingOmitsDebugDiagnostics(t *testing.T) {
 	backendAddr := strings.TrimPrefix(backend.URL, "http://")
 	node := &fakeNode{status: status, backendAddr: backendAddr}
 	m := NewMachines(false)
-	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 	defer m.Close()
@@ -276,7 +276,7 @@ func TestActivateWaitsForPeerMapBeforeDialing(t *testing.T) {
 
 	m := NewMachines(true)
 	m.peerWaitInterval = time.Millisecond
-	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 	defer m.Close()
@@ -330,7 +330,7 @@ func TestActivateLogsTheLoginLinkBeforeItIsUsable(t *testing.T) {
 	}
 
 	m := NewMachines(false)
-	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return node
 	}
 	defer m.Close()
@@ -534,7 +534,7 @@ func TestActivateRecordsTailnet(t *testing.T) {
 	defer backend.Close()
 
 	m := NewMachines(false)
-	m.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		return &fakeNode{
 			backendAddr: backend.Listener.Addr().String(),
 			status:      &ipnstate.Status{CurrentTailnet: &ipnstate.TailnetStatus{Name: "corp.example.com"}},
@@ -580,7 +580,7 @@ func TestSwitchTailnet(t *testing.T) {
 	}
 
 	var replacement *fakeNode
-	f.manager.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	f.manager.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		replacement = &fakeNode{backendAddr: backend.Listener.Addr().String()}
 		return replacement
 	}
@@ -632,7 +632,7 @@ func activate(t *testing.T, backend *httptest.Server) activatedFixture {
 	t.Helper()
 	var f activatedFixture
 	f.manager = NewMachines(false)
-	f.manager.newNode = func(_ config.Bridge, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+	f.manager.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
 		f.node = &fakeNode{
 			backendAddr: backend.Listener.Addr().String(),
 			status:      tailnetStatus("aperture.tailnet.", "100.64.0.2"),

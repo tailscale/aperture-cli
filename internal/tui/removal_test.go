@@ -29,7 +29,7 @@ func withFakeDestroy(t *testing.T, fn func(context.Context, config.Bridge) error
 // what says this bridge registered a device.
 func startedBridge(t *testing.T, id string) {
 	t.Helper()
-	dir, err := config.BridgeStateDir(id)
+	dir, err := config.BridgeStateDir(id, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestDestroyTimeoutKeepsTheConnectionAndNamesTheDevice(t *testing.T) {
 	if m.step != stepError {
 		t.Errorf("step = %v, want the timeout reported", m.step)
 	}
-	for _, want := range []string{bridges.MachineName(row.bridge.ID), "corp.example.com", "did not answer"} {
+	for _, want := range []string{bridges.MachineName(row.bridge.ID, 1), "corp.example.com", "did not answer"} {
 		if !strings.Contains(m.errMsg, want) {
 			t.Errorf("message %q does not name %q", m.errMsg, want)
 		}

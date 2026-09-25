@@ -82,7 +82,7 @@ func TestProxyRequiresExplicitSharedPeerName(t *testing.T) {
 	node := &sharedPeerNode{fakeNode: &fakeNode{status: status}, backend: backend.Listener.Addr().String()}
 	m := NewMachines(false)
 	m.peerWait = 0
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode { return node }
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return node }
 	defer m.Close()
 	for _, target := range []string{"http://ai", "http://ai.attacker-tail.ts.net"} {
 		t.Run(target, func(t *testing.T) {
@@ -151,7 +151,7 @@ func TestRunLogOmitsLoginCapabilities(t *testing.T) {
 					r.notify(unhealthyLogin("request failed: " + authURL))
 				case "backend and startup error":
 					m := NewMachines(true)
-					m.newNode = func(_ config.Bridge, _ string, userLogf, debugLogf func(string, ...any)) tailnetNode {
+					m.newNode = func(_ config.Bridge, _ int, _ string, userLogf, debugLogf func(string, ...any)) tailnetNode {
 						userLogf("To authenticate, visit: %s", authURL)
 						debugLogf("Received auth URL: %q", "HTTPS://login.tailscale.com/a/"+secret)
 						return &fakeNode{upErr: errors.New("authorization failed at " + authURL)}

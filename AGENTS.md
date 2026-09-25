@@ -120,6 +120,8 @@ license-compatible, no GPL/AGPL; name the one chosen, or why none fit.
   never poll the control plane or the LocalAPI in a tight loop.
 - Work consciously skipped is said out loud, never left as a TODO comment or
   as speculative code.
+- Unit tests and e2e tests need to be included with all new functionality. 
+  Test the expected ideal behavior, not the current implementation details.
 
 Being lazy about the solution is the goal. Being lazy about understanding it is
 not: trace the flow a change touches before picking an approach, because the

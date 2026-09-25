@@ -70,7 +70,7 @@ func switchingAttempt(t *testing.T, logoutErr error) (*Attempt, *config.Global, 
 	}
 	m := NewMachines(false)
 	t.Cleanup(func() { m.Close() })
-	m.newNode = func(config.Bridge, string, func(string, ...any), func(string, ...any)) tailnetNode {
+	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode {
 		return &fakeNode{logoutErr: logoutErr, upErr: errors.New("no login yet")}
 	}
 	return a, g, m

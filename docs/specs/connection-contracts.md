@@ -149,10 +149,22 @@ Everything else persisted is unconditional: `Endpoint.URL`, `Endpoint.BridgeID`
 (empty means direct, which is a real value and not an absence), `Bridge.ID`,
 `Bridge.Name`.
 
+A Bridge's Machine identity lives outside settings, in the config directory:
+one state directory per Slot, `bridges/<hex>` for slot 1 and
+`bridges/<hex>-N` after, holding the node key tsnet wrote; and one lock file
+per slot under `bridges/locks/`, empty, held locked by the process running
+that slot. The state directory is the durable evidence a Machine exists
+(`HasMachine` reads it); the lock is the durable evidence one is running
+(`Machines.Destroy` reads it).
+
 ## Cross-check
 
 With no API and no DDL, the cross-check reduces to: every aggregate transition
 emits an event, or is recorded here as deliberately silent.
+
+Deliberately silent: claiming and releasing a Slot. It is process-local
+fencing between CLI instances, not a fact about the Bridge or the tailnet,
+and no surface displays it.
 
 | Transition | Event | Note |
 |---|---|---|
