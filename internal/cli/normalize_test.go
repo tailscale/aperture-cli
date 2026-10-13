@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+var testClients = []string{"pi", "codex"}
+
 func TestGnuForm(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -50,15 +52,48 @@ func TestGnuForm(t *testing.T) {
 			in:   []string{"-"},
 			want: []string{"-"},
 		},
+		{
+			name:       "a flag's value is not taken for a client name",
+			in:         []string{"-endpoint", "pi", "-debug"},
+			want:       []string{"--endpoint", "pi", "--debug"},
+			deprecated: []string{"endpoint", "debug"},
+		},
+		{
+			name:       "rewriting stops at a client command's name",
+			in:         []string{"-debug", "pi", "-config", "x"},
+			want:       []string{"--debug", "pi", "-config", "x"},
+			deprecated: []string{"debug"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, deprecated := gnuForm(tt.in, longFlags)
+			got, deprecated := gnuForm(tt.in, longFlags, testClients)
 			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
 				t.Errorf("gnuForm(%v) = %v, want %v", tt.in, got, tt.want)
 			}
 			if strings.Join(deprecated, " ") != strings.Join(tt.deprecated, " ") {
 				t.Errorf("gnuForm(%v) deprecated = %v, want %v", tt.in, deprecated, tt.deprecated)
+			}
+		})
+	}
+}
+
+func TestVersionRequested(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want bool
+	}{
+		{name: "no version flag", in: []string{"bridge", "list"}, want: false},
+		{name: "before a client name", in: []string{"--debug", "--version", "pi"}, want: true},
+		{name: "after a client name it is the client's", in: []string{"pi", "--version"}, want: false},
+		{name: "attached value form", in: []string{"--version=true", "pi"}, want: true},
+		{name: "a flag value is not a client name", in: []string{"--endpoint", "pi", "-v"}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := versionRequested(tt.in, testClients); got != tt.want {
+				t.Errorf("versionRequested(%v) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}

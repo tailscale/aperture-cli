@@ -92,10 +92,12 @@ aperture <client> [aperture flags] [-- client args]
 
 Flags take GNU form through pflag: `--endpoint`, `--bridge`, `--provider`,
 `--model`, `--port`, `--config`, `--debug`, each with a single-letter
-shorthand. The pre-cobra single-dash long forms (`-endpoint`) still parse,
-deprecated: a normalization pass rewrites them before cobra sees them and
-prints a warning to stderr. `--config` and `$APERTURE_CONFIG` select an
-alternate settings.json. The schema does not change.
+shorthand. The pre-cobra single-dash long forms (`-endpoint`) still parse
+before a client command's name, deprecated: a normalization pass rewrites
+them there and prints a warning to stderr. Inside a client's tail a
+single-dash long flag belongs to the client, and only the GNU form and the
+single-letter shorthands are aperture's. `--config` and `$APERTURE_CONFIG`
+select an alternate settings.json. The schema does not change.
 
 Rules:
 

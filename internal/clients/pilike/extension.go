@@ -1,6 +1,8 @@
 package pilike
 
 import (
+	"time"
+
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -149,15 +151,26 @@ const extensionGlob = "tmp_aperture_provider_*.js"
 // afterwards does not affect that process. Removal errors are ignored for the
 // same reason they are unlikely to matter — a file another process holds open
 // is not a reason to fail this launch.
+//
+// Files younger than sweepGrace are left alone: a sibling launch may still be
+// waiting for its child to read the extension, and the gap between the write
+// and the read is exactly where a concurrent sweep would strike.
 func sweepOrphanedExtensions(dir string) {
 	matches, err := filepath.Glob(filepath.Join(dir, extensionGlob))
 	if err != nil {
 		return
 	}
 	for _, m := range matches {
+		if info, err := os.Stat(m); err == nil && time.Since(info.ModTime()) < sweepGrace {
+			continue
+		}
 		_ = os.Remove(m)
 	}
 }
+
+// sweepGrace is the age a stranded extension must reach before a later
+// launch sweeps it. It covers a sibling launch's startup window.
+const sweepGrace = time.Minute
 
 // writeProviderExtension writes the per-launch extension and returns its
 // path plus a cleanup function that removes the file. Extensions stranded by

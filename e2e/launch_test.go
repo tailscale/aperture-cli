@@ -71,3 +71,46 @@ func TestHeadlessLaunchPropagatesTheExitCode(t *testing.T) {
 		t.Fatalf("exit = %v, want the client's exit code 3", err)
 	}
 }
+
+// The deprecated single-dash forms belong to aperture only before the client
+// command's name: inside the tail they are the client's own flags, passed
+// through untouched, so nothing aperture consumes can collide with them.
+func TestHeadlessLaunchPassesSingleDashClientFlags(t *testing.T) {
+	srv := fakeAperture(t)
+	binDir := t.TempDir()
+	recordDir := installStubPi(t, binDir)
+	env := append(hermeticEnv(t, binDir), "APERTURE_E2E_RECORD="+recordDir)
+
+	if _, stderr, err := run(t, apertureBin, env, "pi", "--endpoint", srv.URL, "-config", "settings.json", "--search"); err != nil {
+		t.Fatalf("aperture pi with single-dash client flags: %v (%s)", err, stderr)
+	}
+	argv, err := os.ReadFile(filepath.Join(recordDir, "argv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"-config", "settings.json", "--search"} {
+		if !strings.Contains(string(argv), want) {
+			t.Errorf("stub argv = %q, want %q passed through", argv, want)
+		}
+	}
+}
+
+// --version with a client command after it answers before dispatch; after
+// the client's name the flag belongs to the client.
+func TestVersionWithAClientCommand(t *testing.T) {
+	srv := fakeAperture(t)
+	binDir := t.TempDir()
+	recordDir := installStubPi(t, binDir)
+	env := append(hermeticEnv(t, binDir), "APERTURE_E2E_RECORD="+recordDir)
+
+	stdout, _, err := run(t, apertureBin, env, "--version", "pi", "--endpoint", srv.URL)
+	if err != nil {
+		t.Fatalf("--version with a client after it: %v", err)
+	}
+	if strings.TrimSpace(stdout) == "" {
+		t.Error("--version printed nothing with a client command after it")
+	}
+	if _, err := os.Stat(filepath.Join(recordDir, "argv")); !os.IsNotExist(err) {
+		t.Error("the client launched despite --version before its name")
+	}
+}

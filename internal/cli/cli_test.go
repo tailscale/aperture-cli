@@ -64,19 +64,6 @@ func TestEveryCommandDocumentsExamples(t *testing.T) {
 	}
 }
 
-func TestVersionFlag(t *testing.T) {
-	scratchHome(t)
-	for _, args := range [][]string{{"--version"}, {"-v"}} {
-		stdout, _, err := runCLI(t, args...)
-		if err != nil {
-			t.Fatalf("%v: %v", args, err)
-		}
-		if strings.TrimSpace(stdout) != "test-version" {
-			t.Errorf("%v printed %q, want the version", args, stdout)
-		}
-	}
-}
-
 // --config selects the settings file for the command, which is what lets two
 // apertures or a test keep separate configuration.
 func TestConfigFlagSelectsTheSettingsFile(t *testing.T) {

@@ -313,3 +313,29 @@ func TestSpec(t *testing.T) {
 		t.Errorf("menu args = %q, want none", spec.Args)
 	}
 }
+
+// Two concurrent launches must not share a per-launch config file: the
+// second write would replace the first, and the first child to exit would
+// delete it under the second.
+func TestWriteProviderConfigIsUniquePerLaunch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	provs := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+
+	first, cleanupFirst, err := writeProviderConfig(testHost, provs)
+	if err != nil {
+		t.Fatalf("first writeProviderConfig: %v", err)
+	}
+	second, cleanupSecond, err := writeProviderConfig(testHost, provs)
+	if err != nil {
+		cleanupFirst()
+		t.Fatalf("second writeProviderConfig: %v", err)
+	}
+	defer cleanupSecond()
+	cleanupFirst()
+	if first == second {
+		t.Fatalf("both launches wrote %q", first)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Errorf("the second launch's config is gone: %v", err)
+	}
+}

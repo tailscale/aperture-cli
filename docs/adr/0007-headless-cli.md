@@ -5,7 +5,10 @@ Date: 2026-10-13
 Amended 2026-10-13: the single-dash long forms stay, deprecated. Guy ruled
 the flag changes strictly additive; nothing that parses today may stop
 parsing. Use of one prints a deprecation warning to stderr, with no version
-promised for removal.
+promised for removal. The forms apply only before a client command's name:
+inside a client's tail a single-dash long flag is the client's own, since
+nothing before the client command ever parsed one as aperture's, and the two
+are indistinguishable.
 
 ## Why?
 
@@ -26,10 +29,12 @@ only interface, and menus do not compose with a shell.
 2. Flags take GNU form through pflag: `--endpoint`, `--bridge`, `--provider`,
    `--model`, `--port`, `--config`, `--debug`, each with a single-letter
    shorthand. The pre-cobra single-dash long forms (`-endpoint`) still
-   parse: a normalization pass rewrites them to GNU form before cobra sees
-   them, and each rewrite prints a deprecation warning to stderr. They are
-   marked deprecated in docs and source, not rejected. The environment
-   variables are unchanged.
+   parse before a client command's name: a normalization pass rewrites them
+   to GNU form before cobra sees them, and each rewrite prints a deprecation
+   warning to stderr. Inside a client's tail a single-dash long flag belongs
+   to the client, and only the GNU form and the single-letter shorthands are
+   aperture's. They are marked deprecated in docs and source, not rejected.
+   The environment variables are unchanged.
 3. A client command parses its own tail. Aperture consumes its known flags
    wherever they appear. The first unknown flag, or `--`, starts verbatim
    passthrough to the client. The parser is a pure function, not cobra.

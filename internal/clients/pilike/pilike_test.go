@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tailscale/aperture-cli/internal/config"
 )
@@ -859,6 +860,12 @@ func TestWriteProviderExtension_SweepsOrphans(t *testing.T) {
 		if err := os.WriteFile(path, []byte("// orphan\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		// Orphans only count as stranded once they pass the sweep's grace
+		// window: a sibling launch's fresh extension is not one.
+		orphaned := time.Now().Add(-2 * time.Minute)
+		if err := os.Chtimes(path, orphaned, orphaned); err != nil {
+			t.Fatal(err)
+		}
 		stale = append(stale, path)
 	}
 	// A file that is not ours must survive the sweep.
@@ -1024,5 +1031,31 @@ func TestSpec(t *testing.T) {
 				t.Errorf("Spec error = %v, want it to contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A sibling launch's extension is not an orphan: the sweep must leave files
+// inside the grace window alone, and take ones old enough to be stranded.
+func TestSweepSkipsFreshExtensions(t *testing.T) {
+	dir := t.TempDir()
+	fresh := filepath.Join(dir, "tmp_aperture_provider_fresh.js")
+	if err := os.WriteFile(fresh, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "tmp_aperture_provider_old.js")
+	if err := os.WriteFile(old, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(old, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+
+	sweepOrphanedExtensions(dir)
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("the sweep took a fresh extension: %v", err)
+	}
+	if _, err := os.Stat(old); err == nil {
+		t.Error("the sweep left a stranded extension")
 	}
 }

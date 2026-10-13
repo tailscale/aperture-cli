@@ -18,9 +18,21 @@ import (
 // bridge and debug selections resolved from flags and environment.
 func Execute(args []string, version string, runTUI func(endpoint, bridge string, debug bool) error) error {
 	root := rootCommand(version, runTUI)
-	rewritten, deprecated := gnuForm(args, longFlags)
-	root.SetArgs(rewritten)
+	clientNames := make([]string, 0, 8)
+	for _, c := range clients.All(nil) {
+		if name := c.BinaryName(); name != "" {
+			clientNames = append(clientNames, name)
+		}
+	}
+	rewritten, deprecated := gnuForm(args, longFlags, clientNames)
 	warnDeprecated(root.ErrOrStderr(), deprecated)
+	// --version is answered before dispatch: a version flag with a client
+	// command after it would otherwise be swallowed into the client's tail.
+	if versionRequested(rewritten, clientNames) {
+		fmt.Fprintln(root.OutOrStdout(), version)
+		return nil
+	}
+	root.SetArgs(rewritten)
 	return root.Execute()
 }
 
@@ -45,10 +57,6 @@ in a future release: use the GNU form (--endpoint) or the shorthand (-e).`,
 		// over nothing anyone reads. Subcommand errors keep their usage.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			if v, _ := cmd.Flags().GetBool("version"); v {
-				fmt.Fprintln(cmd.OutOrStdout(), version)
-				return nil
-			}
 			debug, _ := cmd.Flags().GetBool("debug")
 			return runTUI(
 				flagOrEnv(cmd, "endpoint", "APERTURE_ENDPOINT"),

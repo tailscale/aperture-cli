@@ -25,9 +25,10 @@ func clientCommand(c clients.Client) *cobra.Command {
 		Short: "Launch " + c.Name() + " against an Aperture",
 		Long: `Launch ` + c.Name() + ` against an Aperture, direct or through a bridge.
 
-Aperture flags: --endpoint/-e, --bridge/-b, --provider/-p, --model/-m,
---config/-c, --debug/-d. The first flag aperture does not know, or --,
-passes the rest to ` + binary + ` verbatim.`,
+Aperture flags here are the GNU form and the single-letter shorthands:
+--endpoint/-e, --bridge/-b, --provider/-p, --model/-m, --config/-c,
+--debug/-d. A single-dash long flag is ` + binary + `'s own in this tail.
+The first flag aperture does not know, or --, passes the rest to ` + binary + ` verbatim.`,
 		Example: "  aperture " + binary + ` --endpoint e1
   aperture ` + binary + ` --model some-model -- --search`,
 		Args:               cobra.ArbitraryArgs,
@@ -97,9 +98,11 @@ type launchSelection struct {
 }
 
 // splitLaunchArgs consumes aperture's known flags from a client command's
-// tail. The first unknown token, or --, starts verbatim passthrough to the
-// client binary (ADR 0007). Deprecated single-dash long forms never reach
-// here: gnuForm rewrote them before cobra ran.
+// tail. In the tail, aperture's flags are the GNU form and the single-letter
+// shorthands only: a single-dash long flag is the client's own, since
+// nothing before the client command ever parsed one as aperture's (ADR
+// 0007). Positional tokens pass through but do not end flag consumption.
+// The first unknown flag, or --, starts verbatim passthrough to the client.
 func splitLaunchArgs(args []string) (launchSelection, []string, error) {
 	var sel launchSelection
 	valueFlags := map[string]*string{
@@ -109,22 +112,31 @@ func splitLaunchArgs(args []string) (launchSelection, []string, error) {
 		"model": &sel.model, "m": &sel.model,
 		"config": &sel.config, "c": &sel.config,
 	}
+	var passthrough []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			return sel, args[i+1:], nil
+			return sel, append(passthrough, args[i+1:]...), nil
 		}
 		if arg == "" || arg == "-" || !strings.HasPrefix(arg, "-") {
-			return sel, args[i:], nil
+			// A positional passes through; aperture keeps consuming its own
+			// flags past it, anywhere in the tail.
+			passthrough = append(passthrough, arg)
+			continue
 		}
+		gnu := strings.HasPrefix(arg, "--")
 		name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if !gnu && len(name) > 1 {
+			// A single-dash long flag in the tail is the client's own.
+			return sel, append(passthrough, args[i:]...), nil
+		}
 		if name == "debug" || name == "d" {
 			on := true
 			if hasValue {
 				parsed, err := strconv.ParseBool(value)
 				if err != nil {
 					// Not a bool form of ours: the token belongs to the client.
-					return sel, args[i:], nil
+					return sel, append(passthrough, args[i:]...), nil
 				}
 				on = parsed
 			}
@@ -133,7 +145,7 @@ func splitLaunchArgs(args []string) (launchSelection, []string, error) {
 		}
 		target, ok := valueFlags[name]
 		if !ok {
-			return sel, args[i:], nil
+			return sel, append(passthrough, args[i:]...), nil
 		}
 		if !hasValue {
 			i++
@@ -144,5 +156,5 @@ func splitLaunchArgs(args []string) (launchSelection, []string, error) {
 		}
 		*target = value
 	}
-	return sel, nil, nil
+	return sel, passthrough, nil
 }
