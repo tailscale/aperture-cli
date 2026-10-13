@@ -93,9 +93,9 @@ aperture <client> [aperture flags] [-- client args]
 Flags take GNU form through pflag: `--endpoint`, `--bridge`, `--provider`,
 `--model`, `--port`, `--config`, `--debug`, each with a single-letter
 shorthand. The pre-cobra single-dash long forms (`-endpoint`) still parse,
-deprecated: a normalization pass rewrites them before cobra sees them.
-`--config` and `$APERTURE_CONFIG` select an alternate settings.json. The
-schema does not change.
+deprecated: a normalization pass rewrites them before cobra sees them and
+prints a warning to stderr. `--config` and `$APERTURE_CONFIG` select an
+alternate settings.json. The schema does not change.
 
 Rules:
 
@@ -117,6 +117,8 @@ Rules:
 - `serve` binds the Bridge's Port on loopback and holds the Route until
   SIGTERM or SIGINT. A port already bound is a hard error, never an
   ephemeral fallback. Client launches through a bridge keep ephemeral ports.
+- `endpoint delete` removes the endpoint only. A bridge it used stays until
+  `bridge delete`; the picker's orphan cascade is a TUI nicety, not a rule.
 - Writes stay where they are today. `add` and `delete` write settings. A
   launch records `LastLaunch` as the TUI does. `serve` writes nothing.
 - Help output is part of the surface. Every command's `--help` shows its

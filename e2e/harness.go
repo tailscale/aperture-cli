@@ -147,7 +147,7 @@ func hermeticEnv(t *testing.T, binDir string) []string {
 	// the login-link opener runs $BROWSER, and true is a no-op.
 	drop := map[string]bool{
 		"HOME": true, "XDG_CONFIG_HOME": true, "TERM": true, "PATH": true,
-		"APERTURE_ENDPOINT": true, "APERTURE_BRIDGE": true,
+		"APERTURE_ENDPOINT": true, "APERTURE_BRIDGE": true, "APERTURE_CONFIG": true,
 		"TS_AUTHKEY": true, "BROWSER": true,
 	}
 	var env []string

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/bridges"
+	"github.com/tailscale/aperture-cli/internal/cli"
 	"github.com/tailscale/aperture-cli/internal/config"
 	"github.com/tailscale/aperture-cli/internal/profiles"
 	"github.com/tailscale/aperture-cli/internal/tui"
@@ -30,11 +30,6 @@ import (
 )
 
 var (
-	flagVersion  = flag.Bool("version", false, "print version and exit")
-	flagDebug    = flag.Bool("debug", false, "enable bridge diagnostics and print agent launch environment")
-	flagEndpoint = flag.String("endpoint", "", "Aperture URL to open on, instead of the saved one ($APERTURE_ENDPOINT)")
-	flagBridge   = flag.String("bridge", "", "connect through the bridge with this name, creating it if there is none ($APERTURE_BRIDGE)")
-
 	buildVersion = "B0-dev"
 	buildCommit  = "unknown"
 	buildDate    = "unknown"
@@ -150,45 +145,29 @@ func reportFailure(err error) {
 	}
 }
 
-// flagOrEnv returns flag name when it was passed, even empty, and otherwise
-// the environment variable key. The variable lets a dotfile, container or
-// systemd unit make the same selection a typed invocation can. The flag wins
-// so a one-off run can override the shell it started in: -bridge= means no
-// bridge.
-func flagOrEnv(fs *flag.FlagSet, name, key string) string {
-	passed := false
-	fs.Visit(func(f *flag.Flag) { passed = passed || f.Name == name })
-	if passed {
-		return fs.Lookup(name).Value.String()
+// versionLine reports the build version with its commit and date when known.
+func versionLine() string {
+	if buildCommit != "unknown" {
+		return fmt.Sprintf("%s (%s, %s)", buildVersion, buildCommit, buildDate)
 	}
-	return os.Getenv(key)
+	return buildVersion
 }
 
-func main() {
-	flag.Parse()
-
-	if *flagVersion {
-		if buildCommit != "unknown" {
-			fmt.Printf("%s (%s, %s)\n", buildVersion, buildCommit, buildDate)
-		} else {
-			fmt.Println(buildVersion)
-		}
-		os.Exit(0)
-	}
-
+// runTUI starts the interactive launcher, the command a bare invocation
+// gets. endpoint, bridge and debug come from the command line resolved.
+func runTUI(endpoint, bridge string, debug bool) error {
 	// Start the log before anything that logs. slog's default handler writes
 	// to stderr, and on a TUI that owns the terminal that paints a line over
 	// the screen. Until this runs every diagnostic is either damage or lost.
-	closeLog := startRunLog(*flagDebug)
+	closeLog := startRunLog(debug)
 	defer closeLog()
 
 	g, err := config.Load()
 	if err != nil {
 		slog.Error("loading launcher config", "err", err)
-		reportFailure(err)
-		os.Exit(1)
+		return err
 	}
-	g.Debug = *flagDebug
+	g.Debug = debug
 
 	// Register Claude Desktop on supported platforms (darwin, windows).
 	profiles.RegisterIfSupported()
@@ -196,28 +175,34 @@ func main() {
 	// Resolve the flags before the TUI takes the terminal. A URL we cannot use
 	// then exits non-zero instead of painting an error the script that passed
 	// it will never see.
-	start, err := config.EndpointFromFlags(g, flagOrEnv(flag.CommandLine, "endpoint", "APERTURE_ENDPOINT"), flagOrEnv(flag.CommandLine, "bridge", "APERTURE_BRIDGE"))
+	start, err := config.EndpointFromFlags(g, endpoint, bridge)
 	if err != nil {
 		slog.Error("resolving the endpoint to open on", "err", err)
-		reportFailure(err)
-		os.Exit(1)
+		return err
 	}
 
 	machines := bridges.NewMachines(g.Debug)
 	p := tea.NewProgram(tui.NewModel(g, buildVersion, machines, start))
 
-	var exitCode int
+	var runErr error
 	if _, err := p.Run(); err != nil {
 		slog.Error("launcher error", "err", err)
-		reportFailure(err)
-		exitCode = 1
+		runErr = err
 	}
 	if err := machines.Close(); err != nil {
 		slog.Error("shutting down bridges", "err", err)
-		reportFailure(err)
-		exitCode = 1
+		if runErr == nil {
+			runErr = err
+		}
 	}
-	if exitCode != 0 {
-		os.Exit(exitCode)
+	return runErr
+}
+
+func main() {
+	// No slog here: only the TUI path starts the run log, and slog's default
+	// handler would paint a second error line over reportFailure's one.
+	if err := cli.Execute(os.Args[1:], versionLine(), runTUI); err != nil {
+		reportFailure(err)
+		os.Exit(1)
 	}
 }
