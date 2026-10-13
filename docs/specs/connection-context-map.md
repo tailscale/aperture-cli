@@ -18,6 +18,7 @@ The context boundaries below also describe the proposed broader event refactor.
 | Connection Attempt | One try at reaching an Aperture from one Endpoint. Has identity, a phase, a recorded progress trail, and exactly one outcome. | The TCP connection. The persisted endpoint list. |
 | Endpoint | The remote Aperture the user chose and the way to it. Two kinds and no third: a DirectEndpoint the host reaches itself, a BridgeEndpoint reached through a Bridge's Machine. The kind is the type, never an empty field. | The local proxy address. Anything the CLI listens on. |
 | Name | The user-chosen handle of a Bridge or an Endpoint, unique per kind. How a command line addresses one. | The ID, which is generated. The URL, which still addresses an unnamed Endpoint. |
+| Endpoint Entry | One row of the saved endpoint list: an Endpoint and its Name. | The Endpoint itself, a value compared by URL and bridge alone. |
 | Port | The fixed loopback port `serve` binds for a Bridge. Stored on the Bridge record; zero means no fixed port. | The ephemeral port a launch's Route binds. |
 | Gateway | The address a client is finally told to send requests to. The Endpoint URL when no Bridge is involved, the Route's local end when one is. | The Endpoint. Only equal to it in the direct case. |
 | Route | The local door to one Endpoint through one Machine: a `127.0.0.1:0` listener reverse-proxying over the Machine. | A tailnet route or subnet route. |

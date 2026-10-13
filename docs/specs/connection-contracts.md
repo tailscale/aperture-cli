@@ -96,9 +96,11 @@ select an alternate settings.json. The schema does not change.
 
 Rules:
 
-- A Name addresses an endpoint or a bridge. An endpoint value that parses as
-  an absolute URL is an inline endpoint. A name that parses as a URL is
-  refused at add time.
+- A Name addresses an endpoint or a bridge. Resolution is name first: a
+  value matching a saved Name is that endpoint, anything else parses as a
+  URL and becomes an inline endpoint. A name containing `://` is refused at
+  add time. Names win over URLs because any bare host parses as a URL, so
+  URL-first would make names unreachable.
 - A client command consumes aperture's known flags anywhere in its tail. The
   first unknown flag, or `--`, starts verbatim passthrough to the client.
 - Provider and model default to `LastLaunch` when still valid for the client,
