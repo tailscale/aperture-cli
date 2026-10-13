@@ -199,7 +199,7 @@ func (a *Attempt) Run(ctx context.Context, machines *Machines, emit func(connect
 	if err := mc.Open(ctx, emit); err != nil {
 		return Gateway{}, err
 	}
-	route, err := mc.RouteTo(ctx, bridged.URL(), emit)
+	route, err := mc.RouteTo(ctx, bridged.URL(), 0, emit)
 	if err != nil {
 		return Gateway{}, err
 	}

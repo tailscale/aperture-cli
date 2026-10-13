@@ -55,11 +55,12 @@ func parseTarget(raw string) (*url.URL, error) {
 // openRoute builds the reverse proxy for one target on the Machine's node.
 // The proxy reports through the Machine's relay because the Route is cached
 // and keeps serving long after the attempt that asked for it has gone. The
-// caller holds the Machine's turn.
-func (mc *Machine) openRoute(target *url.URL) (*Route, error) {
+// caller holds the Machine's turn. port is the loopback port to bind, zero
+// for a free one; a fixed port already bound is an error, never a fallback.
+func (mc *Machine) openRoute(target *url.URL, port int) (*Route, error) {
 	node, ev := mc.node, events(mc.ev.emit)
 	debug := mc.machines.debug
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		return nil, err
 	}

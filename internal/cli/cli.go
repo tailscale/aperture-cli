@@ -37,7 +37,8 @@ in a future release: use the GNU form (--endpoint) or the shorthand (-e).`,
 		Example: `  aperture
   aperture --endpoint http://ai
   aperture bridge add work --port 8991
-  aperture endpoint add e1 --bridge work http://ai`,
+  aperture endpoint add e1 --bridge work http://ai
+  aperture serve --bridge work`,
 		SilenceErrors: true,
 		// The TUI owns the terminal, so usage on a root error would paint
 		// over nothing anyone reads. Subcommand errors keep their usage.
@@ -72,7 +73,7 @@ in a future release: use the GNU form (--endpoint) or the shorthand (-e).`,
 		}
 	}
 
-	root.AddCommand(bridgeCommand(), endpointCommand())
+	root.AddCommand(bridgeCommand(), endpointCommand(), serveCommand())
 	return root
 }
 

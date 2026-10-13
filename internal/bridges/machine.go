@@ -205,8 +205,10 @@ func (mc *Machine) Open(ctx context.Context, emit func(connection.Event)) error 
 
 // RouteTo returns the Route to remoteURL through this Machine, opening one on
 // first use. The Machine must be open. RouteTo never starts a node to satisfy
-// a Route.
-func (mc *Machine) RouteTo(ctx context.Context, remoteURL string, emit func(connection.Event)) (*Route, error) {
+// a Route. port is the loopback port the Route binds, zero for a free one.
+// A cached Route keeps its first bind, so a fixed port works for the process
+// that opens exactly one Route (ADR 0008).
+func (mc *Machine) RouteTo(ctx context.Context, remoteURL string, port int, emit func(connection.Event)) (*Route, error) {
 	target, err := parseTarget(remoteURL)
 	if err != nil {
 		return nil, err
@@ -244,7 +246,7 @@ func (mc *Machine) RouteTo(ctx context.Context, remoteURL string, emit func(conn
 	if route := mc.routes[key]; route != nil {
 		return route, nil
 	}
-	route, err := mc.openRoute(target)
+	route, err := mc.openRoute(target, port)
 	if err != nil {
 		return nil, err
 	}
