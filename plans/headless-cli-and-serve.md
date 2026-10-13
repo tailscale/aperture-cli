@@ -43,9 +43,11 @@ the tail; the first unknown flag or `--` starts verbatim passthrough, so
    `--config`. Round-trip tests: old files load unchanged.
 4. internal/cli: cobra command tree (cobra + pflag are the one new
    dependency; Viper is rejected in ADR 0007). Root with no args runs the
-   TUI. Pure passthrough parser with table tests. Every command's `--help`
-   carries example invocations, with a test holding them to the contract's
-   grammar.
+   TUI. Pure passthrough parser with table tests. Every flag carries a
+   single-letter shorthand, and a normalization pass keeps the deprecated
+   single-dash long forms (`-endpoint`) parsing (ADR 0007 amendment). Every
+   command's `--help` carries example invocations, with a test holding them
+   to the contract's grammar.
 5. bridge and endpoint command groups. Delete goes through
    `Machines.Destroy`. Name uniqueness enforced at add.
 6. serve: `RouteTo` gains a listen port (0 keeps current behavior). Bind
@@ -62,8 +64,9 @@ the tail; the first unknown flag or `--` starts verbatim passthrough, so
 
 ## Watch
 
-- pflag does not parse single-dash long flags. `-endpoint` users move to
-  `--endpoint`; the env vars are unchanged. Recorded in ADR 0007.
+- pflag does not parse single-dash long flags, so a normalization pass
+  rewrites `-endpoint` to `--endpoint` before cobra runs. Deprecated in
+  docs and source, never rejected (ADR 0007 amendment).
 - A bound serve port is a hard error, never a fallback to ephemeral.
 - Login links go to stderr, never the run log. The redaction contract holds.
 - `bridge delete` refuses while a serve holds the slot lock. That is

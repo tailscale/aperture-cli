@@ -91,8 +91,11 @@ aperture <client> [aperture flags] [-- client args]
 ```
 
 Flags take GNU form through pflag: `--endpoint`, `--bridge`, `--provider`,
-`--model`, `--port`, `--config`, `--debug`. `--config` and `$APERTURE_CONFIG`
-select an alternate settings.json. The schema does not change.
+`--model`, `--port`, `--config`, `--debug`, each with a single-letter
+shorthand. The pre-cobra single-dash long forms (`-endpoint`) still parse,
+deprecated: a normalization pass rewrites them before cobra sees them.
+`--config` and `$APERTURE_CONFIG` select an alternate settings.json. The
+schema does not change.
 
 Rules:
 

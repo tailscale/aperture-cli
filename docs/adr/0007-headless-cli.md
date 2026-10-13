@@ -2,6 +2,9 @@
 
 Status: accepted
 Date: 2026-10-13
+Amended 2026-10-13: the single-dash long forms stay, deprecated. Guy ruled
+the flag changes strictly additive; nothing that parses today may stop
+parsing.
 
 ## Why?
 
@@ -20,8 +23,11 @@ only interface, and menus do not compose with a shell.
    `endpoint` and `serve` are subcommand groups. Each registered client gets
    a command named by its binary (`aperture codex`).
 2. Flags take GNU form through pflag: `--endpoint`, `--bridge`, `--provider`,
-   `--model`, `--port`, `--config`, `--debug`. The single-dash long forms
-   (`-endpoint`) stop parsing. The environment variables are unchanged.
+   `--model`, `--port`, `--config`, `--debug`, each with a single-letter
+   shorthand. The pre-cobra single-dash long forms (`-endpoint`) still
+   parse: a normalization pass rewrites them to GNU form before cobra sees
+   them. They are marked deprecated in docs and source, not rejected. The
+   environment variables are unchanged.
 3. A client command parses its own tail. Aperture consumes its known flags
    wherever they appear. The first unknown flag, or `--`, starts verbatim
    passthrough to the client. The parser is a pure function, not cobra.
@@ -39,12 +45,12 @@ only interface, and menus do not compose with a shell.
 
 ## Consequences
 
-cobra and pflag join go.mod. Single-dash long flags break; the binary is
-still B0 and the env vars cover containers and units, so the break is
-announced rather than shimmed. Each of the nine client packages grows a
-headless launch entry next to its menu flow. The TUI and the CLI edit the
-same settings file, so a change made in one is visible in the other, and the
-name-uniqueness rule applies to both.
+cobra and pflag join go.mod. Nothing that parsed before stops parsing: the
+single-dash long forms are deprecated but accepted, and the shorthands are
+additive. Each of the nine client packages grows a headless launch entry
+next to its menu flow. The TUI and the CLI edit the same settings file, so
+a change made in one is visible in the other, and the name-uniqueness rule
+applies to both.
 
 ## Rejected
 
@@ -59,6 +65,9 @@ name-uniqueness rule applies to both.
   for scripts, hostile to the alias case, which is the common case.
 - No names on endpoints. The smallest diff, and the one that has the user
   typing URLs or bridge IDs every day.
+- Removing the single-dash long forms at the cobra switch. The original
+  decision; Guy ruled it out because the break buys nothing a deprecation
+  notice does not.
 
 ## Revisit when
 
