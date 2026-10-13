@@ -1,6 +1,8 @@
 package copilot
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -125,5 +127,71 @@ func TestStripProviderPrefix(t *testing.T) {
 		if got := stripProviderPrefix(in); got != want {
 			t.Errorf("stripProviderPrefix(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The headless launch (ADR 0007): flags win, LastLaunch fills what they
+// leave empty, and anything left goes to the first compatible provider on
+// its first backend.
+func TestSpec(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	both := map[string]bool{config.EndpointOpenAIChat: true, config.EndpointOpenAIResponses: true}
+	bedrock := config.ProviderInfo{ID: "bedrock", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}}
+	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: both}
+	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+	newGlobal := func() *config.Global {
+		return &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{bedrock, openai, anthropic}}
+	}
+	c := &Client{}
+
+	// Defaults: the first compatible provider, its first backend, its first model.
+	spec, err := c.Spec(newGlobal(), "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["COPILOT_PROVIDER_TYPE"] != "openai" || spec.Env["COPILOT_PROVIDER_WIRE_API"] != "completions" || spec.Env["COPILOT_MODEL"] != "gpt-5" {
+		t.Errorf("default env = %v, want openai chat completions on gpt-5", spec.Env)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("default args = %v, want none", spec.Args)
+	}
+
+	// Flags win, and passthrough args come through verbatim.
+	spec, err = c.Spec(newGlobal(), "anthropic", "anthropic/claude", []string{"--allow-all"})
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["COPILOT_PROVIDER_TYPE"] != "anthropic" || spec.Env["COPILOT_MODEL"] != "claude" {
+		t.Errorf("flag env = %v, want the flagged provider and model", spec.Env)
+	}
+	if !slices.Equal(spec.Args, []string{"--allow-all"}) {
+		t.Errorf("flag args = %v, want the passthrough", spec.Args)
+	}
+
+	// LastLaunch fills empty flags, backend included, and an explicit model still wins.
+	g := newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastBackendType: "openai_responses", LastProviderID: "openai", LastModel: "openai/gpt-5-mini"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["COPILOT_PROVIDER_WIRE_API"] != "responses" || spec.Env["COPILOT_MODEL"] != "gpt-5-mini" {
+		t.Errorf("replay env = %v, want the LastLaunch backend and model", spec.Env)
+	}
+	spec, err = c.Spec(g, "", "openai/gpt-5", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["COPILOT_PROVIDER_WIRE_API"] != "responses" || spec.Env["COPILOT_MODEL"] != "gpt-5" {
+		t.Errorf("model flag env = %v, want the flag model on the LastLaunch backend", spec.Env)
+	}
+
+	// Errors: an unknown provider names the compatible ids, an incompatible
+	// one names the backends it lacks.
+	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openai, anthropic") {
+		t.Errorf("unknown provider: %v, want the compatible ids in the error", err)
+	}
+	if _, err := c.Spec(newGlobal(), "bedrock", "", nil); err == nil || !strings.Contains(err.Error(), "OpenAI Chat Completions") {
+		t.Errorf("incompatible provider: %v, want the Copilot backends named", err)
 	}
 }

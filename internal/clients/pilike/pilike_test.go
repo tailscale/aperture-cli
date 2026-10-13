@@ -891,3 +891,138 @@ func TestWriteProviderExtension_SweepsOrphans(t *testing.T) {
 		t.Errorf("extensions in the config dir = %v, want only %v", matches, []string{path})
 	}
 }
+
+// flagValue returns the argument after flag, or "" when flag is absent.
+func flagValue(args []string, flag string) string {
+	i := slices.Index(args, flag)
+	if i < 0 || i+1 >= len(args) {
+		return ""
+	}
+	return args[i+1]
+}
+
+// TestSpec covers the headless launch: flags win, LastLaunch fills what the
+// flags leave empty, the backend follows LastBackendType when the provider
+// still serves it, and passthrough args come last.
+func TestSpec(t *testing.T) {
+	isolateConfigDir(t)
+	bedrock := config.ProviderInfo{ID: "bedrock", Models: []string{"m"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}}
+	empty := config.ProviderInfo{ID: "empty", SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+	openai := config.ProviderInfo{
+		ID:                 "openai",
+		Models:             []string{"gpt-5", "gpt-5-mini"},
+		SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true, config.EndpointOpenAIChat: true},
+	}
+	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+	providers := []config.ProviderInfo{bedrock, empty, openai, anthropic}
+	global := func(last config.LaunchState) *config.Global {
+		return &config.Global{ApertureHost: testHost, Providers: providers, LastLaunch: last}
+	}
+	openaiReplay := func(backendID, model string) config.LaunchState {
+		return config.LaunchState{LastClientName: noYolo.Name, LastBackendType: backendID, LastProviderID: "openai", LastModel: model}
+	}
+	c := &Client{V: noYolo}
+
+	cases := []struct {
+		name      string
+		last      config.LaunchState
+		provider  string
+		model     string
+		extra     []string
+		wantModel string
+		wantAPI   string
+	}{
+		{
+			name:      "defaults_first_compatible_provider_first_backend_and_model",
+			wantModel: "aperture-openai/gpt-5", wantAPI: "openai-responses",
+		},
+		{
+			name:     "flags_win_and_passthrough_comes_last",
+			provider: "anthropic", model: "anthropic/claude", extra: []string{"--search"},
+			wantModel: "aperture-anthropic/claude", wantAPI: "anthropic-messages",
+		},
+		{
+			name:      "explicit_provider_without_model_takes_its_first_model",
+			provider:  "openai",
+			wantModel: "aperture-openai/gpt-5", wantAPI: "openai-responses",
+		},
+		{
+			name:     "explicit_model_is_kept",
+			provider: "openai", model: "openai/gpt-5-mini",
+			wantModel: "aperture-openai/gpt-5-mini", wantAPI: "openai-responses",
+		},
+		{
+			name:      "replay_fills_empty_model_and_backend",
+			last:      openaiReplay("openai_chat", "openai/gpt-5-mini"),
+			wantModel: "aperture-openai/gpt-5-mini", wantAPI: "openai-completions",
+		},
+		{
+			name: "replay_model_flag_beats_last_model",
+			last: openaiReplay("openai_chat", "openai/gpt-5-mini"), model: "openai/gpt-5",
+			wantModel: "aperture-openai/gpt-5", wantAPI: "openai-completions",
+		},
+		{
+			name:      "replay_backend_id_gone_falls_back_to_first_backend",
+			last:      openaiReplay("bedrock_legacy", "openai/gpt-5-mini"),
+			wantModel: "aperture-openai/gpt-5-mini", wantAPI: "openai-responses",
+		},
+		{
+			name:      "replay_backend_dropped_by_provider_falls_back_to_first_backend",
+			last:      openaiReplay("anthropic", "openai/gpt-5-mini"),
+			wantModel: "aperture-openai/gpt-5-mini", wantAPI: "openai-responses",
+		},
+		{
+			name:      "replay_provider_gone_falls_through_to_first_compatible",
+			last:      config.LaunchState{LastClientName: noYolo.Name, LastBackendType: "openai_chat", LastProviderID: "gone", LastModel: "gone/x"},
+			wantModel: "aperture-openai/gpt-5", wantAPI: "openai-responses",
+		},
+		{
+			name:      "another_clients_record_is_ignored",
+			last:      config.LaunchState{LastClientName: "Oh My Pi", LastBackendType: "openai_chat", LastProviderID: "openai", LastModel: "openai/gpt-5-mini"},
+			wantModel: "aperture-openai/gpt-5", wantAPI: "openai-responses",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := c.Spec(global(tc.last), tc.provider, tc.model, tc.extra)
+			if err != nil {
+				t.Fatalf("Spec: %v", err)
+			}
+			defer spec.Cleanup()
+
+			if got := flagValue(spec.Args, "--model"); got != tc.wantModel {
+				t.Errorf("--model = %q, want %q (args %v)", got, tc.wantModel, spec.Args)
+			}
+			src, err := os.ReadFile(flagValue(spec.Args, "-e"))
+			if err != nil {
+				t.Fatalf("extension unreadable: %v", err)
+			}
+			if want := `"api": "` + tc.wantAPI + `"`; !strings.Contains(string(src), want) {
+				t.Errorf("extension lacks %s:\n%s", want, src)
+			}
+			if tail := spec.Args[len(spec.Args)-len(tc.extra):]; !slices.Equal(tail, tc.extra) {
+				t.Errorf("args end with %v, want passthrough %v", tail, tc.extra)
+			}
+		})
+	}
+
+	// Errors name what the endpoint does offer, or why the provider cannot
+	// serve this client.
+	errCases := []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{name: "unknown_provider_names_compatible_ids", provider: "ghost", want: "openai, anthropic"},
+		{name: "incompatible_provider_names_needed_protocols", provider: "bedrock", want: "OpenAI Responses"},
+		{name: "provider_without_models", provider: "empty", want: "lists no models"},
+	}
+	for _, tc := range errCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := c.Spec(global(config.LaunchState{}), tc.provider, "", nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Spec error = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}

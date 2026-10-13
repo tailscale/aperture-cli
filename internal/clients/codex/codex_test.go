@@ -216,3 +216,62 @@ func TestReplay_StaleProvider(t *testing.T) {
 		t.Error("Replay with missing binary should return nil")
 	}
 }
+
+// The headless launch (ADR 0007): flags win, LastLaunch fills what they
+// leave empty, and anything left goes to the first compatible provider.
+func TestSpec(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	responses := map[string]bool{config.EndpointOpenAIResponses: true}
+	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: responses}
+	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+	newGlobal := func() *config.Global {
+		return &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{anthropic, openai}}
+	}
+	c := &Client{}
+	argsContain := func(args []string, want ...string) bool {
+		for i := 0; i+len(want) <= len(args); i++ {
+			if slices.Equal(args[i:i+len(want)], want) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Defaults: the only compatible provider, its first model.
+	spec, err := c.Spec(newGlobal(), "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if !argsContain(spec.Args, "--model", "openai/gpt-5") {
+		t.Errorf("default args = %v, want the first model of the compatible provider", spec.Args)
+	}
+
+	// Flags win, and passthrough args land after aperture's own.
+	spec, err = c.Spec(newGlobal(), "openai", "openai/gpt-5-mini", []string{"--search"})
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if !argsContain(spec.Args, "--model", "openai/gpt-5-mini") || spec.Args[len(spec.Args)-1] != "--search" {
+		t.Errorf("flag args = %v, want the flag model and the passthrough last", spec.Args)
+	}
+
+	// LastLaunch fills empty flags when it still fits.
+	g := newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "openai", LastModel: "openai/gpt-5-mini"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if !argsContain(spec.Args, "--model", "openai/gpt-5-mini") {
+		t.Errorf("replay args = %v, want LastLaunch's model", spec.Args)
+	}
+
+	// Errors: an unknown provider names what the endpoint offers, an
+	// incompatible one says why.
+	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openai") {
+		t.Errorf("unknown provider: %v, want the compatible ids in the error", err)
+	}
+	if _, err := c.Spec(newGlobal(), "anthropic", "", nil); err == nil || !strings.Contains(err.Error(), "responses") {
+		t.Errorf("incompatible provider: %v, want the missing API named", err)
+	}
+}

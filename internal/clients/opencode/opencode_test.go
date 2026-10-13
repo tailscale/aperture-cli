@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -216,5 +217,99 @@ func TestWriteProviderConfig(t *testing.T) {
 				t.Errorf("config file still exists after cleanup")
 			}
 		})
+	}
+}
+
+// The headless launch (ADR 0007): flags win, LastLaunch supplies the
+// provider, and OpenCode picks its own model unless --model says otherwise.
+func TestSpec(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	embed := config.ProviderInfo{ID: "embed", Models: []string{"embed-1"}, SupportedEndpoints: map[string]bool{"/v1/embeddings": true}}
+	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+	newGlobal := func() *config.Global {
+		return &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{embed, openai, anthropic}}
+	}
+	c := &Client{}
+
+	// Defaults: the first compatible provider and no model, because OpenCode
+	// picks its model in its own UI. The incompatible provider ahead of it
+	// is skipped.
+	g := newGlobal()
+	spec, err := c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("default args = %q, want none", spec.Args)
+	}
+	if g.LastLaunch.LastProviderID != "openai" {
+		t.Errorf("provider = %q, want the first compatible one", g.LastLaunch.LastProviderID)
+	}
+	if spec.Env["OPENCODE_CONFIG"] == "" {
+		t.Errorf("default env = %v, want OPENCODE_CONFIG set", spec.Env)
+	}
+
+	// Flags win, a --model passes through verbatim, and passthrough args
+	// land after aperture's own.
+	g = newGlobal()
+	spec, err = c.Spec(g, "anthropic", "anthropic/anthropic/claude", []string{"--session", "s1"})
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if want := []string{"--model", "anthropic/anthropic/claude", "--session", "s1"}; !slices.Equal(spec.Args, want) {
+		t.Errorf("flag args = %q, want %q", spec.Args, want)
+	}
+	if g.LastLaunch.LastProviderID != "anthropic" {
+		t.Errorf("provider = %q, want the flag's provider", g.LastLaunch.LastProviderID)
+	}
+
+	// LastLaunch supplies the provider while it still fits, and no model:
+	// the menu records none and headless replay invents none.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "openai"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("replay args = %q, want none", spec.Args)
+	}
+
+	// LastLaunch for a provider that is gone or no longer compatible is
+	// ignored in favor of the default.
+	for _, stale := range []string{"ghost", "embed"} {
+		g := newGlobal()
+		g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: stale}
+		if _, err := c.Spec(g, "", "", nil); err != nil {
+			t.Fatalf("Spec with stale %q: %v", stale, err)
+		}
+		if g.LastLaunch.LastProviderID != "openai" {
+			t.Errorf("stale %q provider = %q, want the default", stale, g.LastLaunch.LastProviderID)
+		}
+	}
+
+	// Errors: an unknown provider names the compatible ids, an
+	// incompatible one says why, and no compatible provider says so.
+	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openai, anthropic") {
+		t.Errorf("unknown provider: %v, want the compatible ids in the error", err)
+	}
+	if _, err := c.Spec(newGlobal(), "embed", "", nil); err == nil || !strings.Contains(err.Error(), "OpenCode can use") {
+		t.Errorf("incompatible provider: %v, want the reason in the error", err)
+	}
+	none := &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{embed}}
+	if _, err := c.Spec(none, "", "", nil); err == nil || !strings.Contains(err.Error(), "OpenCode protocol") {
+		t.Errorf("no compatible provider: %v, want the protocol named", err)
+	}
+	// The menu launch names no model and no extra args.
+	spec, err = c.buildSpec(newGlobal(), openai, "", nil)
+	if err != nil {
+		t.Fatalf("buildSpec: %v", err)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("menu args = %q, want none", spec.Args)
 	}
 }

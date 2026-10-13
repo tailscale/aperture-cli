@@ -4,6 +4,7 @@
 package copilot
 
 import (
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -147,7 +148,83 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo, b backend) m
 	}}
 }
 
+// Spec implements clients.Client.
+func (c *Client) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
+	p, b, m, err := c.resolve(g, provider, model)
+	if err != nil {
+		return clients.LaunchSpec{}, err
+	}
+	return c.buildSpec(g, p, b, m, args), nil
+}
+
+// resolve picks the provider, backend and model for a headless launch: the
+// flags, then LastLaunch when it still fits, then the first compatible
+// provider with its first backend and default model.
+func (c *Client) resolve(g *config.Global, provider, model string) (config.ProviderInfo, backend, string, error) {
+	if provider != "" {
+		p, ok := g.Provider(provider)
+		if !ok {
+			return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no provider %q; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
+		}
+		bs := backendsFor(p)
+		if len(bs) == 0 {
+			return config.ProviderInfo{}, backend{}, "", fmt.Errorf("provider %q supports none of the endpoints %s speaks: %s", provider, name, backendNames())
+		}
+		return p, bs[0], model, nil
+	}
+	if last := g.LastLaunch; last.LastClientName == name {
+		if p, ok := g.Provider(last.LastProviderID); ok {
+			bs := backendsFor(p)
+			if i := slices.IndexFunc(bs, func(b backend) bool { return b.id == last.LastBackendType }); i >= 0 {
+				if model == "" {
+					model = last.LastModel
+				}
+				return p, bs[i], model, nil
+			}
+		}
+	}
+	provs := compatibleProviders(g.Providers)
+	if len(provs) == 0 {
+		return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no providers support %s; it speaks %s", name, backendNames())
+	}
+	p := provs[0]
+	if model == "" {
+		if models := fqnModels(p); len(models) > 0 {
+			model = models[0]
+		}
+	}
+	return p, backendsFor(p)[0], model, nil
+}
+
+// providerIDs renders provider ids for an error message.
+func providerIDs(provs []config.ProviderInfo) string {
+	if len(provs) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(provs))
+	for _, p := range provs {
+		ids = append(ids, p.ID)
+	}
+	return strings.Join(ids, ", ")
+}
+
+// backendNames renders the backends Copilot speaks for an error message.
+func backendNames() string {
+	names := make([]string, 0, len(backends))
+	for _, b := range backends {
+		names = append(names, b.displayName)
+	}
+	return strings.Join(names, ", ")
+}
+
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, model string) menu.Result {
+	return menu.Result{Cmd: clients.Launch(c.buildSpec(g, p, b, model, nil)), PopOnDone: true}
+}
+
+// buildSpec assembles the launch for one provider, backend and model and
+// records the launch state. extra passes through to the binary verbatim,
+// for headless invocations.
+func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, b backend, model string, extra []string) clients.LaunchSpec {
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
 		bin = binaryName
@@ -162,12 +239,12 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, mode
 		LastModel:       model,
 	})
 
-	cmd := clients.Launch(clients.LaunchSpec{
+	return clients.LaunchSpec{
 		Binary: bin,
+		Args:   extra,
 		Env:    env,
 		Debug:  g.Debug,
-	})
-	return menu.Result{Cmd: cmd, PopOnDone: true}
+	}
 }
 
 func buildEnv(apertureHost string, b backend, model string) map[string]string {

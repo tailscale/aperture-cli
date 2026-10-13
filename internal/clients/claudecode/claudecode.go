@@ -7,6 +7,7 @@
 package claudecode
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -166,9 +167,108 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo, b backend) m
 	}}
 }
 
+// Spec implements clients.Client.
+func (c *Client) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
+	p, b, m, err := c.resolve(g, provider, model)
+	if err != nil {
+		return clients.LaunchSpec{}, err
+	}
+	return c.buildSpec(g, p, b, m, args)
+}
+
+// resolve picks the provider, backend and model for a headless launch: the
+// flags, then LastLaunch when it still fits, then the first compatible
+// provider with its first backend and default model.
+func (c *Client) resolve(g *config.Global, provider, model string) (config.ProviderInfo, backend, string, error) {
+	last := g.LastLaunch
+	replaying := last.LastClientName == name
+	if provider == "" && replaying {
+		if p, ok := g.Provider(last.LastProviderID); ok && len(backendsFor(p)) > 0 {
+			provider = p.ID
+		}
+	}
+	if provider == "" {
+		provs := compatibleProviders(g.Providers)
+		if len(provs) == 0 {
+			return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no provider on this endpoint supports Claude Code")
+		}
+		provider = provs[0].ID
+	}
+	p, ok := g.Provider(provider)
+	if !ok {
+		return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no provider %q; this endpoint offers %s", provider, listOrNone(providerIDs(compatibleProviders(g.Providers))))
+	}
+	choices := dedupedBackendsFor(p)
+	if len(choices) == 0 {
+		return config.ProviderInfo{}, backend{}, "", fmt.Errorf("provider %q does not support Claude Code; it offers %s", provider, listOrNone(endpointsOf(p)))
+	}
+	b := choices[0]
+	sameProvider := replaying && p.ID == last.LastProviderID
+	if sameProvider {
+		all := backendsFor(p)
+		if i := slices.IndexFunc(all, func(x backend) bool { return x.id == last.LastBackendType }); i >= 0 {
+			b = all[i]
+		}
+	}
+
+	if !b.picksModel {
+		if model != "" {
+			return config.ProviderInfo{}, backend{}, "", fmt.Errorf("%s picks its own models for Claude Code; drop --model", b.displayName)
+		}
+		return p, b, "", nil
+	}
+	models := fqnModels(p)
+	if model == "" && sameProvider && slices.Contains(models, last.LastModel) {
+		model = last.LastModel
+	}
+	if model == "" && len(models) > 0 {
+		model = models[0]
+	}
+	return p, b, model, nil
+}
+
+// providerIDs renders provider ids for an error message.
+func providerIDs(provs []config.ProviderInfo) []string {
+	ids := make([]string, 0, len(provs))
+	for _, p := range provs {
+		ids = append(ids, p.ID)
+	}
+	return ids
+}
+
+// endpointsOf returns the endpoints a provider advertises, sorted.
+func endpointsOf(p config.ProviderInfo) []string {
+	return slices.Sorted(maps.Keys(p.SupportedEndpoints))
+}
+
+// listOrNone joins items for an error message, or says none when empty.
+func listOrNone(items []string) string {
+	if len(items) == 0 {
+		return "none"
+	}
+	return strings.Join(items, ", ")
+}
+
+// launch wraps buildSpec in the menu flow: the exec runs as a tea.Cmd and the
+// menu pops when the child exits.
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, model string) menu.Result {
-	if err := checkClaudeSettings(); err != nil {
+	spec, err := c.buildSpec(g, p, b, model, nil)
+	if err != nil {
 		return errorResult(err.Error())
+	}
+	launchFn := c.launchFn
+	if launchFn == nil {
+		launchFn = clients.Launch
+	}
+	return menu.Result{Cmd: launchFn(spec), PopOnDone: true}
+}
+
+// buildSpec assembles the launch for one provider, backend and model and
+// records the launch state. extra passes through to the binary verbatim,
+// after every flag aperture sets, for headless invocations.
+func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, b backend, model string, extra []string) (clients.LaunchSpec, error) {
+	if err := checkClaudeSettings(); err != nil {
+		return clients.LaunchSpec{}, err
 	}
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
@@ -176,7 +276,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, mode
 	}
 	env, err := envForBackend(g.ApertureHost, b)
 	if err != nil {
-		return errorResult(err.Error())
+		return clients.LaunchSpec{}, err
 	}
 	// Bedrock derives per-tier model env vars from the provider's model list.
 	maps.Copy(env, tierModelEnv(b, p))
@@ -188,6 +288,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, mode
 	if g.Settings.YoloMode {
 		args = append(args, "--dangerously-skip-permissions")
 	}
+	args = append(args, extra...)
 
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName:  name,
@@ -196,17 +297,12 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, mode
 		LastModel:       model,
 	})
 
-	launchFn := c.launchFn
-	if launchFn == nil {
-		launchFn = clients.Launch
-	}
-	cmd := launchFn(clients.LaunchSpec{
+	return clients.LaunchSpec{
 		Binary: bin,
 		Args:   args,
 		Env:    env,
 		Debug:  g.Debug,
-	})
-	return menu.Result{Cmd: cmd, PopOnDone: true}
+	}, nil
 }
 
 // Replay implements clients.Client.

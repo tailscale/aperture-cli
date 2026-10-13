@@ -42,6 +42,12 @@ type Client interface {
 	// model → launch).
 	Menu(g *config.Global) menu.MenuItem
 
+	// Spec builds a headless launch: no menus, no tea. provider and model
+	// come from command-line flags; empty means LastLaunch when still valid,
+	// then the first compatible provider and its default model. args pass
+	// through to the client binary verbatim.
+	Spec(g *config.Global, provider, model string, args []string) (LaunchSpec, error)
+
 	// Replay attempts to re-launch the client using the last-used selection
 	// stored in g.LastLaunch. The TUI only offers replay when the recorded
 	// endpoint is active. Returns nil if the state is stale (binary missing,
@@ -92,4 +98,15 @@ func All(g *config.Global) []Client {
 	out := make([]Client, len(registered))
 	copy(out, registered)
 	return out
+}
+
+// ByName returns the registered client whose binary is name, and whether
+// one exists. The command line addresses clients by binary name.
+func ByName(name string) (Client, bool) {
+	for _, c := range registered {
+		if c.BinaryName() == name {
+			return c, true
+		}
+	}
+	return nil, false
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -97,5 +99,81 @@ func TestWriteConfig_Vertex(t *testing.T) {
 	}
 	if s.Security.Auth.SelectedType != "vertex-ai" {
 		t.Errorf("selectedType = %q, want vertex-ai", s.Security.Auth.SelectedType)
+	}
+}
+
+// The headless launch (ADR 0007): flags win, LastLaunch fills what they
+// leave empty, and anything left goes to the first compatible provider.
+func TestSpec(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	openai := config.ProviderInfo{ID: "openai", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}}
+	vertexOnly := config.ProviderInfo{ID: "vertex", SupportedEndpoints: map[string]bool{config.EndpointVertexGemini: true}}
+	both := config.ProviderInfo{ID: "both", SupportedEndpoints: map[string]bool{
+		config.EndpointVertexGemini: true,
+		config.EndpointGemini:       true,
+	}}
+	newGlobal := func() *config.Global {
+		return &config.Global{ApertureHost: "https://ai.example.com", Providers: []config.ProviderInfo{openai, vertexOnly, both}}
+	}
+	c := &Client{}
+	argsContain := func(args []string, want ...string) bool {
+		for i := range len(args) - len(want) + 1 {
+			if slices.Equal(args[i:i+len(want)], want) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Defaults: the first compatible provider, its first backend, and no
+	// --model so the CLI picks its own.
+	spec, err := c.Spec(newGlobal(), "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["GOOGLE_VERTEX_BASE_URL"] == "" || len(spec.Args) != 0 {
+		t.Errorf("default env %v args %v, want the vertex backend and no flags", spec.Env, spec.Args)
+	}
+
+	// Flags win, and passthrough args land after aperture's own.
+	spec, err = c.Spec(newGlobal(), "both", "gemini-2.5-pro", []string{"--checkpointing"})
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if !argsContain(spec.Args, "--model", "gemini-2.5-pro") || spec.Args[len(spec.Args)-1] != "--checkpointing" {
+		t.Errorf("flag args = %v, want the flag model and the passthrough last", spec.Args)
+	}
+
+	// LastLaunch fills empty flags, including the backend it recorded.
+	g := newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "both", LastBackendType: "gemini", LastModel: "gemini-2.5-flash"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["GEMINI_BASE_URL"] == "" || !argsContain(spec.Args, "--model", "gemini-2.5-flash") {
+		t.Errorf("replay env %v args %v, want LastLaunch's backend and model", spec.Env, spec.Args)
+	}
+
+	// LastLaunch from another client, or naming a provider that is gone,
+	// is ignored.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: "OpenAI Codex", LastProviderID: "both", LastBackendType: "gemini", LastModel: "gpt-5"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["GOOGLE_VERTEX_BASE_URL"] == "" || len(spec.Args) != 0 {
+		t.Errorf("other client's state leaked: env %v args %v", spec.Env, spec.Args)
+	}
+
+	// Errors: an unknown provider names the compatible ids, an
+	// incompatible one says which APIs it lacks.
+	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "vertex, both") {
+		t.Errorf("unknown provider: %v, want the compatible ids in the error", err)
+	}
+	if _, err := c.Spec(newGlobal(), "openai", "", nil); err == nil || !strings.Contains(err.Error(), "Vertex Gemini or the Gemini API") {
+		t.Errorf("incompatible provider: %v, want the missing APIs named", err)
 	}
 }

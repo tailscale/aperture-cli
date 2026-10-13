@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -384,4 +385,108 @@ func lower(s string) string {
 		b[i] = c
 	}
 	return string(b)
+}
+
+func TestSpec(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude-opus", "claude-sonnet"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+	bedrock := config.ProviderInfo{ID: "bedrock", Models: []string{"us.anthropic.claude-opus-4"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockInvoke: true}}
+	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+	newGlobal := func() *config.Global {
+		return &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{anthropic, bedrock, openai}}
+	}
+	c := &Client{}
+
+	// Defaults: the first compatible provider, its first backend, its first model.
+	spec, err := c.Spec(newGlobal(), "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["ANTHROPIC_BASE_URL"] != testHost || spec.Env["ANTHROPIC_MODEL"] != "claude-opus" {
+		t.Errorf("default env = %v, want the Anthropic backend on its first model", spec.Env)
+	}
+
+	// Flags win, and passthrough args land after aperture's own.
+	g := newGlobal()
+	g.Settings.YoloMode = true
+	spec, err = c.Spec(g, "anthropic", "anthropic/claude-sonnet", []string{"--search"})
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["ANTHROPIC_MODEL"] != "claude-sonnet" {
+		t.Errorf("flag env = %v, want the flag model", spec.Env)
+	}
+	if want := []string{"--dangerously-skip-permissions", "--search"}; !slices.Equal(spec.Args, want) {
+		t.Errorf("args = %v, want %v", spec.Args, want)
+	}
+
+	// A backend that picks its own models rejects --model and sets none.
+	spec, err = c.Spec(newGlobal(), "bedrock", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["CLAUDE_CODE_USE_BEDROCK"] != "1" || spec.Env["ANTHROPIC_DEFAULT_OPUS_MODEL"] != "us.anthropic.claude-opus-4" {
+		t.Errorf("bedrock env = %v, want Bedrock routing with tier models", spec.Env)
+	}
+	if _, ok := spec.Env["ANTHROPIC_MODEL"]; ok {
+		t.Errorf("bedrock env sets ANTHROPIC_MODEL: %v", spec.Env)
+	}
+	if _, err := c.Spec(newGlobal(), "bedrock", "bedrock/x", nil); err == nil || !strings.Contains(err.Error(), "drop --model") {
+		t.Errorf("bedrock with --model: %v, want the flag rejected", err)
+	}
+
+	// LastLaunch fills empty flags when it still fits.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "anthropic", LastBackendType: "anthropic", LastModel: "anthropic/claude-sonnet"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["ANTHROPIC_MODEL"] != "claude-sonnet" {
+		t.Errorf("replay env = %v, want LastLaunch's model", spec.Env)
+	}
+
+	// LastLaunch picks the backend again when the provider still offers it:
+	// anthropic also takes /v1/messages for z.ai, so zai is a real choice.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "anthropic", LastBackendType: "zai"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "glm-5-turbo" {
+		t.Errorf("replay backend env = %v, want the z.ai backend", spec.Env)
+	}
+
+	// A stale LastBackendType falls back to the default backend.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "anthropic", LastBackendType: "vertex"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if _, ok := spec.Env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; ok || spec.Env["ANTHROPIC_AUTH_TOKEN"] != "-" {
+		t.Errorf("stale backend env = %v, want the default Anthropic backend", spec.Env)
+	}
+
+	// Errors: an unknown provider names what the endpoint offers, an
+	// incompatible one names what it does offer.
+	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "anthropic, bedrock") {
+		t.Errorf("unknown provider: %v, want the compatible ids in the error", err)
+	}
+	if _, err := c.Spec(newGlobal(), "openai", "", nil); err == nil || !strings.Contains(err.Error(), "/v1/responses") {
+		t.Errorf("incompatible provider: %v, want the offered endpoint named", err)
+	}
+
+	// A conflicting ~/.claude/settings.json blocks the headless launch too.
+	claudeDir := filepath.Join(os.Getenv("HOME"), ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{"env":{"ANTHROPIC_BASE_URL":"x"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Spec(newGlobal(), "", "", nil); err == nil || !strings.Contains(err.Error(), "ANTHROPIC_BASE_URL") {
+		t.Errorf("conflicting settings: %v, want the conflict named", err)
+	}
 }

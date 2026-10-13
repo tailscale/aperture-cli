@@ -47,6 +47,9 @@ func (c *fakeClient) Menu(*config.Global) menu.MenuItem {
 }
 func (c *fakeClient) Replay(*config.Global) tea.Cmd          { return c.replayCmd }
 func (c *fakeClient) QuickSelectLabel(*config.Global) string { return c.quickLabel }
+func (c *fakeClient) Spec(*config.Global, string, string, []string) (clients.LaunchSpec, error) {
+	return clients.LaunchSpec{}, nil
+}
 
 // withFakeClients swaps the TUI's client registry for the duration of the test.
 func withFakeClients(t *testing.T, cs []clients.Client) {

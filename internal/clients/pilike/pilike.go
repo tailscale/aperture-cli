@@ -16,6 +16,7 @@
 package pilike
 
 import (
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -214,7 +215,90 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo, b backend) m
 	}}
 }
 
+// Spec implements clients.Client.
+func (c *Client) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
+	p, b, m, err := c.resolve(g, provider, model)
+	if err != nil {
+		return clients.LaunchSpec{}, err
+	}
+	return c.buildSpec(g, p, b, m, args)
+}
+
+// resolve picks the provider, backend, and model for a headless launch: the
+// flags, then LastLaunch when it still fits, then the first compatible
+// provider with its default backend and model.
+func (c *Client) resolve(g *config.Global, provider, model string) (config.ProviderInfo, backend, string, error) {
+	if provider != "" {
+		p, ok := g.Provider(provider)
+		if !ok {
+			return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no provider %q; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
+		}
+		return launchTarget(p, "", model)
+	}
+	if last := g.LastLaunch; last.LastClientName == c.V.Name {
+		if p, ok := g.Provider(last.LastProviderID); ok && isCompatible(p) {
+			if model == "" {
+				model = last.LastModel
+			}
+			return launchTarget(p, last.LastBackendType, model)
+		}
+	}
+	provs := compatibleProviders(g.Providers)
+	if len(provs) == 0 {
+		return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no providers support %s", c.V.Name)
+	}
+	return launchTarget(provs[0], "", model)
+}
+
+// launchTarget checks that p can serve this client, then picks its backend
+// and model. preferredID is kept when p still serves it, and an empty model
+// becomes p's first model.
+func launchTarget(p config.ProviderInfo, preferredID, model string) (config.ProviderInfo, backend, string, error) {
+	if len(p.Models) == 0 {
+		return config.ProviderInfo{}, backend{}, "", fmt.Errorf("provider %q lists no models", p.ID)
+	}
+	b, err := launchBackend(p, preferredID)
+	if err != nil {
+		return config.ProviderInfo{}, backend{}, "", err
+	}
+	if model == "" {
+		model = fqnModels(p)[0]
+	}
+	return p, b, model, nil
+}
+
+// launchBackend returns the backend preferredID names when p still serves
+// it, and otherwise the first backend p serves, the most preferred. It
+// errors when p serves none.
+func launchBackend(p config.ProviderInfo, preferredID string) (backend, error) {
+	if b, ok := backendByID(preferredID); ok && providerSupports(p, b) {
+		return b, nil
+	}
+	bs := backendsFor(p)
+	if len(bs) == 0 {
+		names := make([]string, len(backends))
+		for i, b := range backends {
+			names[i] = b.displayName
+		}
+		return backend{}, fmt.Errorf("provider %q serves no protocol this client can use; it needs one of: %s", p.ID, strings.Join(names, ", "))
+	}
+	return bs[0], nil
+}
+
+// launch builds the menu's foreground launch and records the launch state.
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, m string) menu.Result {
+	spec, err := c.buildSpec(g, p, b, m, nil)
+	if err != nil {
+		return errorResult("Failed to " + err.Error())
+	}
+	return menu.Result{Cmd: clients.Launch(spec), PopOnDone: true}
+}
+
+// buildSpec writes the per-launch extension, assembles the launch for one
+// provider, backend, and model, and records the launch state. extra passes
+// through to the binary verbatim, after every flag aperture sets, for
+// headless invocations.
+func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, b backend, m string, extra []string) (clients.LaunchSpec, error) {
 	bin := clients.FindBinary(c.V.BinaryName, c.CommonPaths())
 	if bin == "" {
 		bin = c.V.BinaryName
@@ -222,10 +306,9 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, m st
 
 	extPath, cleanup, err := writeProviderExtension(c.V, g.ApertureHost, p, b)
 	if err != nil {
-		return errorResult("Failed to write " + c.V.Name + " provider extension: " + err.Error())
+		return clients.LaunchSpec{}, fmt.Errorf("write %s provider extension: %w", c.V.Name, err)
 	}
-
-	args := buildArgs(c.V, extPath, p.ID, m, g.Settings.YoloMode)
+	args := append(buildArgs(c.V, extPath, p.ID, m, g.Settings.YoloMode), extra...)
 
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName:  c.V.Name,
@@ -234,13 +317,12 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend, m st
 		LastModel:       m,
 	})
 
-	cmd := clients.Launch(clients.LaunchSpec{
+	return clients.LaunchSpec{
 		Binary:  bin,
 		Args:    args,
 		Cleanup: cleanup,
 		Debug:   g.Debug,
-	})
-	return menu.Result{Cmd: cmd, PopOnDone: true}
+	}, nil
 }
 
 // buildArgs assembles the harness's command line: load the generated
@@ -327,14 +409,32 @@ func (c *Client) QuickSelectLabel(g *config.Global) string {
 	return label
 }
 
+// isCompatible reports whether p can serve this client: it lists a model
+// and advertises a protocol at least one backend speaks.
+func isCompatible(p config.ProviderInfo) bool {
+	return len(p.Models) > 0 && len(backendsFor(p)) > 0
+}
+
 func compatibleProviders(all []config.ProviderInfo) []config.ProviderInfo {
 	var out []config.ProviderInfo
 	for _, p := range all {
-		if len(p.Models) > 0 && len(backendsFor(p)) > 0 {
+		if isCompatible(p) {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// providerIDs renders the provider IDs for an error message.
+func providerIDs(provs []config.ProviderInfo) string {
+	if len(provs) == 0 {
+		return "none"
+	}
+	ids := make([]string, len(provs))
+	for i, p := range provs {
+		ids[i] = p.ID
+	}
+	return strings.Join(ids, ", ")
 }
 
 func backendsFor(p config.ProviderInfo) []backend {
