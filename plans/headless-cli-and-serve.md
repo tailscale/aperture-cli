@@ -43,7 +43,9 @@ the tail; the first unknown flag or `--` starts verbatim passthrough, so
    `--config`. Round-trip tests: old files load unchanged.
 4. internal/cli: cobra command tree (cobra + pflag are the one new
    dependency; Viper is rejected in ADR 0007). Root with no args runs the
-   TUI. Pure passthrough parser with table tests.
+   TUI. Pure passthrough parser with table tests. Every command's `--help`
+   carries example invocations, with a test holding them to the contract's
+   grammar.
 5. bridge and endpoint command groups. Delete goes through
    `Machines.Destroy`. Name uniqueness enforced at add.
 6. serve: `RouteTo` gains a listen port (0 keeps current behavior). Bind

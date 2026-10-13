@@ -116,6 +116,9 @@ Rules:
   ephemeral fallback. Client launches through a bridge keep ephemeral ports.
 - Writes stay where they are today. `add` and `delete` write settings. A
   launch records `LastLaunch` as the TUI does. `serve` writes nothing.
+- Help output is part of the surface. Every command's `--help` shows its
+  common invocations as examples, and a test holds the examples to the
+  grammar above.
 
 ## Domain events
 
