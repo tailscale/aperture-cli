@@ -60,11 +60,33 @@ func TestBridgeCommands(t *testing.T) {
 // endpoint, and the error has to say why.
 func TestBridgeDeleteRefusesABridgeInUse(t *testing.T) {
 	scratchHome(t)
+	if _, _, err := runCLI(t, "bridge", "add", "work"); err != nil {
+		t.Fatalf("bridge add: %v", err)
+	}
 	if _, _, err := runCLI(t, "endpoint", "add", "e1", "--bridge", "work", "http://ai"); err != nil {
 		t.Fatalf("endpoint add: %v", err)
 	}
 	if _, _, err := runCLI(t, "bridge", "delete", "work"); err == nil {
 		t.Error("deleted a bridge an endpoint connects through")
+	}
+}
+
+// endpoint add is a management command: a typo in --bridge must error and
+// leave settings untouched, not create a bridge nobody logged in.
+func TestEndpointAddRefusesAMissingBridge(t *testing.T) {
+	scratchHome(t)
+	if _, _, err := runCLI(t, "endpoint", "add", "e1", "--bridge", "workk", "http://ai"); err == nil {
+		t.Fatal("endpoint add created a bridge from a typo")
+	}
+	stdout, _, err := runCLI(t, "bridge", "list")
+	if err != nil {
+		t.Fatalf("bridge list: %v", err)
+	}
+	if strings.Contains(stdout, "workk") {
+		t.Errorf("bridge list = %q, want nothing created", stdout)
+	}
+	if strings.Contains(stdout, "workk\t") {
+		t.Error("unexpected tab escape")
 	}
 }
 

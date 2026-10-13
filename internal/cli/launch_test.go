@@ -52,6 +52,18 @@ func TestSplitLaunchArgs(t *testing.T) {
 			in:   []string{"--endpoint"},
 			err:  true,
 		},
+		{
+			name: "debug with a false value stays off",
+			in:   []string{"--debug=false", "--search"},
+			sel:  launchSelection{},
+			rest: []string{"--search"},
+		},
+		{
+			name: "debug with a junk value belongs to the client",
+			in:   []string{"--debug=banana", "--search"},
+			sel:  launchSelection{},
+			rest: []string{"--debug=banana", "--search"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

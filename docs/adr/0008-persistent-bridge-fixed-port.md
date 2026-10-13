@@ -39,6 +39,15 @@ device in the admin console, which is ADR 0006 working as designed.
 conflict. One serve fronts one endpoint. Two endpoints mean two serve
 processes, two slots and two ports.
 
+The fixed listener is loopback only, and nothing authenticates the requests
+it forwards: the Route strips the client Authorization header because the
+Machine's tailnet identity is the ingress auth. Every process on the host can
+therefore reach the user's Aperture through a serve, and on a shared machine
+so can every other user, since loopback is not per-UID. This is the same
+exposure ts-unplug has, which serve replaces deliberately, and single-user
+workstations are aperture's audience. A listener that demands a local token
+is the revisit path if a multi-user deployment ever appears.
+
 ## Rejected
 
 - A daemon mode that installs and manages a service unit. That is a daemon

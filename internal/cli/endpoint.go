@@ -34,9 +34,21 @@ func endpointCommand() *cobra.Command {
 			if cmd.Flags().Changed("bridge") {
 				bridge, _ = cmd.Flags().GetString("bridge")
 			}
-			ep, err := config.EndpointFromFlags(g, args[1], bridge)
+			// A management command never creates a bridge: a typo must not
+			// leave settings holding a bridge nobody logged in. The launcher
+			// flags keep the creating path, which is what makes a first run
+			// scriptable.
+			location, err := config.ParseEndpointURL(args[1])
 			if err != nil {
 				return err
+			}
+			ep := config.Endpoint(config.Direct(location))
+			if bridge != "" {
+				b, err := bridgeByName(g, bridge)
+				if err != nil {
+					return err
+				}
+				ep = config.Bridged(location, b.ID)
 			}
 			if err := g.NameEndpoint(ep, args[0]); err != nil {
 				return err

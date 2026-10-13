@@ -101,5 +101,8 @@ func loadGlobal(cmd *cobra.Command) (*config.Global, error) {
 		return nil, err
 	}
 	g.Debug, _ = cmd.Flags().GetBool("debug")
+	if g.Debug {
+		config.RaiseRunLog()
+	}
 	return g, nil
 }

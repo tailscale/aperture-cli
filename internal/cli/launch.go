@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -47,6 +48,9 @@ passes the rest to ` + binary + ` verbatim.`,
 				return err
 			}
 			g.Debug = sel.debug
+			if g.Debug {
+				config.RaiseRunLog()
+			}
 
 			ep, err := config.EndpointFromFlags(g, sel.endpoint, sel.bridge)
 			if err != nil {
@@ -115,7 +119,16 @@ func splitLaunchArgs(args []string) (launchSelection, []string, error) {
 		}
 		name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
 		if name == "debug" || name == "d" {
-			sel.debug = true
+			on := true
+			if hasValue {
+				parsed, err := strconv.ParseBool(value)
+				if err != nil {
+					// Not a bool form of ours: the token belongs to the client.
+					return sel, args[i:], nil
+				}
+				on = parsed
+			}
+			sel.debug = on
 			continue
 		}
 		target, ok := valueFlags[name]

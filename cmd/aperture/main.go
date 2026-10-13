@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -104,35 +103,6 @@ func gitDescribeInDir(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// startRunLog points slog at the run log and returns a function that closes
-// it. Records are written straight through, so the os.Exit paths that skip
-// the close lose nothing. The close is tidiness, not a flush.
-//
-// A run that cannot open the file still runs. Diagnostics are not worth
-// refusing to start over. Such a run discards them rather than writing to
-// stderr, because stderr is the TUI's screen.
-//
-// verbose only raises the level. The log is on for every run. The run worth
-// reading back is the one that went wrong, and nobody knows to pass -debug
-// before it does.
-func startRunLog(verbose bool) func() {
-	f, err := config.OpenRunLog()
-	if err != nil {
-		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
-		return func() {}
-	}
-	level := slog.LevelInfo
-	if verbose {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: level})))
-	slog.Info("aperture starting", "version", buildVersion, "commit", buildCommit, "pid", os.Getpid())
-	return func() {
-		slog.Info("aperture exiting")
-		f.Close()
-	}
-}
-
 // reportFailure prints err and the run log path to stderr. Every diagnostic
 // goes to the run log, which is right for a running TUI and wrong for a run
 // that just died. Without this, a failed launch prints nothing and exits 1.
@@ -157,12 +127,9 @@ func versionLine() string {
 // runTUI starts the interactive launcher, the command a bare invocation
 // gets. endpoint, bridge and debug come from the command line resolved.
 func runTUI(endpoint, bridge string, debug bool) error {
-	// Start the log before anything that logs. slog's default handler writes
-	// to stderr, and on a TUI that owns the terminal that paints a line over
-	// the screen. Until this runs every diagnostic is either damage or lost.
-	closeLog := startRunLog(debug)
-	defer closeLog()
-
+	if debug {
+		config.RaiseRunLog()
+	}
 	g, err := config.Load()
 	if err != nil {
 		slog.Error("loading launcher config", "err", err)
@@ -200,14 +167,21 @@ func runTUI(endpoint, bridge string, debug bool) error {
 }
 
 func main() {
-	// No slog here: only the TUI path starts the run log, and slog's default
-	// handler would paint a second error line over reportFailure's one.
+	// The log opens before dispatch, so every run logs, headless ones too.
+	// The TUI still owns the terminal: nothing else writes to stderr here.
+	closeLog := config.StartRunLog()
+	defer closeLog()
+	slog.Info("aperture starting", "version", buildVersion, "commit", buildCommit, "pid", os.Getpid())
 	if err := cli.Execute(os.Args[1:], versionLine(), runTUI); err != nil {
 		// A launched client's exit code is aperture's own: an alias for the
 		// client has to behave like the client. Its stderr already said why.
+		// A signaled child reports -1, which would wrap to 255.
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			os.Exit(exitErr.ExitCode())
+			if code := exitErr.ExitCode(); code > 0 {
+				os.Exit(code)
+			}
+			os.Exit(1)
 		}
 		reportFailure(err)
 		os.Exit(1)

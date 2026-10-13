@@ -271,3 +271,15 @@ func TestResolveFallsBackToAURLForAnUnknownName(t *testing.T) {
 		t.Errorf("endpoint = %+v, want e1 read as a bare host", ep)
 	}
 }
+
+// Names are tab-separated output a script parses and a status line a user
+// reads, so a newline would forge a row.
+func TestRefusesControlCharactersInNames(t *testing.T) {
+	g := loadInto(t, config.Settings{})
+	if _, err := g.AddBridge("bad\tbridge", 0); err == nil {
+		t.Error("AddBridge took a tab in a name")
+	}
+	if err := g.NameEndpoint(config.Direct("http://ai"), "bad\nendpoint"); err == nil {
+		t.Error("NameEndpoint took a newline in a name")
+	}
+}

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // Global holds the live app state the TUI and every client package share:
@@ -195,6 +196,16 @@ func (g *Global) RemoveEndpoint(ep Endpoint) error {
 	return nil
 }
 
+// checkName refuses a name with control characters. Names reach the tabbed
+// stdout of bridge list and endpoint list and the status lines scripts
+// parse, and a newline or escape would forge rows in them.
+func checkName(name string) error {
+	if strings.ContainsFunc(name, unicode.IsControl) {
+		return fmt.Errorf("name %q contains control characters", name)
+	}
+	return nil
+}
+
 // AddBridge creates a bridge named name with a generated ID, saves it and
 // returns it. port is the fixed port serve binds, zero for none. The name
 // is the bridge's command-line handle, so a duplicate is refused without
@@ -203,6 +214,9 @@ func (g *Global) AddBridge(name string, port int) (Bridge, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Bridge{}, fmt.Errorf("bridge name is empty")
+	}
+	if err := checkName(name); err != nil {
+		return Bridge{}, err
 	}
 	if port < 0 || port > 65535 {
 		return Bridge{}, fmt.Errorf("port %d is outside 0-65535", port)
@@ -281,6 +295,9 @@ func (g *Global) NameEndpoint(ep Endpoint, name string) error {
 	}
 	if strings.Contains(name, "://") {
 		return fmt.Errorf("endpoint name %q looks like a URL", name)
+	}
+	if err := checkName(name); err != nil {
+		return err
 	}
 	next := g.Settings
 	next.Endpoints = append(endpointList(nil), g.Settings.Endpoints...)
