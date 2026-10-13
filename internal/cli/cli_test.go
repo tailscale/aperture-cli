@@ -7,15 +7,19 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/tailscale/aperture-cli/internal/config"
 )
 
 // scratchHome points the config directory at a scratch home for the whole
-// test, so several invocations share one settings file.
+// test, so several invocations share one settings file. It also clears the
+// process-wide settings path: UseSettingsFile survives the test that set
+// it, and a repeated run (-count=2) fails on stale state without this.
 func scratchHome(t *testing.T) {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+	config.UseSettingsFile("")
 }
 
 // runCLI executes the command tree once and returns what it printed.
