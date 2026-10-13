@@ -94,28 +94,90 @@ Each aperture process on a bridge is its own device on the tailnet. The first pr
 
 A fresh device needs one login. Set `TS_AUTHKEY` to a reusable auth key and new devices authorize without the browser; devices already registered keep their credentials on disk and never consult the key again. The key decides which tailnet a fresh device joins, so use a key from the tailnet your Aperture is on.
 
+### Command line
+
+Everything the TUI configures is also a command, so an aperture setup can
+live in a script, a dotfile or a unit file.
+
+```sh
+aperture bridge add work --port 8991                 # save a bridge with a fixed port
+aperture bridge list
+aperture bridge describe work
+aperture bridge delete work                          # logs its machines out first
+aperture endpoint add e1 --bridge work http://ai     # save an endpoint under a name
+aperture endpoint list
+aperture endpoint delete e1
+```
+
+Endpoints and bridges are addressed by name. An endpoint value that is not a
+saved name is read as a URL.
+
+Launch an agent directly with its binary name. Aperture consumes its own
+flags; the first flag it does not know, or `--`, passes the rest to the
+agent verbatim. Provider and model default to your last launch, then the
+first compatible pair.
+
+```sh
+aperture codex --endpoint e1                 # launch codex against e1
+aperture codex --model openai/gpt-5-mini     # override the model
+aperture codex -- --search                   # pass --search to codex
+alias codex='aperture codex'                 # feels like codex, configures itself
+```
+
+`aperture serve` runs one bridge on a fixed port until it is stopped, for
+client configurations that need a stable address to point at. The port comes
+from the bridge or from `--port`; serve never falls back to a random port.
+
+```sh
+aperture serve --bridge work              # binds the bridge's stored port
+aperture serve --bridge work --port 8992  # one-off override
+```
+
+A systemd user unit runs serve under a supervisor:
+
+```ini
+# ~/.config/systemd/user/aperture-work.service
+[Unit]
+Description=aperture bridge work
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/aperture serve --bridge work
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
 ### Flags
 
-| Flag | Environment | Description |
-|------|-------------|-------------|
-| `-version` | | Print build version and exit |
-| `-debug` | | Print environment variables set before launching the agent |
-| `-endpoint` | `APERTURE_ENDPOINT` | Aperture URL to open on, instead of the saved one |
-| `-bridge` | `APERTURE_BRIDGE` | Connect through the bridge with this name, creating it if there is none |
+| Flag | Shorthand | Environment | Description |
+|------|-----------|-------------|-------------|
+| `--version` | `-v` | | Print build version and exit |
+| `--debug` | `-d` | | Print environment variables set before launching the agent |
+| `--endpoint` | `-e` | `APERTURE_ENDPOINT` | Aperture URL or saved endpoint name, instead of the active one |
+| `--bridge` | `-b` | `APERTURE_BRIDGE` | Connect through the bridge with this name, creating it if there is none |
+| `--config` | `-c` | `APERTURE_CONFIG` | Read and write this settings file |
+| `--port` | `-p` | | Fixed port for `bridge add` and `serve` |
+| `--provider` | `-p` | | Provider for a client launch |
+| `--model` | `-m` | | Model for a client launch |
 
 A flag beats its environment variable, so a one-off run can override whatever
-the shell was started with. `-bridge` on its own starts at the well-known
+the shell was started with. `--bridge` on its own starts at the well-known
 location, the same guess the connection picker makes:
 
 ```sh
-aperture -bridge work                                   # http://ai over the "work" bridge
-aperture -bridge work -endpoint aperture.example.com    # that URL over the "work" bridge
-aperture -endpoint aperture.example.com                 # direct, no bridge
+aperture --bridge work                                     # http://ai over the "work" bridge
+aperture --bridge work --endpoint aperture.example.com     # that URL over the "work" bridge
+aperture --endpoint aperture.example.com                   # direct, no bridge
 ```
 
 Neither is made the saved active endpoint until the connection works, so an
 unreachable URL passed on the command line does not displace the one that does
 work.
+
+The single-dash long forms (`-endpoint`) still parse but are deprecated: they
+print a warning and will be removed in a future release.
 
 ### Environment variables
 
@@ -123,8 +185,9 @@ Everything the launcher reads from the environment:
 
 | Variable | Description |
 |----------|-------------|
-| `APERTURE_ENDPOINT` | Aperture URL to open on, instead of the saved one. `-endpoint` wins over it. |
-| `APERTURE_BRIDGE` | Connect through the bridge with this name, creating it if there is none. `-bridge` wins over it. |
+| `APERTURE_ENDPOINT` | Aperture URL to open on, instead of the saved one. `--endpoint` wins over it. |
+| `APERTURE_BRIDGE` | Connect through the bridge with this name, creating it if there is none. `--bridge` wins over it. |
+| `APERTURE_CONFIG` | Read and write this settings file. `--config` wins over it. |
 | `TS_AUTHKEY` | Tailscale auth key that authorizes a fresh bridge device without the browser login. Read only when a new device registers; see [Concurrent sessions](#concurrent-sessions). |
 | `CODEX_INSTALL_DIR` | Extra directory searched for a standalone Codex binary, matching the Codex installer's own variable. |
 | `CODEX_HOME` | Extra Codex home searched for the standalone install layout, matching Codex's own variable. |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -202,6 +203,12 @@ func main() {
 	// No slog here: only the TUI path starts the run log, and slog's default
 	// handler would paint a second error line over reportFailure's one.
 	if err := cli.Execute(os.Args[1:], versionLine(), runTUI); err != nil {
+		// A launched client's exit code is aperture's own: an alias for the
+		// client has to behave like the client. Its stderr already said why.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.ExitCode())
+		}
 		reportFailure(err)
 		os.Exit(1)
 	}

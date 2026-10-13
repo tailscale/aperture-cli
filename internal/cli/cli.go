@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/tailscale/aperture-cli/internal/clients"
 	"github.com/tailscale/aperture-cli/internal/config"
 )
 
@@ -74,6 +75,11 @@ in a future release: use the GNU form (--endpoint) or the shorthand (-e).`,
 	}
 
 	root.AddCommand(bridgeCommand(), endpointCommand(), serveCommand())
+	for _, c := range clients.All(nil) {
+		if c.BinaryName() != "" {
+			root.AddCommand(clientCommand(c))
+		}
+	}
 	return root
 }
 
