@@ -52,6 +52,9 @@ func (e BridgeEndpoint) endpoint()                   {}
 type Bridge struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Port is the fixed loopback port serve binds for this bridge. Zero means
+	// no fixed port, and serve asks for --port.
+	Port int `json:"port,omitempty"`
 	// Tailnet names the tailnet the node last logged in to. Commit records it
 	// after a successful connection, so the connection picker can name the
 	// tailnet before the node starts again.
@@ -72,10 +75,12 @@ func ParseEndpointURL(value string) (string, error) {
 	return strings.TrimRight(value, "/"), nil
 }
 
-// endpointRecord is the settings.json form of an Endpoint. Both kinds share
-// one shape, and bridgeId being present tells them apart. The file predates
-// the two types and is not changing under existing users.
+// endpointRecord is the settings.json form of an EndpointEntry. Both
+// endpoint kinds share one shape, and bridgeId being present tells them
+// apart. The file predates the two types and is not changing under existing
+// users; name is additive and old files carry none.
 type endpointRecord struct {
+	Name     string `json:"name,omitempty"`
 	URL      string `json:"url"`
 	BridgeID string `json:"bridgeId,omitempty"`
 }
@@ -98,13 +103,24 @@ func (r endpointRecord) endpoint() Endpoint {
 	return Direct(r.URL)
 }
 
-func (e DirectEndpoint) MarshalJSON() ([]byte, error) { return json.Marshal(recordOf(e)) }
-func (e BridgeEndpoint) MarshalJSON() ([]byte, error) { return json.Marshal(recordOf(e)) }
+// EndpointEntry is one row of the saved endpoint list: an Endpoint and the
+// Name a command line addresses it by. The Name stays off the Endpoint
+// itself, so endpoint equality stays URL plus bridge.
+type EndpointEntry struct {
+	Endpoint Endpoint
+	Name     string
+}
 
-// endpointList holds the Endpoints field of Settings. Its elements are an
+func (e EndpointEntry) MarshalJSON() ([]byte, error) {
+	r := recordOf(e.Endpoint)
+	r.Name = e.Name
+	return json.Marshal(r)
+}
+
+// endpointList holds the Endpoints field of Settings. Its elements carry an
 // interface, and encoding/json cannot decode those without being told the
 // concrete types.
-type endpointList []Endpoint
+type endpointList []EndpointEntry
 
 func (l *endpointList) UnmarshalJSON(data []byte) error {
 	var records []endpointRecord
@@ -113,7 +129,7 @@ func (l *endpointList) UnmarshalJSON(data []byte) error {
 	}
 	*l = make(endpointList, 0, len(records))
 	for _, r := range records {
-		*l = append(*l, r.endpoint())
+		*l = append(*l, EndpointEntry{Endpoint: r.endpoint(), Name: r.Name})
 	}
 	return nil
 }

@@ -157,9 +157,9 @@ func RemoveFromSettings(g *config.Global, bridge config.Bridge, endpoint config.
 // bridgeID.
 func endpointsThroughBridge(g *config.Global, bridgeID string) []config.Endpoint {
 	var users []config.Endpoint
-	for _, endpoint := range g.Settings.Endpoints {
-		if isReachableThroughBridge(endpoint, bridgeID) {
-			users = append(users, endpoint)
+	for _, entry := range g.Settings.Endpoints {
+		if isReachableThroughBridge(entry.Endpoint, bridgeID) {
+			users = append(users, entry.Endpoint)
 		}
 	}
 	return users

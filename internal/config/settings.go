@@ -33,8 +33,19 @@ type Settings struct {
 	YoloMode bool `json:"yoloMode,omitempty"`
 }
 
+// settingsFile, when non-empty, is the settings.json path for the whole
+// process. main sets it once from --config or APERTURE_CONFIG before Load.
+var settingsFile string
+
+// UseSettingsFile points settings reads and writes at path instead of the
+// default location. Call it once at startup, before Load.
+func UseSettingsFile(path string) { settingsFile = path }
+
 // settingsPath returns the path to the launcher settings JSON file.
 func settingsPath() (string, error) {
+	if settingsFile != "" {
+		return settingsFile, nil
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -63,7 +74,7 @@ func LoadSettings() (Settings, error) {
 		return Settings{}, fmt.Errorf("parsing settings: %w", err)
 	}
 	if len(s.Endpoints) == 0 {
-		s.Endpoints = []Endpoint{Direct(DefaultLocation)}
+		s.Endpoints = endpointList{{Endpoint: Direct(DefaultLocation)}}
 	}
 	return s, nil
 }
@@ -86,8 +97,26 @@ func SaveSettings(s Settings) error {
 
 func defaultSettings() Settings {
 	return Settings{
-		Endpoints: []Endpoint{Direct(DefaultLocation)},
+		Endpoints: endpointList{{Endpoint: Direct(DefaultLocation)}},
 	}
+}
+
+// HasEndpoint reports whether the endpoint list holds ep.
+func (s Settings) HasEndpoint(ep Endpoint) bool {
+	return slices.ContainsFunc(s.Endpoints, func(e EndpointEntry) bool {
+		return e.Endpoint == ep
+	})
+}
+
+// EndpointNamed returns the endpoint saved under name, matched without
+// case, and whether one exists.
+func (s Settings) EndpointNamed(name string) (Endpoint, bool) {
+	for _, e := range s.Endpoints {
+		if e.Name != "" && strings.EqualFold(e.Name, name) {
+			return e.Endpoint, true
+		}
+	}
+	return nil, false
 }
 
 // BridgeStateDir returns the tsnet state directory for one slot of a bridge.

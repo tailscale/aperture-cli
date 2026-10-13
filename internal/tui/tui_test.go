@@ -90,7 +90,7 @@ func TestRootMenu_QuickSelectPrepended(t *testing.T) {
 	withFakeClients(t, []clients.Client{fc})
 
 	m := &model{g: &config.Global{
-		Settings: config.Settings{Endpoints: []config.Endpoint{config.Direct("http://ai")}},
+		Settings: config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://ai")}}},
 		LastLaunch: config.LaunchState{
 			LastClientName:  "A",
 			LastEndpointURL: "http://ai",
@@ -130,7 +130,7 @@ func TestRootMenu_NoQuickSelectWhenReplayNil(t *testing.T) {
 	withFakeClients(t, []clients.Client{fc})
 
 	m := &model{g: &config.Global{
-		Settings: config.Settings{Endpoints: []config.Endpoint{config.Direct("http://ai")}},
+		Settings: config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://ai")}}},
 		LastLaunch: config.LaunchState{
 			LastClientName:  "A",
 			LastEndpointURL: "http://ai",
@@ -155,7 +155,7 @@ func TestRootMenu_NoQuickSelectWithoutRecordedEndpoint(t *testing.T) {
 	withFakeClients(t, []clients.Client{fc})
 
 	m := &model{g: &config.Global{
-		Settings:   config.Settings{Endpoints: []config.Endpoint{config.Direct("http://ai")}},
+		Settings:   config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://ai")}}},
 		LastLaunch: config.LaunchState{LastClientName: "A"},
 	}}
 	m.connected = true
@@ -183,7 +183,7 @@ func TestQuickSelectRequiresRecordedEndpointToBeActive(t *testing.T) {
 	saved := config.Bridged("http://ai", "bridge-saved")
 	m := &model{
 		g: &config.Global{
-			Settings:  config.Settings{Endpoints: []config.Endpoint{active, saved}},
+			Settings:  config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: active}, {Endpoint: saved}}},
 			Providers: []config.ProviderInfo{{ID: "old-provider"}},
 			LastLaunch: config.LaunchState{
 				LastClientName:  "A",
@@ -201,7 +201,7 @@ func TestQuickSelectRequiresRecordedEndpointToBeActive(t *testing.T) {
 
 	// Switching back to the recorded URL and bridge makes the saved launch
 	// valid again without rewriting launch state.
-	m.g.Settings.Endpoints = []config.Endpoint{saved, active}
+	m.g.Settings.Endpoints = []config.EndpointEntry{{Endpoint: saved}, {Endpoint: active}}
 	quick := m.rootMenu().Items[0]
 	if !strings.Contains(quick.Label, "Quick select") || quick.Action().Cmd == nil {
 		t.Fatalf("quick-select did not reappear for active recorded endpoint: %+v", quick)
@@ -514,7 +514,7 @@ func TestSetupGuideMenu_BridgeDoesNotRequireSystemTailscale(t *testing.T) {
 		ApertureHost: "http://aperture",
 		Settings: config.Settings{
 			Bridges:   []config.Bridge{{ID: "bridge-abcdef", Name: "Work Bridge"}},
-			Endpoints: []config.Endpoint{config.Bridged("http://aperture", "bridge-abcdef")},
+			Endpoints: []config.EndpointEntry{{Endpoint: config.Bridged("http://aperture", "bridge-abcdef")}},
 		},
 	}}
 
@@ -533,7 +533,7 @@ func TestEndpointBridgeMenu_AddsFirstBridgeInline(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	m := &model{
 		g: &config.Global{Settings: config.Settings{
-			Endpoints: []config.Endpoint{config.Direct("http://other")},
+			Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://other")}},
 		}},
 		step: stepMenu,
 	}
@@ -593,7 +593,7 @@ func TestEndpointBridgeMenu_ConnectsExistingBridgeWithoutPrompting(t *testing.T)
 	m := &model{
 		g: &config.Global{Settings: config.Settings{
 			Bridges:   []config.Bridge{bridge},
-			Endpoints: []config.Endpoint{config.Direct("http://other")},
+			Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://other")}},
 		}},
 		step: stepMenu,
 	}
@@ -629,7 +629,7 @@ func TestInitOpensOnTheStartEndpoint(t *testing.T) {
 	named := config.Bridged("http://named", bridge.ID)
 	m := NewModel(&config.Global{Settings: config.Settings{
 		Bridges:   []config.Bridge{bridge},
-		Endpoints: []config.Endpoint{saved},
+		Endpoints: []config.EndpointEntry{{Endpoint: saved}},
 	}}, "B0-test", nil, named).(*model)
 
 	if cmd := m.Init(); cmd == nil {
@@ -653,7 +653,7 @@ func TestInitOpensOnTheSavedEndpointWhenNothingIsNamed(t *testing.T) {
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	saved := config.Direct("http://saved")
-	g := &config.Global{Settings: config.Settings{Endpoints: []config.Endpoint{saved}}}
+	g := &config.Global{Settings: config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: saved}}}}
 	m := NewModel(g, "B0-test", nil, g.ActiveEndpoint()).(*model)
 
 	if cmd := m.Init(); cmd == nil {
@@ -676,7 +676,7 @@ func TestPreflightOverrideReplacesGuessedEndpoint(t *testing.T) {
 	m := &model{
 		g: &config.Global{Settings: config.Settings{
 			Bridges:   []config.Bridge{bridge},
-			Endpoints: []config.Endpoint{previous},
+			Endpoints: []config.EndpointEntry{{Endpoint: previous}},
 		}},
 		step: stepMenu,
 	}
@@ -703,7 +703,7 @@ func TestPreflightOverrideReplacesGuessedEndpoint(t *testing.T) {
 		t.Error("override reused the cancelled attempt's id, so its stale result would be applied")
 	}
 	// The guess is replaced, not accumulated, and the working endpoint stays.
-	if got := m.g.Settings.Endpoints; len(got) != 2 || got[0] != previous || got[1] != want {
+	if got := m.g.Settings.Endpoints; len(got) != 2 || got[0].Endpoint != previous || got[1].Endpoint != want {
 		t.Fatalf("endpoints = %+v, want the previous one plus the typed one", got)
 	}
 }
@@ -716,7 +716,7 @@ func TestPreflightOverrideRejectsBadURLWithoutStoppingTheAttempt(t *testing.T) {
 	m := &model{
 		g: &config.Global{Settings: config.Settings{
 			Bridges:   []config.Bridge{bridge},
-			Endpoints: []config.Endpoint{config.Direct("http://other")},
+			Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://other")}},
 		}},
 		step: stepMenu,
 	}
@@ -770,7 +770,7 @@ func TestPreflightEscapeAbandonsDiscovery(t *testing.T) {
 	m := &model{
 		g: &config.Global{Settings: config.Settings{
 			Bridges:   []config.Bridge{bridge},
-			Endpoints: []config.Endpoint{previous},
+			Endpoints: []config.EndpointEntry{{Endpoint: previous}},
 		}},
 		step: stepMenu,
 	}
@@ -786,7 +786,7 @@ func TestPreflightEscapeAbandonsDiscovery(t *testing.T) {
 	if m.step != stepMenu || m.top().Title != "Choose a bridge" {
 		t.Fatalf("Esc did not return to the bridge chooser: step=%v top=%+v", m.step, m.top())
 	}
-	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0] != previous {
+	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0].Endpoint != previous {
 		t.Fatalf("endpoints = %+v, want the abandoned guess removed", got)
 	}
 	// A late result from the abandoned attempt must not take over the screen.
@@ -800,7 +800,7 @@ func TestPreflightEscapeAtStartupShowsSetupGuide(t *testing.T) {
 	withFakeTailscale(t, tsConnected)
 	m := &model{g: &config.Global{
 		ApertureHost: "http://ai",
-		Settings:     config.Settings{Endpoints: []config.Endpoint{config.Direct("http://ai")}},
+		Settings:     config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://ai")}}},
 	}}
 	m.Init()
 
@@ -846,7 +846,7 @@ func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 			ApertureHost: connected.URL(),
 			Settings: config.Settings{
 				Bridges:   []config.Bridge{bridge},
-				Endpoints: []config.Endpoint{connected},
+				Endpoints: []config.EndpointEntry{{Endpoint: connected}},
 			},
 		},
 		step:      stepMenu,
@@ -880,7 +880,7 @@ func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 		t.Fatalf("activation = %+v, want a connection to %+v", m.act, want)
 	}
 	m.Update(endpointActivationResult{id: m.act.id, gateway: bridges.Gateway{URL: "http://127.0.0.1:12345"}})
-	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0] != want {
+	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0].Endpoint != want {
 		t.Fatalf("endpoints = %+v, want verified replacement %+v", got, want)
 	}
 }
@@ -902,9 +902,9 @@ func pickerModel(t *testing.T) *model {
 					{ID: "bridge-aaaaaa", Name: "Work", Tailnet: "corp.example.com"},
 					{ID: "bridge-bbbbbb", Name: "Home"},
 				},
-				Endpoints: []config.Endpoint{
-					config.Direct(config.DefaultLocation),
-					config.Bridged(config.DefaultLocation, "bridge-aaaaaa"),
+				Endpoints: []config.EndpointEntry{
+					{Endpoint: config.Direct(config.DefaultLocation)},
+					{Endpoint: config.Bridged(config.DefaultLocation, "bridge-aaaaaa")},
 				},
 			},
 		},
@@ -1069,7 +1069,7 @@ func TestConnectionPicker_DeleteKeyRemovesRowUnderCursor(t *testing.T) {
 	m.setCursor(1) // http://ai via Work
 	del, _ = findItem(t, m.top().Items, "delete")
 	m.activate(del)
-	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0] != config.Endpoint(config.Direct(config.DefaultLocation)) {
+	if got := m.g.Settings.Endpoints; len(got) != 1 || got[0].Endpoint != config.Endpoint(config.Direct(config.DefaultLocation)) {
 		t.Fatalf("endpoints = %+v, want the bridge endpoint removed", got)
 	}
 }
@@ -1114,7 +1114,7 @@ func TestSetupGuideExplainsDefaultLocationGuess(t *testing.T) {
 			ApertureHost: config.DefaultLocation,
 			Settings: config.Settings{
 				Bridges:   []config.Bridge{bridge},
-				Endpoints: []config.Endpoint{target},
+				Endpoints: []config.EndpointEntry{{Endpoint: target}},
 			},
 		},
 		failedEndpoint: target,
@@ -1151,7 +1151,7 @@ func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 			ApertureHost: "http://old",
 			Settings: config.Settings{
 				Bridges:   []config.Bridge{bridge},
-				Endpoints: []config.Endpoint{old},
+				Endpoints: []config.EndpointEntry{{Endpoint: old}},
 			},
 			Providers: []config.ProviderInfo{{ID: "old-provider"}},
 		},
@@ -1209,7 +1209,7 @@ func TestDirectEndpointIsPromotedOnlyAfterModelsSucceed(t *testing.T) {
 	m := &model{
 		g: &config.Global{
 			ApertureHost: "http://old",
-			Settings:     config.Settings{Endpoints: []config.Endpoint{old}},
+			Settings:     config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: old}}},
 			Providers:    []config.ProviderInfo{{ID: "old-provider"}},
 		},
 		step: stepMenu,
@@ -1573,7 +1573,7 @@ func TestFailureViewWrapsDiagnostics(t *testing.T) {
 			Debug:        true,
 			Settings: config.Settings{
 				Bridges:   []config.Bridge{{ID: "bridge-abcdef", Name: "Work Bridge"}},
-				Endpoints: []config.Endpoint{config.Bridged("http://aperture.example.ts.net", "bridge-abcdef")},
+				Endpoints: []config.EndpointEntry{{Endpoint: config.Bridged("http://aperture.example.ts.net", "bridge-abcdef")}},
 			},
 		},
 		width:            50,
@@ -1610,7 +1610,7 @@ func TestRootHeaderShowsLogicalBridgeEndpoint(t *testing.T) {
 			ApertureHost: "http://127.0.0.1:41234",
 			Settings: config.Settings{
 				Bridges:   []config.Bridge{{ID: "bridge-abcdef", Name: "Work"}},
-				Endpoints: []config.Endpoint{config.Bridged("http://ai", "bridge-abcdef")},
+				Endpoints: []config.EndpointEntry{{Endpoint: config.Bridged("http://ai", "bridge-abcdef")}},
 			},
 		},
 		step:      stepMenu,
@@ -1673,9 +1673,9 @@ func TestBridgeLogSinkNeverDropsTheLoginLink(t *testing.T) {
 func TestRemoveConnectionRowTakesTheBridgeWithIt(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := &model{g: &config.Global{Settings: config.Settings{
-		Endpoints: []config.Endpoint{
-			config.Direct("http://active"),
-			config.Bridged("http://ai", "b1"),
+		Endpoints: []config.EndpointEntry{
+			{Endpoint: config.Direct("http://active")},
+			{Endpoint: config.Bridged("http://ai", "b1")},
 		},
 		Bridges: []config.Bridge{{ID: "b1", Name: "work"}},
 	}}}
@@ -1703,10 +1703,10 @@ func TestRemoveConnectionRowTakesTheBridgeWithIt(t *testing.T) {
 func TestRemoveConnectionRowKeepsASharedBridge(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	m := &model{g: &config.Global{Settings: config.Settings{
-		Endpoints: []config.Endpoint{
-			config.Direct("http://active"),
-			config.Bridged("http://ai", "b1"),
-			config.Bridged("http://other", "b1"),
+		Endpoints: []config.EndpointEntry{
+			{Endpoint: config.Direct("http://active")},
+			{Endpoint: config.Bridged("http://ai", "b1")},
+			{Endpoint: config.Bridged("http://other", "b1")},
 		},
 		Bridges: []config.Bridge{{ID: "b1", Name: "work"}},
 	}}}

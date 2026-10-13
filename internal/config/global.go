@@ -43,7 +43,7 @@ func Load() (*Global, error) {
 	}
 	host := DefaultLocation
 	if len(s.Endpoints) > 0 {
-		host = s.Endpoints[0].URL()
+		host = s.Endpoints[0].Endpoint.URL()
 	}
 	return &Global{
 		ApertureHost: host,
@@ -65,7 +65,7 @@ func (g *Global) ActiveEndpoint() Endpoint {
 	if len(g.Settings.Endpoints) == 0 {
 		return Direct(DefaultLocation)
 	}
-	return g.Settings.Endpoints[0]
+	return g.Settings.Endpoints[0].Endpoint
 }
 
 // SetActiveEndpoint moves ep to the front of the endpoint list, adding it if
@@ -73,9 +73,15 @@ func (g *Global) ActiveEndpoint() Endpoint {
 // of a verified URL edit and goes in the same write; pass nil otherwise.
 // Bridge activation later rewrites ApertureHost to the local proxy.
 func (g *Global) SetActiveEndpoint(ep Endpoint, replacing Endpoint) error {
-	eps := []Endpoint{ep}
+	head := EndpointEntry{Endpoint: ep}
 	for _, existing := range g.Settings.Endpoints {
-		if existing != ep && existing != replacing {
+		if existing.Endpoint == ep {
+			head = existing
+		}
+	}
+	eps := endpointList{head}
+	for _, existing := range g.Settings.Endpoints {
+		if existing.Endpoint != ep && existing.Endpoint != replacing {
 			eps = append(eps, existing)
 		}
 	}
@@ -99,12 +105,12 @@ func (g *Global) SetApertureHost(url string) error {
 // there and saves. The active endpoint does not change.
 func (g *Global) UpsertEndpoint(ep Endpoint) error {
 	for _, existing := range g.Settings.Endpoints {
-		if existing == ep {
+		if existing.Endpoint == ep {
 			return nil
 		}
 	}
 	next := g.Settings
-	next.Endpoints = append(append([]Endpoint(nil), g.Settings.Endpoints...), ep)
+	next.Endpoints = append(append(endpointList(nil), g.Settings.Endpoints...), EndpointEntry{Endpoint: ep})
 	if err := SaveSettings(next); err != nil {
 		return err
 	}
@@ -115,10 +121,10 @@ func (g *Global) UpsertEndpoint(ep Endpoint) error {
 // ReplaceEndpoint puts next where old was and saves. The active endpoint
 // changes only when old was the active one.
 func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
-	eps := append([]Endpoint(nil), g.Settings.Endpoints...)
+	eps := append(endpointList(nil), g.Settings.Endpoints...)
 	oldIdx := -1
 	for i, existing := range eps {
-		if existing != old {
+		if existing.Endpoint != old {
 			continue
 		}
 		oldIdx = i
@@ -127,12 +133,13 @@ func (g *Global) ReplaceEndpoint(old, next Endpoint) error {
 	if oldIdx < 0 {
 		return fmt.Errorf("endpoint %s is not configured", old.URL())
 	}
-	eps[oldIdx] = next
+	// A URL edit keeps the row's name: the handle is the user's, not the URL's.
+	eps[oldIdx] = EndpointEntry{Endpoint: next, Name: eps[oldIdx].Name}
 	deduped := eps[:0]
 	for _, ep := range eps {
 		duplicate := false
 		for _, existing := range deduped {
-			if existing == ep {
+			if existing.Endpoint == ep.Endpoint {
 				duplicate = true
 				break
 			}
@@ -160,7 +167,7 @@ func (g *Global) removeEndpointAt(idx int) error {
 	if idx < 0 || idx >= len(g.Settings.Endpoints) {
 		return nil
 	}
-	eps := make([]Endpoint, 0, len(g.Settings.Endpoints)-1)
+	eps := make(endpointList, 0, len(g.Settings.Endpoints)-1)
 	eps = append(eps, g.Settings.Endpoints[:idx]...)
 	eps = append(eps, g.Settings.Endpoints[idx+1:]...)
 	next := g.Settings
@@ -170,7 +177,7 @@ func (g *Global) removeEndpointAt(idx int) error {
 	}
 	g.Settings = next
 	if idx == 0 && len(eps) > 0 {
-		g.ApertureHost = eps[0].URL()
+		g.ApertureHost = eps[0].Endpoint.URL()
 	}
 	return nil
 }
@@ -180,7 +187,7 @@ func (g *Global) removeEndpointAt(idx int) error {
 // not in the list is not an error.
 func (g *Global) RemoveEndpoint(ep Endpoint) error {
 	for i, existing := range g.Settings.Endpoints {
-		if i == 0 || existing != ep {
+		if i == 0 || existing.Endpoint != ep {
 			continue
 		}
 		return g.removeEndpointAt(i)
@@ -189,17 +196,27 @@ func (g *Global) RemoveEndpoint(ep Endpoint) error {
 }
 
 // AddBridge creates a bridge named name with a generated ID, saves it and
-// returns it.
-func (g *Global) AddBridge(name string) (Bridge, error) {
+// returns it. port is the fixed port serve binds, zero for none. The name
+// is the bridge's command-line handle, so a duplicate is refused without
+// case.
+func (g *Global) AddBridge(name string, port int) (Bridge, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Bridge{}, fmt.Errorf("bridge name is empty")
+	}
+	if port < 0 || port > 65535 {
+		return Bridge{}, fmt.Errorf("port %d is outside 0-65535", port)
+	}
+	for _, b := range g.Settings.Bridges {
+		if strings.EqualFold(b.Name, name) {
+			return Bridge{}, fmt.Errorf("a bridge called %q already exists", name)
+		}
 	}
 	id, err := newBridgeID(g.Settings.Bridges)
 	if err != nil {
 		return Bridge{}, err
 	}
-	p := Bridge{ID: id, Name: name}
+	p := Bridge{ID: id, Name: name, Port: port}
 	next := g.Settings
 	next.Bridges = append(append([]Bridge(nil), g.Settings.Bridges...), p)
 	if err := SaveSettings(next); err != nil {
@@ -232,8 +249,8 @@ func (g *Global) SetBridgeTailnet(id, tailnet string) error {
 // RemoveBridge deletes bridge id and saves. It refuses while an endpoint
 // still connects through the bridge.
 func (g *Global) RemoveBridge(id string) error {
-	for _, ep := range g.Settings.Endpoints {
-		if ep, ok := ep.(BridgeEndpoint); ok && ep.BridgeID() == id {
+	for _, entry := range g.Settings.Endpoints {
+		if ep, ok := entry.Endpoint.(BridgeEndpoint); ok && ep.BridgeID() == id {
 			return fmt.Errorf("bridge is used by endpoint %s", ep.URL())
 		}
 	}
@@ -250,6 +267,40 @@ func (g *Global) RemoveBridge(id string) error {
 		g.Settings = next
 		return nil
 	}
+	return nil
+}
+
+// NameEndpoint saves name as the handle of ep's row in the endpoint list,
+// appending ep when it is not listed yet. A name another endpoint holds is
+// refused, and so is a name containing ://, because the command line reads
+// those as URLs.
+func (g *Global) NameEndpoint(ep Endpoint, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("endpoint name is empty")
+	}
+	if strings.Contains(name, "://") {
+		return fmt.Errorf("endpoint name %q looks like a URL", name)
+	}
+	next := g.Settings
+	next.Endpoints = append(endpointList(nil), g.Settings.Endpoints...)
+	found := false
+	for i, entry := range next.Endpoints {
+		if entry.Endpoint != ep && entry.Name != "" && strings.EqualFold(entry.Name, name) {
+			return fmt.Errorf("an endpoint called %q already exists", name)
+		}
+		if entry.Endpoint == ep {
+			next.Endpoints[i].Name = name
+			found = true
+		}
+	}
+	if !found {
+		next.Endpoints = append(next.Endpoints, EndpointEntry{Endpoint: ep, Name: name})
+	}
+	if err := SaveSettings(next); err != nil {
+		return err
+	}
+	g.Settings = next
 	return nil
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync/atomic"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -72,7 +71,7 @@ func BeginAttempt(g *config.Global, ep config.Endpoint, switchTailnet bool, repl
 			a.InvalidatesActive = active.BridgeID() == bridge.ID
 		}
 	}
-	if !slices.Contains(g.Settings.Endpoints, ep) {
+	if !g.Settings.HasEndpoint(ep) {
 		if err := g.UpsertEndpoint(ep); err != nil {
 			return nil, err
 		}
@@ -101,7 +100,7 @@ func (a *Attempt) Retarget(g *config.Global, next config.Endpoint) (*Attempt, er
 	if next == a.Endpoint {
 		return a.Retry(), nil
 	}
-	ephemeral := !slices.Contains(g.Settings.Endpoints, next)
+	ephemeral := !g.Settings.HasEndpoint(next)
 	switch {
 	case a.ephemeral:
 		if err := g.ReplaceEndpoint(a.Endpoint, next); err != nil {

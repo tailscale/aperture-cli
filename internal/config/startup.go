@@ -9,25 +9,31 @@ import (
 // to open. When neither flag names anything it returns the saved active
 // Endpoint.
 //
-// A URL alone means a direct connection. A bridge alone opens at
-// DefaultLocation, the same guess the connection picker makes, because naming
-// a bridge usually means knowing how to get on the tailnet rather than what
-// is listening on it. Both together pin the URL behind the bridge.
+// The endpoint value resolves name first: a value matching a saved endpoint
+// name is that endpoint, and anything else parses as a URL. A URL alone
+// means a direct connection. A bridge alone opens at DefaultLocation, the
+// same guess the connection picker makes, because naming a bridge usually
+// means knowing how to get on the tailnet rather than what is listening on
+// it. Both together pin the URL behind the bridge. With a named endpoint
+// the bridge flag may only confirm the bridge the endpoint already uses.
 //
 // Callers resolve the flags before the TUI takes the terminal, so a URL we
 // cannot use becomes a line on stderr rather than a full-screen error.
-func EndpointFromFlags(g *Global, rawURL, bridgeName string) (Endpoint, error) {
-	rawURL = strings.TrimSpace(rawURL)
+func EndpointFromFlags(g *Global, rawEndpoint, bridgeName string) (Endpoint, error) {
+	rawEndpoint = strings.TrimSpace(rawEndpoint)
 	bridgeName = strings.TrimSpace(bridgeName)
-	if rawURL == "" && bridgeName == "" {
+	if rawEndpoint == "" && bridgeName == "" {
 		return g.ActiveEndpoint(), nil
+	}
+	if named, ok := g.Settings.EndpointNamed(rawEndpoint); ok {
+		return checkBridgeFlag(g, named, bridgeName)
 	}
 	// Check the URL before looking up the bridge, because the lookup writes.
 	// An invocation that exits with a usage error must not leave a bridge on
 	// disk that the user then has to find and delete.
 	location := DefaultLocation
-	if rawURL != "" {
-		parsed, err := ParseEndpointURL(rawURL)
+	if rawEndpoint != "" {
+		parsed, err := ParseEndpointURL(rawEndpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -41,6 +47,25 @@ func EndpointFromFlags(g *Global, rawURL, bridgeName string) (Endpoint, error) {
 		return nil, err
 	}
 	return Bridged(location, bridge.ID), nil
+}
+
+// checkBridgeFlag verifies a bridge flag against a named endpoint. The flag
+// may only confirm the bridge the endpoint already uses; anything else is a
+// contradiction on the command line, not a new endpoint. No bridge is
+// created here: a usage error must not write.
+func checkBridgeFlag(g *Global, ep Endpoint, bridgeName string) (Endpoint, error) {
+	if bridgeName == "" {
+		return ep, nil
+	}
+	bridged, ok := ep.(BridgeEndpoint)
+	if !ok {
+		return nil, fmt.Errorf("the endpoint is direct; --bridge %q does not apply", bridgeName)
+	}
+	bridge, ok := g.Bridge(bridged.BridgeID())
+	if !ok || !strings.EqualFold(bridge.Name, bridgeName) {
+		return nil, fmt.Errorf("the endpoint does not go through bridge %q", bridgeName)
+	}
+	return ep, nil
 }
 
 // bridgeNamed returns the bridge called name, creating it when there is none.
@@ -59,7 +84,7 @@ func bridgeNamed(g *Global, name string) (Bridge, error) {
 	}
 	switch len(matched) {
 	case 0:
-		return g.AddBridge(name)
+		return g.AddBridge(name, 0)
 	case 1:
 		return matched[0], nil
 	}

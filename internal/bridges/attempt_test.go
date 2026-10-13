@@ -25,7 +25,7 @@ func settingsGlobal(t *testing.T, s config.Settings) (*config.Global, string) {
 // A failed RemoveEndpoint has to leave the attempt still ephemeral: otherwise
 // the candidate it wrote stays in settings and nothing will ever take it out.
 func TestAbandonStaysEphemeralWhenTheDropFails(t *testing.T) {
-	g, settingsDir := settingsGlobal(t, config.Settings{Endpoints: []config.Endpoint{config.Direct("http://ai")}})
+	g, settingsDir := settingsGlobal(t, config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: config.Direct("http://ai")}}})
 	a, err := BeginAttempt(g, config.Direct("http://new"), false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func switchingAttempt(t *testing.T, logoutErr error) (*Attempt, *config.Global, 
 	t.Helper()
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work", Tailnet: "corp.example.com"}
 	ep := config.Bridged("http://ai", bridge.ID)
-	g, _ := settingsGlobal(t, config.Settings{Bridges: []config.Bridge{bridge}, Endpoints: []config.Endpoint{ep}})
+	g, _ := settingsGlobal(t, config.Settings{Bridges: []config.Bridge{bridge}, Endpoints: []config.EndpointEntry{{Endpoint: ep}}})
 	a, err := BeginAttempt(g, ep, true, nil)
 	if err != nil {
 		t.Fatal(err)

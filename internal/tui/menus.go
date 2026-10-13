@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -139,7 +138,7 @@ func (m *model) lastLaunchEndpoint() (config.Endpoint, bool) {
 }
 
 func (m *model) endpointConfigured(want config.Endpoint) bool {
-	return slices.Contains(m.g.Settings.Endpoints, want)
+	return m.g.Settings.HasEndpoint(want)
 }
 
 func simpleErrorCmd(err error) tea.Cmd {
@@ -200,7 +199,7 @@ func (m *model) bridgesMenu() *menu.Menu {
 		Hidden:   true,
 		Action: func() menu.Result {
 			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
-				if _, err := m.g.AddBridge(v); err != nil {
+				if _, err := m.g.AddBridge(v, 0); err != nil {
 					return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 				}
 				m.refreshBridgesMenu()
@@ -324,9 +323,9 @@ type connectionRow struct {
 func (m *model) connectionRows() []connectionRow {
 	rows := make([]connectionRow, 0, len(m.g.Settings.Endpoints)+len(m.g.Settings.Bridges))
 	used := make(map[string]bool, len(m.g.Settings.Bridges))
-	for i, ep := range m.g.Settings.Endpoints {
-		row := connectionRow{ep: ep, saved: true, active: i == 0}
-		if bridged, ok := ep.(config.BridgeEndpoint); ok {
+	for i, entry := range m.g.Settings.Endpoints {
+		row := connectionRow{ep: entry.Endpoint, saved: true, active: i == 0}
+		if bridged, ok := entry.Endpoint.(config.BridgeEndpoint); ok {
 			used[bridged.BridgeID()] = true
 			row.bridge, _ = m.g.Bridge(bridged.BridgeID())
 		}
@@ -661,7 +660,7 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 		Label: "Add Bridge",
 		Action: func() menu.Result {
 			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
-				bridge, err := m.g.AddBridge(v)
+				bridge, err := m.g.AddBridge(v, 0)
 				if err != nil {
 					return simpleErrorCmd(err)
 				}
