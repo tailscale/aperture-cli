@@ -57,6 +57,13 @@ The first flag aperture does not know, or --, passes the rest to ` + binary + ` 
 			if err != nil {
 				return err
 			}
+			// A non-default settings file is a trust boundary: say where the
+			// configuration came from, where the client is going and whether
+			// its permission prompts are off, since a headless run has no
+			// screen to show any of it.
+			if path := config.SettingsFileOverride(); path != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "settings from %s; connecting to %s; yolo mode %v\n", path, ep.URL(), g.Settings.YoloMode)
+			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			machines := bridges.NewMachines(g.Debug)

@@ -41,6 +41,10 @@ var settingsFile string
 // default location. Call it once at startup, before Load.
 func UseSettingsFile(path string) { settingsFile = path }
 
+// SettingsFileOverride returns the settings path --config or APERTURE_CONFIG
+// chose, empty when the process reads and writes the default location.
+func SettingsFileOverride() string { return settingsFile }
+
 // settingsPath returns the path to the launcher settings JSON file.
 func settingsPath() (string, error) {
 	if settingsFile != "" {

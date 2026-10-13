@@ -114,3 +114,28 @@ func TestVersionWithAClientCommand(t *testing.T) {
 		t.Error("the client launched despite --version before its name")
 	}
 }
+
+// A non-default settings file is a trust boundary: the launch must say on
+// stderr where the configuration came from, where the client is going and
+// whether permission prompts are off, because a headless run has no screen
+// to show any of it.
+func TestHeadlessLaunchWarnsOnConfigOverride(t *testing.T) {
+	srv := fakeAperture(t)
+	binDir := t.TempDir()
+	recordDir := installStubPi(t, binDir)
+	env := append(hermeticEnv(t, binDir), "APERTURE_E2E_RECORD="+recordDir)
+	settings := filepath.Join(t.TempDir(), "elsewhere.json")
+
+	_, stderr, err := run(t, apertureBin, env, "pi", "--config", settings, "--endpoint", srv.URL)
+	if err != nil {
+		t.Fatalf("aperture pi with --config: %v (%s)", err, stderr)
+	}
+	for _, want := range []string{settings, srv.URL, "yolo mode false"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want %q in the override warning", stderr, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(recordDir, "argv")); err != nil {
+		t.Error("the client did not launch after the warning")
+	}
+}
