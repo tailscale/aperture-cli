@@ -1,0 +1,5 @@
+exit 1
+-- stdout --
+-- stderr --
+aperture: an endpoint called "e1" already exists
+details: <run-log>

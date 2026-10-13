@@ -1,0 +1,5 @@
+exit 0
+-- stdout --
+NAME  URL           BRIDGE
+e2    http://other  -
+-- stderr --

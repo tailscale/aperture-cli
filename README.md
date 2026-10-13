@@ -199,8 +199,31 @@ Everything the launcher reads from the environment:
 ```sh
 make build   # build ./aperture
 make test    # run tests
+make check   # lint, build, and the suite under the race detector
 make install # install to $GOPATH/bin
 make clean   # remove built binary
+```
+
+### Test suites
+
+`make check` is the gate CI runs: lint, build, then unit and e2e tests under
+the race detector. The e2e suite drives the built binary through a PTY, a
+fake Aperture and stub agent binaries; it touches no real config or tailnet.
+
+`make test-tailnet` runs the black-box suites, tagged `tailnet` so they stay
+out of the gate. They download the latest release from GitHub and, when
+`TS_AUTHKEY` is set, log a bridge into the local tailnet, so run them on a
+dev box:
+
+- **compat**: the released binary writes settings, state and a bridge login,
+  and the branch binary reads and reuses them. This is what proves old
+  installs upgrade cleanly.
+- **contract**: golden output for the scripted surface, in
+  `e2e/testdata/contract/`. A formatting change to a table or an error is a
+  deliberate diff, not an accident. Regenerate after an intentional change:
+
+```sh
+go test -tags tailnet ./e2e/ -run TestContract -update
 ```
 
 ## Releasing

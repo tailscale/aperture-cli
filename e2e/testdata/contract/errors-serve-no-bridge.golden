@@ -1,0 +1,5 @@
+exit 1
+-- stdout --
+-- stderr --
+aperture: serve needs --bridge, the name of a configured bridge
+details: <run-log>
