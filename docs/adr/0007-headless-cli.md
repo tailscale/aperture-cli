@@ -72,6 +72,9 @@ applies to both.
   for scripts, hostile to the alias case, which is the common case.
 - No names on endpoints. The smallest diff, and the one that has the user
   typing URLs or bridge IDs every day.
+- Persisted provider and model defaults in settings.json. They are launch
+  state, not configuration, and a global default is wrong the moment two
+  Apertures offer different provider sets. LastLaunch covers the common case.
 - Removing the single-dash long forms at the cobra switch. The original
   decision; Guy ruled it out because the break buys nothing a deprecation
   notice does not.
