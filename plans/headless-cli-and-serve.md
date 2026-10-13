@@ -31,7 +31,7 @@ endpoints. In a client command, aperture consumes its own flags anywhere in
 the tail; the first unknown flag or `--` starts verbatim passthrough, so
 `alias codex='aperture codex'` works.
 
-## Steps
+## Steps (all landed)
 
 1. ADR 0007 and ADR 0008.
 2. Specs: context map (Name and Port language rows, `bridge` command
