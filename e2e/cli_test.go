@@ -49,6 +49,17 @@ func TestCLICommandsRoundTrip(t *testing.T) {
 	}
 
 	// The deprecated single-dash long form still parses and warns on stderr.
+	stdout, stderr, err = run(t, apertureBin, env, "bridge", "add", "home", "-port", "8992")
+	if err != nil {
+		t.Fatalf("bridge add with deprecated flag form: %v (%s)", err, stderr)
+	}
+	if !strings.Contains(stdout, "8992") {
+		t.Errorf("bridge add -port printed %q, want the port stored", stdout)
+	}
+	if !strings.Contains(stderr, "deprecated") {
+		t.Errorf("bridge add -port: stderr = %q, want a deprecation warning", stderr)
+	}
+
 	stdout, stderr, err = run(t, apertureBin, env, "-version")
 	if err != nil {
 		t.Fatalf("-version: %v", err)

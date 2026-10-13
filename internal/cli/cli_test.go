@@ -41,6 +41,34 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, err error) {
 // The contract makes help output part of the surface: every command shows
 // example invocations, so a missing Example is a broken contract, not a
 // style miss.
+// --bridge= has to beat APERTURE_BRIDGE: the documented precedence is flag
+// over environment, and an empty flag is the only way a shell with the
+// variable set can ask for the saved endpoint.
+func TestFlagOrEnv(t *testing.T) {
+	t.Setenv("APERTURE_BRIDGE", "work")
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"absent flag reads the environment", nil, "work"},
+		{"flag wins", []string{"--bridge=home"}, "home"},
+		{"explicitly empty flag wins", []string{"--bridge="}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := rootCommand("test-version", func(_, _ string, _ bool) error { return nil })
+			root.SetArgs(tc.args)
+			if err := root.ParseFlags(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			if got := flagOrEnv(root, "bridge", "APERTURE_BRIDGE"); got != tc.want {
+				t.Errorf("flagOrEnv = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEveryCommandDocumentsExamples(t *testing.T) {
 	root := rootCommand("test-version", func(_, _ string, _ bool) error { return nil })
 	var walk func(cmd *cobra.Command)

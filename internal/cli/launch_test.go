@@ -24,6 +24,12 @@ func TestSplitLaunchArgs(t *testing.T) {
 			sel:  launchSelection{endpoint: "e1", bridge: "work", provider: "openai", model: "gpt-5", debug: true},
 		},
 		{
+			name: "shorthands",
+			in:   []string{"-e", "e1", "-b", "work", "-c", "s.json", "-d", "--search"},
+			sel:  launchSelection{endpoint: "e1", bridge: "work", config: "s.json", debug: true},
+			rest: []string{"--search"},
+		},
+		{
 			name: "double dash starts verbatim passthrough",
 			in:   []string{"--endpoint", "e1", "--", "--endpoint", "other"},
 			sel:  launchSelection{endpoint: "e1"},
