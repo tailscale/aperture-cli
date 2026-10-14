@@ -3,9 +3,11 @@ package opencode
 import (
 	"encoding/json"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -337,5 +339,39 @@ func TestWriteProviderConfigIsUniquePerLaunch(t *testing.T) {
 	}
 	if _, err := os.Stat(second); err != nil {
 		t.Errorf("the second launch's config is gone: %v", err)
+	}
+}
+
+// A write that fails partway through (disk full, quota) must not leave the
+// partially written temp file behind in ~/.opencode.
+func TestWriteProviderConfigRemovesTempFileOnWriteFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	provs := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+
+	signal.Ignore(syscall.SIGXFSZ)
+	defer signal.Reset(syscall.SIGXFSZ)
+	var orig syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &orig); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Setrlimit(syscall.RLIMIT_FSIZE, &orig)
+	limited := syscall.Rlimit{Cur: 1, Max: orig.Max}
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limited); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := writeProviderConfig(testHost, provs); err == nil {
+		t.Fatal("writeProviderConfig: want a write failure under the file-size limit")
+	}
+
+	entries, err := os.ReadDir(filepath.Join(home, ".opencode"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "tmp_aperture_config_") {
+			t.Errorf("leaked temp file %s after a write failure", e.Name())
+		}
 	}
 }

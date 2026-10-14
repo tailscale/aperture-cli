@@ -119,13 +119,16 @@ func writeProviderConfig(apertureHost string, p config.ProviderInfo) (string, fu
 	if err != nil {
 		return "", nil, err
 	}
+	path := f.Name()
+	remove := func() { os.Remove(path) }
 	if _, err := f.Write(data); err != nil {
 		f.Close()
+		remove()
 		return "", nil, err
 	}
 	if err := f.Close(); err != nil {
+		remove()
 		return "", nil, err
 	}
-	path := f.Name()
-	return path, func() { os.Remove(path) }, nil
+	return path, remove, nil
 }
