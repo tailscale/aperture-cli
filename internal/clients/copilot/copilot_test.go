@@ -156,6 +156,16 @@ func TestSpec(t *testing.T) {
 		t.Errorf("default args = %v, want none", spec.Args)
 	}
 
+	// An explicit provider with no model falls back to that provider's
+	// default model, same as the unflagged path.
+	spec, err = c.Spec(newGlobal(), "openai", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if spec.Env["COPILOT_MODEL"] != "gpt-5" {
+		t.Errorf("explicit provider env = %v, want the provider's default model", spec.Env)
+	}
+
 	// Flags win, and passthrough args come through verbatim.
 	spec, err = c.Spec(newGlobal(), "anthropic", "anthropic/claude", []string{"--allow-all"})
 	if err != nil {

@@ -170,6 +170,11 @@ func (c *Client) resolve(g *config.Global, provider, model string) (config.Provi
 		if len(bs) == 0 {
 			return config.ProviderInfo{}, backend{}, "", fmt.Errorf("provider %q supports none of the endpoints %s speaks: %s", provider, name, backendNames())
 		}
+		if model == "" {
+			if models := fqnModels(p); len(models) > 0 {
+				model = models[0]
+			}
+		}
 		return p, bs[0], model, nil
 	}
 	if last := g.LastLaunch; last.LastClientName == name {
