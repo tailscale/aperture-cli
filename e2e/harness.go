@@ -196,6 +196,25 @@ func installStubPi(t *testing.T, binDir string) string {
 	return recordDir
 }
 
+// stubPiSleeper signals it is running and then execs into sleep, so a
+// signal sent to its PID reaches sleep's default disposition directly
+// rather than a shell's trap-after-foreground-job semantics.
+const stubPiSleeper = `#!/bin/sh
+echo ready > "$APERTURE_E2E_RECORD/ready"
+exec sleep 30
+`
+
+// installStubPiSleeper writes the long-running stub into binDir and returns
+// the directory it signals readiness into.
+func installStubPiSleeper(t *testing.T, binDir string) string {
+	t.Helper()
+	recordDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "pi"), []byte(stubPiSleeper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return recordDir
+}
+
 // waitForFile blocks until path exists and is non-empty.
 func waitForFile(t *testing.T, path string) string {
 	t.Helper()

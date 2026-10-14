@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -88,12 +90,32 @@ The first flag aperture does not know, or --, passes the rest to ` + binary + ` 
 			if err != nil {
 				return err
 			}
-			runErr := child.Run()
+			runErr := runChild(ctx, child)
 			if spec.Cleanup != nil {
 				spec.Cleanup()
 			}
 			return runErr
 		},
+	}
+}
+
+// runChild starts child and waits for it, forwarding ctx's cancellation as
+// a SIGTERM so a signal sent to aperture itself reaches the client too:
+// signal.NotifyContext's handler consumes the signal on aperture's process
+// alone, and nothing else would propagate it to an already-running child.
+// The child's own exit status is preserved either way.
+func runChild(ctx context.Context, child *exec.Cmd) error {
+	if err := child.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- child.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = child.Process.Signal(syscall.SIGTERM)
+		return <-done
 	}
 }
 
