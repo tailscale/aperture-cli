@@ -246,6 +246,16 @@ func TestSpec(t *testing.T) {
 		t.Errorf("default args = %v, want the first model of the compatible provider", spec.Args)
 	}
 
+	// An explicit provider with no model falls back to that provider's
+	// default model, same as the unflagged path.
+	spec, err = c.Spec(newGlobal(), "openai", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if !argsContain(spec.Args, "--model", "openai/gpt-5") {
+		t.Errorf("explicit provider args = %v, want the provider's default model", spec.Args)
+	}
+
 	// Flags win, and passthrough args land after aperture's own.
 	spec, err = c.Spec(newGlobal(), "openai", "openai/gpt-5-mini", []string{"--search"})
 	if err != nil {

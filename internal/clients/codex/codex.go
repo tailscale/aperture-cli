@@ -171,6 +171,9 @@ func (c *Client) resolve(g *config.Global, provider, model string) (config.Provi
 		if !p.SupportsEndpoint(config.EndpointOpenAIResponses) {
 			return config.ProviderInfo{}, "", fmt.Errorf("provider %q does not support OpenAI /v1/responses", provider)
 		}
+		if model == "" {
+			model = defaultModel(p)
+		}
 		return p, model, nil
 	}
 	if last := g.LastLaunch; last.LastClientName == name {
