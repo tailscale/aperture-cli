@@ -226,6 +226,14 @@ dev box:
 go test -tags tailnet ./e2e/ -run TestContract -update
 ```
 
+Every suite builds the binary it tests from source. To test an installed
+binary instead, for example the one `make install` just wrote, point the
+harness at it:
+
+```sh
+APERTURE_E2E_BIN=$(which aperture) make test-tailnet
+```
+
 ## Releasing
 
 Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so nothing unsigned is ever published. A failed signature or a rejected notarization fails the run before upload. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
