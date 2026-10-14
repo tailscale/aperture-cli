@@ -92,8 +92,9 @@ cmd.Process.Signal(syscall.SIGTERM)
 
 `make test-tailnet` runs two suites tagged `//go:build tailnet`, kept out of
 the gate because they download the latest release from GitHub and, when
-`TS_AUTHKEY` is set, log a bridge into the local tailnet. Run them on a dev
-box.
+`TS_AUTHKEY` is set, log a bridge into the local tailnet. CI runs them in
+the Black-box job on ubuntu-latest, where the bridge-login half skips
+unless a TS_AUTHKEY secret exists.
 
 **compat** (`e2e/compat_test.go`) downloads the latest released binary, has
 it write settings, state and a bridge login, then runs this branch's binary

@@ -209,7 +209,7 @@ make clean   # remove built binary
 `make check` is the gate CI runs: lint, build, then unit and e2e tests under
 the race detector. `make test-tailnet` runs the black-box suites (cross-version
 compatibility against the latest release, and golden output for the scripted
-surface) on a dev box. [docs/testing.md](docs/testing.md) covers each layer
+surface), in CI as the Black-box job and locally on a dev box. [docs/testing.md](docs/testing.md) covers each layer
 with examples, including the e2e harness, the `-update` golden regeneration
 and testing an installed binary with `APERTURE_E2E_BIN`.
 
