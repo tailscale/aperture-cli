@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+func TestResolvedTailFlag(t *testing.T) {
+	t.Run("absent falls back to the environment", func(t *testing.T) {
+		t.Setenv("APERTURE_ENDPOINT", "http://env")
+		if got := resolvedTailFlag("", false, "APERTURE_ENDPOINT"); got != "http://env" {
+			t.Errorf("resolvedTailFlag = %q, want the environment value", got)
+		}
+	})
+	t.Run("an explicit empty flag overrides the environment", func(t *testing.T) {
+		t.Setenv("APERTURE_BRIDGE", "work")
+		if got := resolvedTailFlag("", true, "APERTURE_BRIDGE"); got != "" {
+			t.Errorf("resolvedTailFlag = %q, want empty to win over the environment", got)
+		}
+	})
+	t.Run("a flag value wins outright", func(t *testing.T) {
+		t.Setenv("APERTURE_CONFIG", "env.json")
+		if got := resolvedTailFlag("flag.json", true, "APERTURE_CONFIG"); got != "flag.json" {
+			t.Errorf("resolvedTailFlag = %q, want the flag value", got)
+		}
+	})
+}
+
 func TestSplitLaunchArgs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -21,19 +42,26 @@ func TestSplitLaunchArgs(t *testing.T) {
 		{
 			name: "aperture flags in every form",
 			in:   []string{"--endpoint", "e1", "--bridge=work", "-p", "openai", "-m=gpt-5", "--debug"},
-			sel:  launchSelection{endpoint: "e1", bridge: "work", provider: "openai", model: "gpt-5", debug: true},
+			sel: launchSelection{endpoint: "e1", bridge: "work", provider: "openai", model: "gpt-5", debug: true,
+				endpointSet: true, bridgeSet: true},
 		},
 		{
 			name: "shorthands",
 			in:   []string{"-e", "e1", "-b", "work", "-c", "s.json", "-d", "--search"},
-			sel:  launchSelection{endpoint: "e1", bridge: "work", config: "s.json", debug: true},
+			sel: launchSelection{endpoint: "e1", bridge: "work", config: "s.json", debug: true,
+				endpointSet: true, bridgeSet: true, configSet: true},
 			rest: []string{"--search"},
 		},
 		{
 			name: "double dash starts verbatim passthrough",
 			in:   []string{"--endpoint", "e1", "--", "--endpoint", "other"},
-			sel:  launchSelection{endpoint: "e1"},
+			sel:  launchSelection{endpoint: "e1", endpointSet: true},
 			rest: []string{"--endpoint", "other"},
+		},
+		{
+			name: "an explicit empty value is still set, unlike an absent flag",
+			in:   []string{"--bridge="},
+			sel:  launchSelection{bridgeSet: true},
 		},
 		{
 			name: "first unknown flag starts verbatim passthrough",

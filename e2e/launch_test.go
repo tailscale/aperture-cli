@@ -54,6 +54,36 @@ func TestHeadlessLaunchPi(t *testing.T) {
 	}
 }
 
+// $APERTURE_ENDPOINT answers when the tail names no --endpoint: the manual
+// client-command parser consumes aperture's own flags itself, bypassing
+// cobra's flag/environment merging, so it has to fall back to the
+// environment on its own (ADR 0007 env vars). The saved active endpoint is
+// seeded unreachable first, so a run that ignored the environment variable
+// and fell through to it would fail rather than coincidentally succeed.
+func TestHeadlessLaunchUsesEnvironmentEndpoint(t *testing.T) {
+	srv := fakeAperture(t)
+	binDir := t.TempDir()
+	recordDir := installStubPi(t, binDir)
+	env := append(hermeticEnv(t, binDir), "APERTURE_E2E_RECORD="+recordDir)
+
+	configDir := apertureConfigDir(t, env)
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const unreachable = `{"endpoints":[{"url":"http://127.0.0.1:1"}]}`
+	if err := os.WriteFile(filepath.Join(configDir, "settings.json"), []byte(unreachable), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	env = append(env, "APERTURE_ENDPOINT="+srv.URL)
+	if _, stderr, err := run(t, apertureBin, env, "pi"); err != nil {
+		t.Fatalf("aperture pi with APERTURE_ENDPOINT set and no flag: %v (%s)", err, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(recordDir, "argv")); err != nil {
+		t.Error("the client did not launch using APERTURE_ENDPOINT")
+	}
+}
+
 // A launched client's exit code is aperture's own: an alias for the client
 // has to behave like the client.
 func TestHeadlessLaunchPropagatesTheExitCode(t *testing.T) {

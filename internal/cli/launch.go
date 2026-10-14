@@ -43,8 +43,8 @@ The first flag aperture does not know, or --, passes the rest to ` + binary + ` 
 			}
 			// DisableFlagParsing keeps the persistent pre-run from seeing
 			// --config, so the tail parser applies it here instead.
-			if sel.config != "" {
-				config.UseSettingsFile(sel.config)
+			if configPath := resolvedTailFlag(sel.config, sel.configSet, "APERTURE_CONFIG"); configPath != "" {
+				config.UseSettingsFile(configPath)
 			}
 			g, err := config.Load()
 			if err != nil {
@@ -55,7 +55,9 @@ The first flag aperture does not know, or --, passes the rest to ` + binary + ` 
 				config.RaiseRunLog()
 			}
 
-			ep, err := config.EndpointFromFlags(g, sel.endpoint, sel.bridge)
+			endpoint := resolvedTailFlag(sel.endpoint, sel.endpointSet, "APERTURE_ENDPOINT")
+			bridge := resolvedTailFlag(sel.bridge, sel.bridgeSet, "APERTURE_BRIDGE")
+			ep, err := config.EndpointFromFlags(g, endpoint, bridge)
 			if err != nil {
 				return err
 			}
@@ -120,10 +122,26 @@ func runChild(ctx context.Context, child *exec.Cmd) error {
 }
 
 // launchSelection holds the aperture flags a client command's tail parser
-// consumed.
+// consumed. The *Set fields distinguish an explicit empty value
+// (--endpoint=) from the flag being absent, so an absent flag can still
+// fall back to its environment variable while an explicit empty one
+// overrides it on purpose.
 type launchSelection struct {
 	endpoint, bridge, provider, model, config string
+	endpointSet, bridgeSet, configSet         bool
 	debug                                     bool
+}
+
+// resolvedTailFlag returns value when the tail parser saw the flag, even
+// with an empty value, and otherwise the environment variable it mirrors
+// (ADR 0007: $APERTURE_ENDPOINT, $APERTURE_BRIDGE, $APERTURE_CONFIG). An
+// explicit empty flag overrides the environment on purpose: --bridge=
+// means no bridge, not "read $APERTURE_BRIDGE instead".
+func resolvedTailFlag(value string, set bool, envKey string) string {
+	if set {
+		return value
+	}
+	return os.Getenv(envKey)
 }
 
 // splitLaunchArgs consumes aperture's known flags from a client command's
@@ -140,6 +158,11 @@ func splitLaunchArgs(args []string) (launchSelection, []string, error) {
 		"provider": &sel.provider, "p": &sel.provider,
 		"model": &sel.model, "m": &sel.model,
 		"config": &sel.config, "c": &sel.config,
+	}
+	setFlags := map[string]*bool{
+		"endpoint": &sel.endpointSet, "e": &sel.endpointSet,
+		"bridge": &sel.bridgeSet, "b": &sel.bridgeSet,
+		"config": &sel.configSet, "c": &sel.configSet,
 	}
 	var passthrough []string
 	for i := 0; i < len(args); i++ {
@@ -184,6 +207,9 @@ func splitLaunchArgs(args []string) (launchSelection, []string, error) {
 			value = args[i]
 		}
 		*target = value
+		if set, ok := setFlags[name]; ok {
+			*set = true
+		}
 	}
 	return sel, passthrough, nil
 }
