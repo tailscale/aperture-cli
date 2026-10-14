@@ -97,10 +97,11 @@ func TestRouteBindsAFixedPort(t *testing.T) {
 	}
 
 	// A second Machine on a taken port fails rather than falls back.
-	held, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", free+1))
+	held, err = net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	taken := held.Addr().(*net.TCPAddr).Port
 	defer held.Close()
 	m2 := NewMachines(false)
 	m2.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
@@ -114,7 +115,7 @@ func TestRouteBindsAFixedPort(t *testing.T) {
 	if err := mc2.Open(context.Background(), collect(&[]string{})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mc2.RouteTo(context.Background(), "http://ai", free+1, collect(&[]string{})); err == nil {
+	if _, err := mc2.RouteTo(context.Background(), "http://ai", taken, collect(&[]string{})); err == nil {
 		t.Error("RouteTo bound a port another listener holds")
 	}
 }
