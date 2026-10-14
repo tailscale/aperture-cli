@@ -90,6 +90,8 @@ func TestVersionRequested(t *testing.T) {
 		{name: "attached value form", in: []string{"--version=true", "pi"}, want: true},
 		{name: "a flag value is not a client name", in: []string{"--endpoint", "pi", "-v"}, want: true},
 		{name: "the bare shorthand", in: []string{"-v"}, want: true},
+		{name: "a positional named version is not a flag", in: []string{"bridge", "add", "version"}, want: false},
+		{name: "a false attached value is honored", in: []string{"--version=false"}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

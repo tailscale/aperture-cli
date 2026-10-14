@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -79,18 +80,29 @@ func gnuForm(args []string, long []string, clientNames []string) (rewritten, dep
 	return append(rewritten, tail...), deprecated
 }
 
-// versionRequested reports whether --version or -v appears before a client
-// command's tail. After a client's name the flag belongs to the client, so
-// `aperture --version pi` prints the version while `aperture pi --version`
-// passes it through.
+// versionRequested reports whether --version or -v, with no value or a true
+// one, appears before a client command's tail. After a client's name the
+// flag belongs to the client, so `aperture --version pi` prints the version
+// while `aperture pi --version` passes it through. A later flag overrides
+// an earlier one, same as splitLaunchArgs' --debug.
 func versionRequested(args []string, clientNames []string) bool {
+	requested := false
 	for _, arg := range args[:tailStart(args, clientNames)] {
-		name, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
-		if name == "version" || name == "v" {
-			return true
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if name != "version" && name != "v" {
+			continue
+		}
+		requested = true
+		if hasValue {
+			if on, err := strconv.ParseBool(value); err == nil {
+				requested = on
+			}
 		}
 	}
-	return false
+	return requested
 }
 
 // warnDeprecated writes the deprecation warning for each single-dash long
