@@ -207,32 +207,11 @@ make clean   # remove built binary
 ### Test suites
 
 `make check` is the gate CI runs: lint, build, then unit and e2e tests under
-the race detector. The e2e suite drives the built binary through a PTY, a
-fake Aperture and stub agent binaries; it touches no real config or tailnet.
-
-`make test-tailnet` runs the black-box suites, tagged `tailnet` so they stay
-out of the gate. They download the latest release from GitHub and, when
-`TS_AUTHKEY` is set, log a bridge into the local tailnet, so run them on a
-dev box:
-
-- **compat**: the released binary writes settings, state and a bridge login,
-  and the branch binary reads and reuses them. This is what proves old
-  installs upgrade cleanly.
-- **contract**: golden output for the scripted surface, in
-  `e2e/testdata/contract/`. A formatting change to a table or an error is a
-  deliberate diff, not an accident. Regenerate after an intentional change:
-
-```sh
-go test -tags tailnet ./e2e/ -run TestContract -update
-```
-
-Every suite builds the binary it tests from source. To test an installed
-binary instead, for example the one `make install` just wrote, point the
-harness at it:
-
-```sh
-APERTURE_E2E_BIN=$(which aperture) make test-tailnet
-```
+the race detector. `make test-tailnet` runs the black-box suites (cross-version
+compatibility against the latest release, and golden output for the scripted
+surface) on a dev box. [docs/testing.md](docs/testing.md) covers each layer
+with examples, including the e2e harness, the `-update` golden regeneration
+and testing an installed binary with `APERTURE_E2E_BIN`.
 
 ## Releasing
 
