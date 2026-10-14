@@ -269,8 +269,9 @@ func TestSpec(t *testing.T) {
 		t.Errorf("provider = %q, want the flag's provider", g.LastLaunch.LastProviderID)
 	}
 
-	// LastLaunch supplies the provider while it still fits, and no model:
-	// the menu records none and headless replay invents none.
+	// LastLaunch supplies the provider while it still fits, and no model
+	// when none was ever recorded: the menu records none and headless
+	// replay invents none.
 	g = newGlobal()
 	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "openai"}
 	spec, err = c.Spec(g, "", "", nil)
@@ -279,6 +280,18 @@ func TestSpec(t *testing.T) {
 	}
 	if len(spec.Args) != 0 {
 		t.Errorf("replay args = %q, want none", spec.Args)
+	}
+
+	// A model an earlier headless launch recorded replays when the flags
+	// supply neither provider nor model.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "openai", LastModel: "gpt-5-mini"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if want := []string{"--model", "gpt-5-mini"}; !slices.Equal(spec.Args, want) {
+		t.Errorf("replayed model args = %q, want %q", spec.Args, want)
 	}
 
 	// LastLaunch for a provider that is gone or no longer compatible is

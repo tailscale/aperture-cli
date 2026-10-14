@@ -173,10 +173,11 @@ func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, model string
 }
 
 // Spec implements clients.Client. OpenCode picks its model in its own UI,
-// so only the provider is resolved: a --model flag passes through verbatim,
-// in the provider/model form OpenCode's own --model takes.
+// so model only ever comes from a headless flag or replay: a --model flag
+// passes through verbatim, in the provider/model form OpenCode's own
+// --model takes.
 func (c *Client) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
-	p, err := c.resolveProvider(g, provider)
+	p, model, err := c.resolve(g, provider, model)
 	if err != nil {
 		return clients.LaunchSpec{}, err
 	}
@@ -187,29 +188,33 @@ func (c *Client) Spec(g *config.Global, provider, model string, args []string) (
 	return spec, nil
 }
 
-// resolveProvider picks the provider for a headless launch: the flag, then
-// LastLaunch when it still fits, then the first compatible provider.
-func (c *Client) resolveProvider(g *config.Global, provider string) (config.ProviderInfo, error) {
+// resolve picks the provider, and the model when the flag left it empty,
+// for a headless launch: the flags, then LastLaunch when it still fits,
+// then the first compatible provider and no model.
+func (c *Client) resolve(g *config.Global, provider, model string) (config.ProviderInfo, string, error) {
 	if provider != "" {
 		p, ok := g.Provider(provider)
 		if !ok {
-			return config.ProviderInfo{}, fmt.Errorf("no provider %q; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
+			return config.ProviderInfo{}, "", fmt.Errorf("no provider %q; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
 		}
 		if !providerMatches(p) {
-			return config.ProviderInfo{}, fmt.Errorf("provider %q advertises no endpoint OpenCode can use; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
+			return config.ProviderInfo{}, "", fmt.Errorf("provider %q advertises no endpoint OpenCode can use; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
 		}
-		return p, nil
+		return p, model, nil
 	}
 	if last := g.LastLaunch; last.LastClientName == name {
 		if p, ok := g.Provider(last.LastProviderID); ok && providerMatches(p) {
-			return p, nil
+			if model == "" {
+				model = last.LastModel
+			}
+			return p, model, nil
 		}
 	}
 	provs := compatibleProviders(g.Providers)
 	if len(provs) == 0 {
-		return config.ProviderInfo{}, errors.New("no providers support an OpenCode protocol")
+		return config.ProviderInfo{}, "", errors.New("no providers support an OpenCode protocol")
 	}
-	return provs[0], nil
+	return provs[0], model, nil
 }
 
 // providerIDs renders provider ids for an error message.
