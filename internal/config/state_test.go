@@ -228,6 +228,29 @@ func TestGlobal_SetActiveEndpoint_DistinguishesBridge(t *testing.T) {
 	}
 }
 
+func TestGlobal_SetActiveEndpoint_URLEditKeepsName(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	g := &config.Global{
+		Settings: config.Settings{
+			Endpoints: []config.EndpointEntry{
+				{Endpoint: config.Direct("http://old"), Name: "work"},
+			},
+		},
+	}
+	if err := g.SetActiveEndpoint(config.Direct("http://new"), config.Direct("http://old")); err != nil {
+		t.Fatal(err)
+	}
+	if g.Settings.Endpoints[0].Name != "work" {
+		t.Errorf("front endpoint name = %q, want %q", g.Settings.Endpoints[0].Name, "work")
+	}
+	if g.Settings.Endpoints[0].Endpoint.URL() != "http://new" {
+		t.Errorf("front endpoint url = %q, want http://new", g.Settings.Endpoints[0].Endpoint.URL())
+	}
+}
+
 func TestGlobal_RemoveInactiveEndpointPreservesRuntimeHost(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
