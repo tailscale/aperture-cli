@@ -44,9 +44,7 @@ The first flag aperture does not know, or --, passes the rest to ` + binary + ` 
 			}
 			// DisableFlagParsing keeps the persistent pre-run from seeing
 			// --config, so the tail parser applies it here instead.
-			if configPath := resolvedTailFlag(sel.config, sel.configSet, "APERTURE_CONFIG"); configPath != "" {
-				config.UseSettingsFile(configPath)
-			}
+			config.UseSettingsFile(resolvedTailFlag(sel.config, sel.configSet, "APERTURE_CONFIG"))
 			g, err := config.Load()
 			if err != nil {
 				return err

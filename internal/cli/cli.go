@@ -79,8 +79,12 @@ in a future release: use the GNU form (--endpoint) or the shorthand (-e).`,
 	root.Flags().BoolP("version", "v", false, "print version and exit")
 
 	// The settings file must be chosen before anything reads it, and every
-	// subcommand reads it.
+	// subcommand reads it. Commands with DisableFlagParsing (the client
+	// launchers) manage their own configuration selection from the tail.
 	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		if cmd.DisableFlagParsing {
+			return
+		}
 		if path := flagOrEnv(cmd, "config", "APERTURE_CONFIG"); path != "" {
 			config.UseSettingsFile(path)
 		}

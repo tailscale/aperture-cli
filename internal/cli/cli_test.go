@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	_ "github.com/tailscale/aperture-cli/internal/clients/pi"
 	"github.com/tailscale/aperture-cli/internal/config"
 )
 
@@ -66,6 +67,15 @@ func TestFlagOrEnv(t *testing.T) {
 				t.Errorf("flagOrEnv = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestClientCommandEmptyConfigOverridesEnvironment(t *testing.T) {
+	scratchHome(t)
+	t.Setenv("APERTURE_CONFIG", filepath.Join(t.TempDir(), "env.json"))
+	_ = Execute([]string{"pi", "--config="}, "test", func(_, _ string, _ bool) error { return nil })
+	if got := config.SettingsFileOverride(); got != "" {
+		t.Errorf("SettingsFileOverride = %q, want empty (overridden by --config=)", got)
 	}
 }
 
