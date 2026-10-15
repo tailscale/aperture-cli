@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -71,7 +72,11 @@ The first flag aperture does not know, or --, passes the rest to ` + binary + ` 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			machines := bridges.NewMachines(g.Debug)
-			defer machines.Close()
+			defer func() {
+				if err := machines.Close(); err != nil {
+					slog.Error("shutting down bridges", "err", err)
+				}
+			}()
 			attempt, err := bridges.BeginAttempt(g, ep, false, nil)
 			if err != nil {
 				return err
@@ -116,7 +121,9 @@ func runChild(ctx context.Context, child *exec.Cmd) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		_ = child.Process.Signal(syscall.SIGTERM)
+		if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+			slog.Debug("could not signal child process", "err", err)
+		}
 		return <-done
 	}
 }

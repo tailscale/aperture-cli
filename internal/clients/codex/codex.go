@@ -6,6 +6,7 @@ package codex
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
@@ -229,8 +230,11 @@ func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, model string
 		bin = binaryName
 	}
 	modelCatalogPath, cleanup, err := prepareModelCatalog(bin, g.Providers, p.ID)
-	if err != nil && g.Debug {
-		fmt.Fprintf(os.Stderr, "\r\n[debug] unable to prepare Codex model aliases: %v\r\n", err)
+	if err != nil {
+		slog.Warn("unable to prepare Codex model aliases", "err", err)
+		if g.Debug {
+			fmt.Fprintf(os.Stderr, "\r\n[debug] unable to prepare Codex model aliases: %v\r\n", err)
+		}
 	}
 	args, env := apertureLaunchConfig(g.ApertureHost, modelCatalogPath)
 	if model != "" {

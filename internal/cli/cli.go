@@ -6,6 +6,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -26,6 +27,9 @@ func Execute(args []string, version string, runTUI func(endpoint, bridge string,
 	}
 	rewritten, deprecated := gnuForm(args, longFlags, clientNames)
 	warnDeprecated(root.ErrOrStderr(), deprecated)
+	if len(deprecated) > 0 {
+		slog.Warn("deprecated single-dash flag form used", "flags", deprecated)
+	}
 	// --version is answered before dispatch: a version flag with a client
 	// command after it would otherwise be swallowed into the client's tail.
 	if versionRequested(rewritten, clientNames) {

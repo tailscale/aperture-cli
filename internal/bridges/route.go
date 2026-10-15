@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -82,6 +83,7 @@ func (mc *Machine) openRoute(target *url.URL, port int) (*Route, error) {
 		)
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if err != nil {
+			slog.Error("bridge dial failed", "network", network, "address", address, "attempts", attempts, "elapsed", elapsed, "err", err)
 			ev.notef("Bridge dial failed: network=%s address=%s attempts=%d elapsed=%s error=%T: %v", network, address, attempts, elapsed, err, err)
 			return nil, err
 		}
@@ -104,6 +106,7 @@ func (mc *Machine) openRoute(target *url.URL, port int) (*Route, error) {
 	}
 	proxy.Transport = transport
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		slog.Error("bridge proxy error", "target", redactURL(target.String()), "path", r.URL.Path, "err", err)
 		ev.notef("Bridge proxy error: target=%s path=%s error=%T: %v", redactURL(target.String()), r.URL.Path, err, err)
 		http.Error(w, "bridge proxy error: "+err.Error(), http.StatusBadGateway)
 	}

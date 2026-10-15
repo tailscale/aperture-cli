@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,5 +105,28 @@ func TestCLIConfigFlagSelectsTheSettingsFile(t *testing.T) {
 	}
 	if strings.Contains(stdout, "work") {
 		t.Errorf("bridge list at the default = %q, want the override kept separate", stdout)
+	}
+}
+
+// A failed command logs its error to the run log so details: <path> actually
+// has the failure diagnosis when the operator checks it.
+func TestFailedCommandLogsToRunLog(t *testing.T) {
+	env := hermeticEnv(t, "")
+	_, stderr, err := run(t, apertureBin, env, "serve", "--bridge", "ghost")
+	if err == nil {
+		t.Fatal("serve with missing bridge succeeded")
+	}
+	if !strings.Contains(stderr, "details:") {
+		t.Fatalf("stderr = %q, want details pointing to log file", stderr)
+	}
+
+	configDir := apertureConfigDir(t, env)
+	logData, err := os.ReadFile(filepath.Join(configDir, "aperture.log"))
+	if err != nil {
+		t.Fatalf("reading aperture.log: %v", err)
+	}
+	logStr := string(logData)
+	if !strings.Contains(logStr, "command failed") || !strings.Contains(logStr, "ghost") {
+		t.Errorf("aperture.log = %q, want error record for failed command", logStr)
 	}
 }

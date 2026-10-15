@@ -436,6 +436,7 @@ func (m *model) cancelActivation() (tea.Model, tea.Cmd) {
 	}
 	endpoint := act.endpoint()
 	if err := m.discardActivation(); err != nil {
+		slog.Error("discarding activation failed", "err", err)
 		m.errMsg = "could not remove endpoint: " + err.Error()
 		m.step = stepError
 		return m, nil
@@ -484,6 +485,7 @@ func (m *model) retargetActivation(next config.Endpoint) tea.Cmd {
 	m.stopActivation()
 	a, err := act.attempt.Retarget(m.g, next)
 	if err != nil {
+		slog.Error("retargeting activation failed", "err", err)
 		m.errMsg = err.Error()
 		m.step = stepError
 		return nil
@@ -587,6 +589,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.act.cancel = nil
 		a := m.act.attempt
 		if msg.err != nil {
+			slog.Error("endpoint activation failed", "err", msg.err)
 			if a.TargetsActive {
 				m.connected = false
 			}
@@ -598,6 +601,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if err := a.Commit(m.g, msg.gateway); err != nil {
+			slog.Error("endpoint commit failed", "err", err)
 			m.preflightErr = err.Error()
 			m.forcedToEndpoint = true
 			m.failedEndpoint = a.Endpoint
@@ -685,6 +689,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case menu.ExecDoneMsg:
+		if msg.Err != nil {
+			slog.Error("client process exited with error", "err", msg.Err)
+		}
 		// A client's foreground launch has exited. Re-run preflight: the
 		// user may have changed things outside the launcher while the
 		// agent was running.
@@ -698,6 +705,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case menu.InstallDoneMsg:
 		if msg.Err != nil {
+			slog.Error("client install failed", "err", msg.Err)
 			m.errMsg = "Install failed: " + msg.Err.Error()
 			m.step = stepError
 			return m, nil
@@ -708,6 +716,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case menu.LaunchDoneMsg:
+		if msg.Err != nil {
+			slog.Error("desktop launch failed", "err", msg.Err)
+			m.errMsg = "Launch failed: " + msg.Err.Error()
+			m.step = stepError
+			return m, nil
+		}
 		// Desktop-style launch returned immediately; stay on root menu.
 		m.popToRoot()
 		m.step = stepMenu
@@ -716,6 +730,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case menu.SimpleDoneMsg:
 		if msg.Err != nil {
+			slog.Error("menu action failed", "err", msg.Err)
 			m.errMsg = msg.Err.Error()
 			m.step = stepError
 			return m, nil

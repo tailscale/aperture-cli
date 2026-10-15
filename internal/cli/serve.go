@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -51,7 +52,11 @@ func serveCommand() *cobra.Command {
 			defer stop()
 
 			machines := bridges.NewMachines(g.Debug)
-			defer machines.Close()
+			defer func() {
+				if err := machines.Close(); err != nil {
+					slog.Error("shutting down bridges", "err", err)
+				}
+			}()
 			emit := eventPrinter(cmd, g.Debug)
 			mc, err := machines.For(b)
 			if err != nil {

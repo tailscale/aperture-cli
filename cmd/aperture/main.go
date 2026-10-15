@@ -110,6 +110,7 @@ func gitDescribeInDir(dir string) string {
 // stderr is safe at both call sites. The TUI either never started or has
 // already given the terminal back.
 func reportFailure(err error) {
+	slog.Error("command failed", "err", err)
 	fmt.Fprintln(os.Stderr, "aperture:", err)
 	if path, pathErr := config.RunLogPath(); pathErr == nil {
 		fmt.Fprintln(os.Stderr, "details:", path)
@@ -178,6 +179,7 @@ func main() {
 		// A signaled child reports -1, which would wrap to 255.
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			slog.Error("launched client failed", "err", err, "exitCode", exitErr.ExitCode())
 			if code := exitErr.ExitCode(); code > 0 {
 				os.Exit(code)
 			}
