@@ -48,10 +48,13 @@ func bridgeCommand() *cobra.Command {
 		Use:   "delete <name>",
 		Short: "Log out the bridge's machines and remove it",
 		Example: `  aperture bridge delete work
+  aperture bridge delete work --force`,
+		Long: `Log out the bridge's machines and remove it from settings.
 
 The logout can take a minute; the tailnet answers slowly. A bridge an
 endpoint still uses, or one another aperture process is running, is
-refused with the reason named.`,
+refused with the reason named. Pass --force to remove the bridge and any
+endpoints connecting through it.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
