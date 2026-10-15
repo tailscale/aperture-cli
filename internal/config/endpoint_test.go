@@ -39,8 +39,8 @@ func TestParseEndpointURL(t *testing.T) {
 // Two kinds, told apart by the type and not by an empty field, and the same
 // file shape as before for both.
 func TestEndpointKindsRoundTripThroughSettings(t *testing.T) {
-	s := Settings{Endpoints: []Endpoint{Direct("http://ai"), Bridged("http://ai", "bridge-abcdef")}}
-	data, err := s.Endpoints[1].(BridgeEndpoint).MarshalJSON()
+	s := Settings{Endpoints: []EndpointEntry{{Endpoint: Direct("http://ai")}, {Endpoint: Bridged("http://ai", "bridge-abcdef")}}}
+	data, err := s.Endpoints[1].MarshalJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestEndpointKindsRoundTripThroughSettings(t *testing.T) {
 	if err := list.UnmarshalJSON([]byte(`[{"url":"http://ai"},{"url":"http://ai","bridgeId":"bridge-abcdef"}]`)); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 || list[0] != Direct("http://ai") || list[1] != Bridged("http://ai", "bridge-abcdef") {
+	if len(list) != 2 || list[0].Endpoint != Direct("http://ai") || list[1].Endpoint != Bridged("http://ai", "bridge-abcdef") {
 		t.Errorf("decoded = %#v", list)
 	}
 	if Direct("http://ai") == Endpoint(Bridged("http://ai", "")) {

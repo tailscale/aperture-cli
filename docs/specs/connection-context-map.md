@@ -17,6 +17,9 @@ The context boundaries below also describe the proposed broader event refactor.
 |---|---|---|
 | Connection Attempt | One try at reaching an Aperture from one Endpoint. Has identity, a phase, a recorded progress trail, and exactly one outcome. | The TCP connection. The persisted endpoint list. |
 | Endpoint | The remote Aperture the user chose and the way to it. Two kinds and no third: a DirectEndpoint the host reaches itself, a BridgeEndpoint reached through a Bridge's Machine. The kind is the type, never an empty field. | The local proxy address. Anything the CLI listens on. |
+| Name | The user-chosen handle of a Bridge or an Endpoint, unique per kind. How a command line addresses one. | The ID, which is generated. The URL, which still addresses an unnamed Endpoint. |
+| Endpoint Entry | One row of the saved endpoint list: an Endpoint and its Name. | The Endpoint itself, a value compared by URL and bridge alone. |
+| Port | The fixed loopback port `serve` binds for a Bridge. Stored on the Bridge record; zero means no fixed port. | The ephemeral port a launch's Route binds. |
 | Gateway | The address a client is finally told to send requests to. The Endpoint URL when no Bridge is involved, the Route's local end when one is. | The Endpoint. Only equal to it in the direct case. |
 | Route | The local door to one Endpoint through one Machine: a `127.0.0.1:0` listener reverse-proxying over the Machine. | A tailnet route or subnet route. |
 | Bridge | The thing the user configures and sees in the picker: id, display name, last tailnet joined. Persisted. | The running tsnet node. |
@@ -41,7 +44,7 @@ it for our node and for every peer in the netmap at once.
 
 | Context | Subdomain | Owns | Lives in |
 |---|---|---|---|
-| Connection | Core | Connection Attempt, Phase, Progress, Login Link, Gateway, Route, Machine, Machines | `internal/bridges`. `internal/tui` presents and dispatches, and decides nothing. |
+| Connection | Core | Connection Attempt, Phase, Progress, Login Link, Gateway, Route, Machine, Machines | `internal/bridges`. `internal/tui` and `internal/cli` present and dispatch, and decide nothing. |
 | Settings | Supporting | Endpoint, Bridge, persistence | `internal/config` |
 | Client Launch | Supporting | Per-client config and env, written from a Gateway | `internal/clients/*`, `internal/profiles` |
 | Tailnet | Generic, external | Nodes, login, netmap, dialing | `tsnet`, `ipn`, `ipnstate`, `client/local` |
@@ -122,13 +125,14 @@ two while a login is outstanding, then to one: it exits when the state leaves
 | connected | `model.connected`, meaning the last fetch succeeded | `ipn.Running` | Keep `connected` for the former only. The latter is a Phase, never surfaced by that word. |
 | Status | `*ipnstate.Status` | what phase an Attempt is in | `Status` leaves the vocabulary. Phase is the only word for the second. |
 | machine | the Machine we run on the user's tailnet | the computer aperture is running on, as in `browser.go:69` on which machine's clipboard an SSH session writes to | The domain object takes the word. The computer is the host. That comment needs rewording when its file is touched. |
+| `bridge` (command) | the config group: `bridge add`, `bridge delete` | running the listener | The listener is `serve` ([ADR 0008](../adr/0008-persistent-bridge-fixed-port.md)). `bridge` configures and never runs anything. |
 
 ## Stored, derived, transient
 
 | Fact | Where it lives |
 |---|---|
-| Endpoint list, active endpoint | stored, `settings.json` |
-| Bridge id, name, last tailnet | stored, `settings.json` |
+| Endpoint list, endpoint names, active endpoint | stored, `settings.json` |
+| Bridge id, name, port, last tailnet | stored, `settings.json` |
 | Machine tailnet credentials | stored by tsnet under the slot's bridge state dir, never by us |
 | Slot lock | a held-open file lock under `bridges/locks/`, process lifetime, file content empty |
 | Machine, Route | transient, process lifetime, keyed by bridge id |

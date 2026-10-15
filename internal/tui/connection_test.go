@@ -48,7 +48,7 @@ func TestEndpointEditPreservesVerifiedConnection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if saved.Endpoints[0] != old {
+			if saved.Endpoints[0].Endpoint != old {
 				t.Errorf("%s persisted unverified active endpoint: %+v", outcome, saved.Endpoints)
 			}
 		})
@@ -78,9 +78,9 @@ func TestTailnetSwitchInvalidatesSharedConnection(t *testing.T) {
 				m := pickerModel(t)
 				withFakeClients(t, []clients.Client{&fakeClient{name: "Test agent", installed: true}})
 				withFakeTailscale(t, tsConnected)
-				target := m.g.Settings.Endpoints[1]
+				target := m.g.Settings.Endpoints[1].Endpoint
 				if shared {
-					m.g.Settings.Endpoints[0] = config.Bridged("http://first", target.(config.BridgeEndpoint).BridgeID())
+					m.g.Settings.Endpoints[0] = config.EndpointEntry{Endpoint: config.Bridged("http://first", target.(config.BridgeEndpoint).BridgeID())}
 				}
 				m.g.ApertureHost = "http://127.0.0.1:12345"
 				m.resetStack(m.rootMenu())
@@ -197,8 +197,8 @@ func TestEndpointEditSameCandidateCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ep := range saved.Endpoints {
-		if ep == candidate {
+	for _, entry := range saved.Endpoints {
+		if entry.Endpoint == candidate {
 			t.Error("cancelled candidate remains on disk")
 		}
 	}

@@ -19,7 +19,7 @@ func activateMachine(ms *Machines, ctx context.Context, bridge config.Bridge, re
 	if err := mc.Open(ctx, emit); err != nil {
 		return "", err
 	}
-	route, err := mc.RouteTo(ctx, remoteURL, emit)
+	route, err := mc.RouteTo(ctx, remoteURL, 0, emit)
 	if err != nil {
 		return "", err
 	}

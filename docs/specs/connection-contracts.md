@@ -61,13 +61,71 @@ The tables below describe the broader pass-1 event proposal, including the
 explicitly deferred events.
 
 Two of the three contracts are deliberately absent, with reasons, rather than
-left blank:
+left blank. The API contract is now defined: the headless command line is a
+service surface with scripts and aliases as its callers.
 
 | Contract | Status | Reason |
 |---|---|---|
-| API | Absent | The CLI exposes no service surface. It has no callers, so there are no caller classes to enumerate, no authentication and no authorization rule. Its outbound calls are `GET /v1/models` on an Aperture we do not own and the in-process tsnet LocalAPI, both other people's contracts. The nearest thing we define is the `Machine` port, which is covered by the domain model's behaviours. |
+| API | Defined below, 100% | The command line is the surface ([ADR 0007](../adr/0007-headless-cli.md)). Outbound calls stay other people's contracts: `GET /v1/models` on an Aperture we do not own and the in-process tsnet LocalAPI. |
 | DDL | Absent | No relational store. Persistence is `settings.json`, a document rewritten whole. See "Persisted facts" below for the one place the DDL rules still bite. |
 | Domain events | Defined below, 100% | The refactor's whole point is replacing a `func(string)` log sink with typed events, so these are the contract that exists. |
+
+## Command line
+
+The command line's callers are scripts, aliases and other tools, so its
+grammar and its output rules are the compatibility contract. Decisions:
+[ADR 0007](../adr/0007-headless-cli.md) and
+[ADR 0008](../adr/0008-persistent-bridge-fixed-port.md).
+
+```
+aperture [flags]                                  the TUI, unchanged
+aperture bridge add <name> [--port N]
+aperture bridge list
+aperture bridge describe <name>
+aperture bridge delete <name>
+aperture endpoint add <name> [--bridge <name>] <url>
+aperture endpoint list
+aperture endpoint delete <name>
+aperture serve --bridge <name> [--port N] [--endpoint <name|url>]
+aperture <client> [aperture flags] [-- client args]
+```
+
+Flags take GNU form through pflag: `--endpoint`, `--bridge`, `--provider`,
+`--model`, `--port`, `--config`, `--debug`, each with a single-letter
+shorthand. The pre-cobra single-dash long forms (`-endpoint`) still parse
+before a client command's name, deprecated: a normalization pass rewrites
+them there and prints a warning to stderr. Inside a client's tail a
+single-dash long flag belongs to the client, and only the GNU form and the
+single-letter shorthands are aperture's. `--config` and `$APERTURE_CONFIG`
+select an alternate settings.json. The schema does not change.
+
+Rules:
+
+- A Name addresses an endpoint or a bridge. Resolution is name first: a
+  value matching a saved Name is that endpoint, anything else parses as a
+  URL and becomes an inline endpoint. A name containing `://` is refused at
+  add time. Names win over URLs because any bare host parses as a URL, so
+  URL-first would make names unreachable.
+- A client command consumes aperture's known flags anywhere in its tail. The
+  first unknown flag, or `--`, starts verbatim passthrough to the client.
+- Provider and model default to `LastLaunch` when still valid for the client,
+  then to the first compatible provider and its default model.
+- Data goes to stdout. Diagnostics and login links go to stderr. A failure
+  exits non-zero. The CLI consumes the same events the TUI does:
+  `LoginRequired` arrives as a printed link and never enters the run log, so
+  the redaction contract above is unchanged.
+- `bridge delete` is `Machines.Destroy` plus the settings removal, so it
+  refuses while another process holds a slot lock and names the conflict.
+- `serve` binds the Bridge's Port on loopback and holds the Route until
+  SIGTERM or SIGINT. A port already bound is a hard error, never an
+  ephemeral fallback. Client launches through a bridge keep ephemeral ports.
+- `endpoint delete` removes the endpoint only. A bridge it used stays until
+  `bridge delete`; the picker's orphan cascade is a TUI nicety, not a rule.
+- Writes stay where they are today. `add` and `delete` write settings. A
+  launch records `LastLaunch` as the TUI does. `serve` writes nothing.
+- Help output is part of the surface. Every command's `--help` shows its
+  common invocations as examples, and a test holds the examples to the
+  grammar above.
 
 ## Domain events
 
@@ -148,6 +206,12 @@ its current tailnet, at which point it needs a real store anyway.
 Everything else persisted is unconditional: `Endpoint.URL`, `Endpoint.BridgeID`
 (empty means direct, which is a real value and not an absence), `Bridge.ID`,
 `Bridge.Name`.
+
+Two optional facts join them. `Endpoint.Name` is the endpoint's command-line
+handle and stays empty when the user never named it; an unnamed endpoint is
+addressed by URL, so empty is a real state. `Bridge.Port` is the fixed port
+`serve` binds, and zero means the bridge has none. Old files carry neither
+field and load unchanged.
 
 A Bridge's Machine identity lives outside settings, in the config directory:
 one state directory per Slot, `bridges/<hex>` for slot 1 and

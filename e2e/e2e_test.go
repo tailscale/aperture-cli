@@ -15,8 +15,14 @@ var apertureBin string
 
 // TestMain builds the binary under test once. The tests exercise what we
 // ship, so they run the real build rather than recompiling main's guts
-// into the test binary.
+// into the test binary. APERTURE_E2E_BIN overrides the build with an
+// already-installed binary, so the suite can run against `make install`'s
+// output or a release.
 func TestMain(m *testing.M) {
+	if bin := os.Getenv("APERTURE_E2E_BIN"); bin != "" {
+		apertureBin = bin
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "aperture-e2e")
 	if err != nil {
 		panic(err)
@@ -107,6 +113,7 @@ func TestLaunchPi(t *testing.T) {
 
 	// "q" quits only from the root menu: a clean exit here also proves the
 	// TUI took the terminal back after the child exited.
+	term.waitFor(t, "[0] Quick select")
 	term.send("q")
 	term.waitExit(t)
 

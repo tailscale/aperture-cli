@@ -80,6 +80,13 @@ lint:
 check: lint build
 	go test -race ./...
 
+# The black-box suites: cross-version compatibility against the latest
+# release, and golden output for the scripted surface. Tagged out of check
+# because they download the release binary and, with TS_AUTHKEY set, log a
+# bridge into the local tailnet. Run them on a dev box, not in CI.
+test-tailnet:
+	go test -race -tags tailnet ./e2e/
+
 install:
 	go install -ldflags "$(LDFLAGS)" ./cmd/aperture
 

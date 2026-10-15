@@ -6,10 +6,12 @@ package codex
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
 	"slices"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tailscale/aperture-cli/internal/clients"
@@ -149,15 +151,94 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo) menu.Result 
 	}}
 }
 
+// Spec implements clients.Client.
+func (c *Client) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
+	p, m, err := c.resolve(g, provider, model)
+	if err != nil {
+		return clients.LaunchSpec{}, err
+	}
+	return c.buildSpec(g, p, m, args), nil
+}
+
+// resolve picks the provider and model for a headless launch: the flags,
+// then LastLaunch when it still fits, then the first compatible provider
+// and its default model.
+func (c *Client) resolve(g *config.Global, provider, model string) (config.ProviderInfo, string, error) {
+	if provider != "" {
+		p, ok := g.Provider(provider)
+		if !ok {
+			return config.ProviderInfo{}, "", fmt.Errorf("no provider %q; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
+		}
+		if !p.SupportsEndpoint(config.EndpointOpenAIResponses) {
+			return config.ProviderInfo{}, "", fmt.Errorf("provider %q does not support OpenAI /v1/responses", provider)
+		}
+		if model == "" {
+			model = defaultModel(p)
+		}
+		return p, model, nil
+	}
+	if last := g.LastLaunch; last.LastClientName == name {
+		if p, ok := g.Provider(last.LastProviderID); ok && p.SupportsEndpoint(config.EndpointOpenAIResponses) {
+			if model == "" {
+				if slices.Contains(fqnModels(p), last.LastModel) {
+					model = last.LastModel
+				} else {
+					model = defaultModel(p)
+				}
+			}
+			return p, model, nil
+		}
+	}
+	provs := compatibleProviders(g.Providers)
+	if len(provs) == 0 {
+		return config.ProviderInfo{}, "", fmt.Errorf("no providers support OpenAI /v1/responses")
+	}
+	if model == "" {
+		model = defaultModel(provs[0])
+	}
+	return provs[0], model, nil
+}
+
+// defaultModel returns the provider's first model, the same pick the menu
+// makes when it offers exactly one.
+func defaultModel(p config.ProviderInfo) string {
+	if models := fqnModels(p); len(models) > 0 {
+		return models[0]
+	}
+	return ""
+}
+
+// providerIDs renders provider ids for an error message.
+func providerIDs(provs []config.ProviderInfo) string {
+	if len(provs) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(provs))
+	for _, p := range provs {
+		ids = append(ids, p.ID)
+	}
+	return strings.Join(ids, ", ")
+}
+
 // launch builds the exec spec, records the launch state, and returns a tea.Cmd.
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) menu.Result {
+	return menu.Result{Cmd: clients.Launch(c.buildSpec(g, p, model, nil)), PopOnDone: true}
+}
+
+// buildSpec assembles the launch for one provider and model and records the
+// launch state. extra passes through to the binary verbatim, after every
+// flag aperture sets, for headless invocations.
+func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, model string, extra []string) clients.LaunchSpec {
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
 		bin = binaryName
 	}
 	modelCatalogPath, cleanup, err := prepareModelCatalog(bin, g.Providers, p.ID)
-	if err != nil && g.Debug {
-		fmt.Fprintf(os.Stderr, "\r\n[debug] unable to prepare Codex model aliases: %v\r\n", err)
+	if err != nil {
+		slog.Warn("unable to prepare Codex model aliases", "err", err)
+		if g.Debug {
+			fmt.Fprintf(os.Stderr, "\r\n[debug] unable to prepare Codex model aliases: %v\r\n", err)
+		}
 	}
 	args, env := apertureLaunchConfig(g.ApertureHost, modelCatalogPath)
 	if model != "" {
@@ -166,6 +247,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 	if g.Settings.YoloMode {
 		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
 	}
+	args = append(args, extra...)
 
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName:  name,
@@ -174,14 +256,13 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) m
 		LastModel:       model,
 	})
 
-	cmd := clients.Launch(clients.LaunchSpec{
+	return clients.LaunchSpec{
 		Binary:  bin,
 		Args:    args,
 		Env:     env,
 		Cleanup: cleanup,
 		Debug:   g.Debug,
-	})
-	return menu.Result{Cmd: cmd, PopOnDone: true}
+	}
 }
 
 // Replay implements clients.Client.

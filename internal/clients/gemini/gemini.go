@@ -137,14 +137,88 @@ func (c *Client) backendStep(g *config.Global, p config.ProviderInfo) menu.Resul
 	}}
 }
 
+// Spec implements clients.Client. Gemini has no model menu, so model is
+// passed to the CLI as --model when set and left to the CLI otherwise.
+func (c *Client) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
+	p, b, m, err := c.resolve(g, provider, model)
+	if err != nil {
+		return clients.LaunchSpec{}, err
+	}
+	return c.buildSpec(g, p, b, m, args)
+}
+
+// resolve picks the provider, backend and model for a headless launch: the
+// flags, then LastLaunch when it still fits, then the first compatible
+// provider and its first backend. An empty model leaves the choice to the CLI.
+func (c *Client) resolve(g *config.Global, provider, model string) (config.ProviderInfo, backend, string, error) {
+	last := g.LastLaunch
+	if last.LastClientName != name {
+		last = config.LaunchState{}
+	}
+	if provider == "" {
+		if p, ok := g.Provider(last.LastProviderID); ok && len(backendsFor(p)) > 0 {
+			provider = p.ID
+		} else if provs := compatibleProviders(g.Providers); len(provs) > 0 {
+			provider = provs[0].ID
+		} else {
+			return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no provider supports Gemini CLI (Vertex or Gemini API); the endpoint offers %s", providerIDs(g.Providers))
+		}
+	}
+	p, ok := g.Provider(provider)
+	if !ok {
+		return config.ProviderInfo{}, backend{}, "", fmt.Errorf("no provider %q; the endpoint offers %s", provider, providerIDs(compatibleProviders(g.Providers)))
+	}
+	bs := backendsFor(p)
+	if len(bs) == 0 {
+		return config.ProviderInfo{}, backend{}, "", fmt.Errorf("provider %q does not serve Vertex Gemini or the Gemini API", provider)
+	}
+	// Only the provider that LastLaunch recorded carries its backend and model over.
+	if p.ID != last.LastProviderID {
+		return p, bs[0], model, nil
+	}
+	if model == "" {
+		model = last.LastModel
+	}
+	b := bs[0]
+	if i := slices.IndexFunc(bs, func(candidate backend) bool { return candidate.id == last.LastBackendType }); i >= 0 {
+		b = bs[i]
+	}
+	return p, b, model, nil
+}
+
+// providerIDs renders provider ids for an error message.
+func providerIDs(provs []config.ProviderInfo) string {
+	if len(provs) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(provs))
+	for _, p := range provs {
+		ids = append(ids, p.ID)
+	}
+	return strings.Join(ids, ", ")
+}
+
+// launch builds the menu's launch for one provider and backend. The menu
+// never picks a model, so the CLI default applies.
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend) menu.Result {
+	spec, err := c.buildSpec(g, p, b, "", nil)
+	if err != nil {
+		return errorResult(err.Error())
+	}
+	return menu.Result{Cmd: clients.Launch(spec), PopOnDone: true}
+}
+
+// buildSpec assembles the launch for one provider, backend and model and
+// records the launch state. extra passes through to the binary verbatim,
+// after every flag aperture sets, for headless invocations.
+func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, b backend, model string, extra []string) (clients.LaunchSpec, error) {
 	// Gemini CLI 0.40+ refuses custom base URLs that aren't https:// with a
 	// fully-qualified domain name (it allows http only for literal
 	// localhost / 127.0.0.1). Aperture's default "http://ai" short hostname
-	// won't work — block the launch with a clear message rather than let
+	// won't work, so block the launch with a clear message rather than let
 	// Gemini fail with an authentication error after start.
 	if err := validateHost(g.ApertureHost); err != nil {
-		return errorResult(err.Error())
+		return clients.LaunchSpec{}, err
 	}
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
@@ -152,7 +226,7 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend) menu
 	}
 	geminiHome, err := writeConfig(b.authType)
 	if err != nil {
-		return errorResult("Failed to write Gemini config: " + err.Error())
+		return clients.LaunchSpec{}, fmt.Errorf("Failed to write Gemini config: %w", err)
 	}
 
 	host := strings.TrimRight(g.ApertureHost, "/")
@@ -177,20 +251,24 @@ func (c *Client) launch(g *config.Global, p config.ProviderInfo, b backend) menu
 	if g.Settings.YoloMode {
 		args = append(args, "--yolo")
 	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, extra...)
 
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName:  name,
 		LastBackendType: b.id,
 		LastProviderID:  p.ID,
+		LastModel:       model,
 	})
 
-	cmd := clients.Launch(clients.LaunchSpec{
+	return clients.LaunchSpec{
 		Binary: bin,
 		Args:   args,
 		Env:    env,
 		Debug:  g.Debug,
-	})
-	return menu.Result{Cmd: cmd, PopOnDone: true}
+	}, nil
 }
 
 // Replay implements clients.Client.

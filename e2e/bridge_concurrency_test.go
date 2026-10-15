@@ -44,19 +44,6 @@ func waitForState(t *testing.T, what string, timeout time.Duration, cond func() 
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// apertureConfigDir recovers the aperture configuration directory from a
-// hermetic environment, so the test can assert on the files the run writes.
-func apertureConfigDir(t *testing.T, env []string) string {
-	t.Helper()
-	for _, e := range env {
-		if dir, ok := strings.CutPrefix(e, "XDG_CONFIG_HOME="); ok {
-			return filepath.Join(dir, "aperture")
-		}
-	}
-	t.Fatal("environment has no XDG_CONFIG_HOME")
-	return ""
-}
-
 // lockPath is the lock file for one slot of the bridge, e.g.
 // bridges/locks/70da61-2.lock.
 func lockPath(configDir, suffix string, slot int) string {

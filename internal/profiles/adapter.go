@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"errors"
 	"os/exec"
 	"runtime"
 
@@ -91,6 +92,12 @@ func (c *desktopClient) Replay(g *config.Global) tea.Cmd {
 	}
 	res := c.launch(g)
 	return res.Cmd
+}
+
+// Spec implements clients.Client. Claude Cowork is a desktop app, not a
+// command-line agent, so a headless launch has no meaning for it.
+func (c *desktopClient) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
+	return clients.LaunchSpec{}, errors.New(desktopName + " is a desktop app; configure it from the interactive launcher")
 }
 
 func (c *desktopClient) QuickSelectLabel(g *config.Global) string {

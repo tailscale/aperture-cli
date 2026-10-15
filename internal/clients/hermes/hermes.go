@@ -5,6 +5,7 @@
 package hermes
 
 import (
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -105,18 +106,92 @@ func (c *Client) modelStep(g *config.Global, p config.ProviderInfo) menu.Result 
 	return menu.Result{Next: &menu.Menu{Title: "Choose a default model for " + name + " via " + p.DisplayName() + ":", Items: items}}
 }
 
+// Spec implements clients.Client.
+func (c *Client) Spec(g *config.Global, provider, model string, args []string) (clients.LaunchSpec, error) {
+	p, m, err := c.resolve(g, provider, model)
+	if err != nil {
+		return clients.LaunchSpec{}, err
+	}
+	return c.buildSpec(g, p, m, args), nil
+}
+
+// resolve picks the provider and model for a headless launch: the flags,
+// then LastLaunch when it still fits, then the first compatible provider
+// and its default model.
+func (c *Client) resolve(g *config.Global, provider, model string) (config.ProviderInfo, string, error) {
+	compatible := compatibleProviders(g.Providers)
+	if provider != "" {
+		p, ok := g.Provider(provider)
+		if !ok {
+			return config.ProviderInfo{}, "", fmt.Errorf("no provider %q; compatible providers are %s", provider, providerIDs(compatible))
+		}
+		if !providerMatches(p) {
+			return config.ProviderInfo{}, "", fmt.Errorf("provider %q does not support OpenAI /v1/chat/completions; compatible providers are %s", provider, providerIDs(compatible))
+		}
+		if model == "" {
+			model = defaultModel(p)
+		}
+		return p, model, nil
+	}
+	if last := g.LastLaunch; last.LastClientName == name && last.LastBackendType == backendType {
+		if p, ok := g.Provider(last.LastProviderID); ok && providerMatches(p) {
+			if model == "" {
+				if slices.Contains(fqnModels(p), last.LastModel) {
+					model = last.LastModel
+				} else {
+					model = defaultModel(p)
+				}
+			}
+			return p, model, nil
+		}
+	}
+	if len(compatible) == 0 {
+		return config.ProviderInfo{}, "", fmt.Errorf("no providers support OpenAI /v1/chat/completions")
+	}
+	if model == "" {
+		model = defaultModel(compatible[0])
+	}
+	return compatible[0], model, nil
+}
+
+// defaultModel returns the provider's first model in provider_id/model_id
+// form, or empty when it lists none.
+func defaultModel(p config.ProviderInfo) string {
+	if models := fqnModels(p); len(models) > 0 {
+		return models[0]
+	}
+	return ""
+}
+
+// providerIDs renders provider ids for an error message.
+func providerIDs(provs []config.ProviderInfo) string {
+	if len(provs) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(provs))
+	for _, p := range provs {
+		ids = append(ids, p.ID)
+	}
+	return strings.Join(ids, ", ")
+}
+
 func (c *Client) launch(g *config.Global, p config.ProviderInfo, model string) menu.Result {
+	return menu.Result{Cmd: clients.Launch(c.buildSpec(g, p, model, nil)), PopOnDone: true}
+}
+
+// buildSpec assembles the launch for one provider and model and records the
+// launch state. extra passes through to the binary verbatim, after every
+// flag aperture sets, for headless invocations.
+func (c *Client) buildSpec(g *config.Global, p config.ProviderInfo, model string, extra []string) clients.LaunchSpec {
 	bin := clients.FindBinary(binaryName, c.CommonPaths())
 	if bin == "" {
 		bin = binaryName
 	}
-	env := buildEnv(g.ApertureHost, model)
-	args := buildArgs(g.Settings.YoloMode)
+	args := append(buildArgs(g.Settings.YoloMode), extra...)
 	_ = g.RecordLaunch(config.LaunchState{
 		LastClientName: name, LastBackendType: backendType, LastProviderID: p.ID, LastModel: model,
 	})
-	cmd := clients.Launch(clients.LaunchSpec{Binary: bin, Args: args, Env: env, Debug: g.Debug})
-	return menu.Result{Cmd: cmd, PopOnDone: true}
+	return clients.LaunchSpec{Binary: bin, Args: args, Env: buildEnv(g.ApertureHost, model), Debug: g.Debug}
 }
 
 func buildEnv(apertureHost, model string) map[string]string {

@@ -237,9 +237,10 @@ across Attempts, so it cannot be owned by any one of them.
 | `tailnet` | `string` | The network joined, empty until the netmap lands and after leaving. |
 | `routes` | `map[string]*Route` | Keyed by target URL. |
 
-Behaviors: `Open(ctx, emit) error`, `RouteTo(ctx, url, emit) (*Route, error)`,
+Behaviors: `Open(ctx, emit) error`, `RouteTo(ctx, url, port, emit) (*Route, error)`,
 `LeaveTailnet(ctx, emit) error`, `Destroy(ctx, emit) error`, `Close() error`,
-`Tailnet() string`. Each reports what it waits on to `emit`.
+`Tailnet() string`. Each reports what it waits on to `emit`. A `port` of zero
+picks a free port.
 
 Invariants:
 - A Route can only be created through an open Machine. `RouteTo` fails rather than starts a node.
@@ -277,7 +278,9 @@ Entity, inside the Machine aggregate. The local door to one Endpoint.
 Behaviors: `close() error`, reached only through its Machine.
 
 Invariants: belongs to exactly one Machine and one Endpoint. Its listener is
-bound to loopback only. Resolves the target against the Machine's own peer map
+bound to loopback only. The port is ephemeral by default; under `serve` it is
+the Bridge's fixed Port ([ADR 0008](../adr/0008-persistent-bridge-fixed-port.md)).
+Resolves the target against the Machine's own peer map
 before dialing, never the host resolver, because the host may itself be on a
 tailnet with a same-named node.
 

@@ -27,13 +27,13 @@ type LaunchSpec struct {
 	Debug bool
 }
 
-// Launch returns a tea.Cmd that runs the given spec via tea.ExecProcess and
-// emits menu.ExecDoneMsg when the child exits. If spec.Binary is empty,
-// the command returns immediately with an error.
-func Launch(spec LaunchSpec) tea.Cmd {
+// Command builds the child process for the spec: Env overlaid on the
+// current environment, the standard streams attached, and the resolved Env
+// and Args dumped to stderr when Debug is set. The TUI hands it to
+// tea.ExecProcess; a headless launch runs it directly.
+func (spec LaunchSpec) Command() (*exec.Cmd, error) {
 	if spec.Binary == "" {
-		err := fmt.Errorf("binary path is empty")
-		return func() tea.Msg { return menu.ExecDoneMsg{Err: err} }
+		return nil, fmt.Errorf("binary path is empty")
 	}
 
 	envPairs := os.Environ()
@@ -56,7 +56,17 @@ func Launch(spec LaunchSpec) tea.Cmd {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	return cmd, nil
+}
 
+// Launch returns a tea.Cmd that runs the given spec via tea.ExecProcess and
+// emits menu.ExecDoneMsg when the child exits. If spec.Binary is empty,
+// the command returns immediately with an error.
+func Launch(spec LaunchSpec) tea.Cmd {
+	cmd, err := spec.Command()
+	if err != nil {
+		return func() tea.Msg { return menu.ExecDoneMsg{Err: err} }
+	}
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		if spec.Cleanup != nil {
 			spec.Cleanup()

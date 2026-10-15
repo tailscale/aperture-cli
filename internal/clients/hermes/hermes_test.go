@@ -2,6 +2,7 @@ package hermes
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -100,5 +101,84 @@ func TestInstallUninstall(t *testing.T) {
 	}
 	if got := c.Uninstall(); got.Hint != uninstallCmd || got.Run == nil {
 		t.Errorf("Uninstall = %+v", got)
+	}
+}
+
+func TestSpec(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	chat := map[string]bool{config.EndpointOpenAIChat: true}
+	openrouter := config.ProviderInfo{ID: "openrouter", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: chat}
+	responses := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+	newGlobal := func() *config.Global {
+		return &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{anthropic, responses, openrouter}}
+	}
+	c := &Client{}
+	baseArgs := []string{"--provider", "custom"}
+
+	// Defaults: the first compatible provider and its first model.
+	spec, err := c.Spec(newGlobal(), "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if got := spec.Env["HERMES_INFERENCE_MODEL"]; got != "gpt-5" {
+		t.Errorf("default model = %q, want the first compatible provider's first model", got)
+	}
+	if !slices.Equal(spec.Args, baseArgs) {
+		t.Errorf("default args = %v, want %v", spec.Args, baseArgs)
+	}
+
+	// Flags win, and passthrough args land after aperture's own.
+	g := newGlobal()
+	g.Settings.YoloMode = true
+	spec, err = c.Spec(g, "openrouter", "openrouter/gpt-5-mini", []string{"--resume", "abc"})
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if got := spec.Env["HERMES_INFERENCE_MODEL"]; got != "gpt-5-mini" {
+		t.Errorf("flag model = %q, want gpt-5-mini", got)
+	}
+	if want := []string{"--provider", "custom", "--yolo", "--resume", "abc"}; !slices.Equal(spec.Args, want) {
+		t.Errorf("flag args = %v, want %v", spec.Args, want)
+	}
+
+	// An explicit provider with no model takes that provider's first model.
+	spec, err = c.Spec(newGlobal(), "openrouter", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if got := spec.Env["HERMES_INFERENCE_MODEL"]; got != "gpt-5" {
+		t.Errorf("provider default model = %q, want the provider's first model", got)
+	}
+
+	// LastLaunch fills empty flags when it still fits.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastBackendType: backendType, LastProviderID: "openrouter", LastModel: "openrouter/gpt-5-mini"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if got := spec.Env["HERMES_INFERENCE_MODEL"]; got != "gpt-5-mini" {
+		t.Errorf("replay model = %q, want LastLaunch's model", got)
+	}
+
+	// A stale model in LastLaunch falls back to the provider's default model.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastBackendType: backendType, LastProviderID: "openrouter", LastModel: "openrouter/stale-model"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec with stale model: %v", err)
+	}
+	if got := spec.Env["HERMES_INFERENCE_MODEL"]; got != "gpt-5" {
+		t.Errorf("stale model = %q, want the provider's first model", got)
+	}
+
+	// Errors: an unknown provider names the compatible ids, an incompatible
+	// one says which API it lacks.
+	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openrouter") {
+		t.Errorf("unknown provider: %v, want the compatible ids in the error", err)
+	}
+	if _, err := c.Spec(newGlobal(), "anthropic", "", nil); err == nil || !strings.Contains(err.Error(), "/v1/chat/completions") {
+		t.Errorf("incompatible provider: %v, want the missing API named", err)
 	}
 }

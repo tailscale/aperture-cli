@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -143,6 +144,7 @@ func (m *model) bridgeRemoved(msg bridgeRemovedMsg) (tea.Model, tea.Cmd) {
 		err = bridges.RemoveFromSettings(m.g, msg.bridge, msg.endpoint)
 	}
 	if err != nil {
+		slog.Error("bridge removal failed", "bridge", msg.bridge.ID, "err", err)
 		m.quitAfterRemoval = false
 		m.step = stepError
 		m.errMsg = m.removalFailedMessage(msg.bridge, err)

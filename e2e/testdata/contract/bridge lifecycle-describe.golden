@@ -1,0 +1,7 @@
+exit 0
+-- stdout --
+name: work
+id: bridge-XXXXXX
+port: 8991
+machine slots on disk: none
+-- stderr --

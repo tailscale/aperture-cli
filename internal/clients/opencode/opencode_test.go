@@ -3,8 +3,12 @@ package opencode
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tailscale/aperture-cli/internal/config"
@@ -216,5 +220,180 @@ func TestWriteProviderConfig(t *testing.T) {
 				t.Errorf("config file still exists after cleanup")
 			}
 		})
+	}
+}
+
+// The headless launch (ADR 0007): flags win, LastLaunch supplies the
+// provider, and OpenCode picks its own model unless --model says otherwise.
+func TestSpec(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	embed := config.ProviderInfo{ID: "embed", Models: []string{"embed-1"}, SupportedEndpoints: map[string]bool{"/v1/embeddings": true}}
+	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+	newGlobal := func() *config.Global {
+		return &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{embed, openai, anthropic}}
+	}
+	c := &Client{}
+
+	// Defaults: the first compatible provider and no model, because OpenCode
+	// picks its model in its own UI. The incompatible provider ahead of it
+	// is skipped.
+	g := newGlobal()
+	spec, err := c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("default args = %q, want none", spec.Args)
+	}
+	if g.LastLaunch.LastProviderID != "openai" {
+		t.Errorf("provider = %q, want the first compatible one", g.LastLaunch.LastProviderID)
+	}
+	if spec.Env["OPENCODE_CONFIG"] == "" {
+		t.Errorf("default env = %v, want OPENCODE_CONFIG set", spec.Env)
+	}
+
+	// Flags win, a --model passes through verbatim, and passthrough args
+	// land after aperture's own.
+	g = newGlobal()
+	spec, err = c.Spec(g, "anthropic", "anthropic/anthropic/claude", []string{"--session", "s1"})
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if want := []string{"--model", "anthropic/anthropic/claude", "--session", "s1"}; !slices.Equal(spec.Args, want) {
+		t.Errorf("flag args = %q, want %q", spec.Args, want)
+	}
+	if g.LastLaunch.LastProviderID != "anthropic" {
+		t.Errorf("provider = %q, want the flag's provider", g.LastLaunch.LastProviderID)
+	}
+
+	// LastLaunch supplies the provider while it still fits, and no model
+	// when none was ever recorded: the menu records none and headless
+	// replay invents none.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "openai"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("replay args = %q, want none", spec.Args)
+	}
+
+	// A model an earlier headless launch recorded replays when the flags
+	// supply neither provider nor model.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "openai", LastModel: "gpt-5-mini"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec: %v", err)
+	}
+	if want := []string{"--model", "gpt-5-mini"}; !slices.Equal(spec.Args, want) {
+		t.Errorf("replayed model args = %q, want %q", spec.Args, want)
+	}
+
+	// LastLaunch for a provider that is gone or no longer compatible is
+	// ignored in favor of the default.
+	for _, stale := range []string{"ghost", "embed"} {
+		g := newGlobal()
+		g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: stale}
+		if _, err := c.Spec(g, "", "", nil); err != nil {
+			t.Fatalf("Spec with stale %q: %v", stale, err)
+		}
+		if g.LastLaunch.LastProviderID != "openai" {
+			t.Errorf("stale %q provider = %q, want the default", stale, g.LastLaunch.LastProviderID)
+		}
+	}
+
+	// Errors: an unknown provider names the compatible ids, an
+	// incompatible one says why, and no compatible provider says so.
+	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openai, anthropic") {
+		t.Errorf("unknown provider: %v, want the compatible ids in the error", err)
+	}
+	if _, err := c.Spec(newGlobal(), "embed", "", nil); err == nil || !strings.Contains(err.Error(), "OpenCode can use") {
+		t.Errorf("incompatible provider: %v, want the reason in the error", err)
+	}
+	none := &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{embed}}
+	if _, err := c.Spec(none, "", "", nil); err == nil || !strings.Contains(err.Error(), "OpenCode protocol") {
+		t.Errorf("no compatible provider: %v, want the protocol named", err)
+	}
+	// The menu launch names no model and no extra args.
+	spec, err = c.buildSpec(newGlobal(), openai, "", nil)
+	if err != nil {
+		t.Fatalf("buildSpec: %v", err)
+	}
+	if len(spec.Args) != 0 {
+		t.Errorf("menu args = %q, want none", spec.Args)
+	}
+}
+
+// Two concurrent launches must not share a per-launch config file: the
+// second write would replace the first, and the first child to exit would
+// delete it under the second.
+func TestWriteProviderConfigIsUniquePerLaunch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	provs := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+
+	first, cleanupFirst, err := writeProviderConfig(testHost, provs)
+	if err != nil {
+		t.Fatalf("first writeProviderConfig: %v", err)
+	}
+	second, cleanupSecond, err := writeProviderConfig(testHost, provs)
+	if err != nil {
+		cleanupFirst()
+		t.Fatalf("second writeProviderConfig: %v", err)
+	}
+	defer cleanupSecond()
+	cleanupFirst()
+	if first == second {
+		t.Fatalf("both launches wrote %q", first)
+	}
+	if _, err := os.Stat(second); err != nil {
+		t.Errorf("the second launch's config is gone: %v", err)
+	}
+}
+
+// A write that fails partway through (disk full, quota) must not leave the
+// partially written temp file behind in ~/.opencode.
+func TestWriteProviderConfigRemovesTempFileOnWriteFailure(t *testing.T) {
+	if os.Getenv("TEST_OPENCODE_WRITE_FAILURE") == "1" {
+		signal.Ignore(syscall.SIGXFSZ)
+		defer signal.Reset(syscall.SIGXFSZ)
+		var orig syscall.Rlimit
+		if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &orig); err != nil {
+			t.Fatal(err)
+		}
+		defer syscall.Setrlimit(syscall.RLIMIT_FSIZE, &orig)
+		limited := syscall.Rlimit{Cur: 1, Max: orig.Max}
+		if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &limited); err != nil {
+			t.Fatal(err)
+		}
+
+		provs := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
+		if _, _, err := writeProviderConfig(testHost, provs); err == nil {
+			t.Fatal("writeProviderConfig: want a write failure under the file-size limit")
+		}
+		return
+	}
+
+	home := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestWriteProviderConfigRemovesTempFileOnWriteFailure$")
+	cmd.Env = append(os.Environ(), "TEST_OPENCODE_WRITE_FAILURE=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("child process failed: %v\n%s", err, out)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(home, ".opencode"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "tmp_aperture_config_") {
+			t.Errorf("leaked temp file %s after a write failure", e.Name())
+		}
 	}
 }

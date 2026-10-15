@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,5 +54,32 @@ func TestOpenRunLogAppendsThenTruncates(t *testing.T) {
 	}
 	if string(got) != "after the cap\n" {
 		t.Errorf("log is %d bytes, want the oversized file started over", len(got))
+	}
+}
+
+// Every run logs, whatever path it takes: the log opens before dispatch and
+// --debug only raises the level.
+func TestStartRunLogAndRaiseRunLog(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+	closeLog := config.StartRunLog()
+	slog.Info("at-info")
+	config.RaiseRunLog()
+	slog.Debug("at-debug")
+	closeLog()
+
+	path, err := config.RunLogPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, "at-info") || !strings.Contains(log, "at-debug") {
+		t.Errorf("run log = %q, want both the info and the debug record", log)
 	}
 }

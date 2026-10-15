@@ -72,10 +72,12 @@ func pickSDK(p config.ProviderInfo, apertureHost string) (npm string, options ma
 	return "", nil
 }
 
-// writeProviderConfig writes the per-launch OpenCode config under
-// ~/.opencode/tmp_aperture_config.json and returns the path plus a cleanup
-// function that removes the file. The config defines one provider (the
-// chosen one) mapped to the SDK picked from its advertised endpoints.
+// writeProviderConfig writes the per-launch OpenCode config under ~/.opencode
+// as a uniquely named file, and returns the path plus a cleanup function that
+// removes it. The name is per launch: a fixed name would have two concurrent
+// launches overwrite each other's config, and the first child to exit would
+// unlink the second one's. The config defines one provider (the chosen one)
+// mapped to the SDK picked from its advertised endpoints.
 func writeProviderConfig(apertureHost string, p config.ProviderInfo) (string, func(), error) {
 	npm, options := pickSDK(p, apertureHost)
 
@@ -113,9 +115,20 @@ func writeProviderConfig(apertureHost string, p config.ProviderInfo) (string, fu
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return "", nil, err
 	}
-	path := filepath.Join(configDir, "tmp_aperture_config.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	f, err := os.CreateTemp(configDir, "tmp_aperture_config_*.json")
+	if err != nil {
 		return "", nil, err
 	}
-	return path, func() { os.Remove(path) }, nil
+	path := f.Name()
+	remove := func() { os.Remove(path) }
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		remove()
+		return "", nil, err
+	}
+	if err := f.Close(); err != nil {
+		remove()
+		return "", nil, err
+	}
+	return path, remove, nil
 }

@@ -24,7 +24,7 @@ func CheckRemovable(g *config.Global, bridge config.Bridge, endpoint config.Endp
 		return errors.New("connect to another endpoint before removing the active one")
 	}
 	if endpoint == nil && bridge.ID != "" {
-		if users := endpointsThroughBridge(g, bridge.ID); len(users) > 0 {
+		if users := EndpointsThroughBridge(g, bridge.ID); len(users) > 0 {
 			return fmt.Errorf("bridge %s is used by endpoint %s; remove that connection instead", bridge.Name, users[0].URL())
 		}
 	}
@@ -39,7 +39,7 @@ func WillDestroyMachine(g *config.Global, bridge config.Bridge, endpoint config.
 	if bridge.ID == "" || !HasMachine(bridge.ID) {
 		return false
 	}
-	for _, other := range endpointsThroughBridge(g, bridge.ID) {
+	for _, other := range EndpointsThroughBridge(g, bridge.ID) {
 		if other != endpoint {
 			return false
 		}
@@ -147,19 +147,19 @@ func RemoveFromSettings(g *config.Global, bridge config.Bridge, endpoint config.
 			return err
 		}
 	}
-	if bridge.ID != "" && len(endpointsThroughBridge(g, bridge.ID)) == 0 {
+	if bridge.ID != "" && len(EndpointsThroughBridge(g, bridge.ID)) == 0 {
 		return g.RemoveBridge(bridge.ID)
 	}
 	return nil
 }
 
-// endpointsThroughBridge returns every saved endpoint that connects through
+// EndpointsThroughBridge returns every saved endpoint that connects through
 // bridgeID.
-func endpointsThroughBridge(g *config.Global, bridgeID string) []config.Endpoint {
+func EndpointsThroughBridge(g *config.Global, bridgeID string) []config.Endpoint {
 	var users []config.Endpoint
-	for _, endpoint := range g.Settings.Endpoints {
-		if isReachableThroughBridge(endpoint, bridgeID) {
-			users = append(users, endpoint)
+	for _, entry := range g.Settings.Endpoints {
+		if isReachableThroughBridge(entry.Endpoint, bridgeID) {
+			users = append(users, entry.Endpoint)
 		}
 	}
 	return users
