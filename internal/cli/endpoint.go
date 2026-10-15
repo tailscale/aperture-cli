@@ -53,7 +53,14 @@ func endpointCommand() *cobra.Command {
 			if err := g.NameEndpoint(ep, args[0]); err != nil {
 				return err
 			}
-			writeEndpoints(cmd, g, []config.EndpointEntry{{Endpoint: ep, Name: args[0]}})
+			var entry config.EndpointEntry
+			for _, e := range g.Settings.Endpoints {
+				if e.Endpoint == ep {
+					entry = e
+					break
+				}
+			}
+			writeEndpoints(cmd, g, []config.EndpointEntry{entry})
 			return nil
 		},
 	}

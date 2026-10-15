@@ -90,6 +90,17 @@ func TestEndpointAddRefusesAMissingBridge(t *testing.T) {
 	}
 }
 
+func TestEndpointAddPrintsCanonicalName(t *testing.T) {
+	scratchHome(t)
+	stdout, _, err := runCLI(t, "endpoint", "add", "  e1  ", "http://ai")
+	if err != nil {
+		t.Fatalf("endpoint add: %v", err)
+	}
+	if strings.Contains(stdout, "  e1  ") {
+		t.Errorf("stdout = %q, want trimmed canonical name without raw padding", stdout)
+	}
+}
+
 func TestEndpointCommands(t *testing.T) {
 	scratchHome(t)
 	if _, _, err := runCLI(t, "endpoint", "add", "e1", "http://ai"); err != nil {
