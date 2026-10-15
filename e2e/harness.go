@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,10 @@ type terminal struct {
 	cmd  *exec.Cmd
 	ptmx *os.File
 
+	waitOnce sync.Once
+	waitErr  error
+	waitDone chan struct{}
+
 	mu  sync.Mutex
 	out bytes.Buffer
 }
@@ -36,7 +41,11 @@ func spawn(t *testing.T, bin string, args []string, env []string) *terminal {
 	if err != nil {
 		t.Fatalf("spawning %s: %v", bin, err)
 	}
-	term := &terminal{cmd: cmd, ptmx: ptmx}
+	term := &terminal{
+		cmd:      cmd,
+		ptmx:     ptmx,
+		waitDone: make(chan struct{}),
+	}
 	t.Cleanup(term.kill)
 	go func() {
 		var buf [4096]byte
@@ -55,6 +64,15 @@ func spawn(t *testing.T, bin string, args []string, env []string) *terminal {
 	return term
 }
 
+func (term *terminal) wait() error {
+	term.waitOnce.Do(func() {
+		term.waitErr = term.cmd.Wait()
+		close(term.waitDone)
+	})
+	<-term.waitDone
+	return term.waitErr
+}
+
 // kill ends the process if it has not already exited. Terminals parked on a
 // screen that never exits (a bridge waiting on login) are reaped here; in
 // suites that end in waitExit every call is a no-op.
@@ -63,7 +81,7 @@ func (term *terminal) kill() {
 		return
 	}
 	_ = term.cmd.Process.Kill()
-	_ = term.cmd.Wait()
+	_ = term.wait()
 	_ = term.ptmx.Close()
 }
 
@@ -103,7 +121,7 @@ func (term *terminal) waitFor(t *testing.T, substr string) {
 func (term *terminal) waitExit(t *testing.T) {
 	t.Helper()
 	done := make(chan error, 1)
-	go func() { done <- term.cmd.Wait() }()
+	go func() { done <- term.wait() }()
 	select {
 	case err := <-done:
 		term.ptmx.Close()
@@ -168,6 +186,32 @@ func hermeticEnv(t *testing.T, binDir string) []string {
 		"PATH="+path,
 		"BROWSER=true",
 	)
+}
+
+// apertureConfigDir recovers the aperture configuration directory from a
+// hermetic environment, on both Linux (~/.config/aperture) and macOS
+// (~/Library/Application Support/aperture).
+func apertureConfigDir(t *testing.T, env []string) string {
+	t.Helper()
+	var home, xdg string
+	for _, e := range env {
+		if dir, ok := strings.CutPrefix(e, "HOME="); ok {
+			home = dir
+		} else if dir, ok := strings.CutPrefix(e, "XDG_CONFIG_HOME="); ok {
+			xdg = dir
+		}
+	}
+	if runtime.GOOS == "darwin" && home != "" {
+		return filepath.Join(home, "Library", "Application Support", "aperture")
+	}
+	if xdg != "" {
+		return filepath.Join(xdg, "aperture")
+	}
+	if home != "" {
+		return filepath.Join(home, ".config", "aperture")
+	}
+	t.Fatal("environment has no HOME or XDG_CONFIG_HOME")
+	return ""
 }
 
 // stubPi is a stand-in for the pi binary: it records its argv and

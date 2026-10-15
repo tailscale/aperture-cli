@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -22,7 +24,12 @@ import (
 func releaseBinary(t *testing.T) string {
 	t.Helper()
 	tag := latestReleaseTag(t)
-	name := fmt.Sprintf("aperture-cli_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	var name string
+	if runtime.GOOS == "darwin" {
+		name = fmt.Sprintf("aperture_%s_darwin_%s.zip", tag, runtime.GOARCH)
+	} else {
+		name = fmt.Sprintf("aperture-cli_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	}
 
 	dir := filepath.Join(userCacheDir(t), "aperture-e2e-releases", tag+"-"+runtime.GOOS+"-"+runtime.GOARCH)
 	bin := filepath.Join(dir, "aperture")
@@ -40,6 +47,39 @@ func releaseBinary(t *testing.T) string {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("downloading %s: %s", url, resp.Status)
+	}
+	if strings.HasSuffix(name, ".zip") {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range zr.File {
+			if filepath.Base(f.Name) != "aperture" {
+				continue
+			}
+			rc, err := f.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := os.OpenFile(bin, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+			if err != nil {
+				rc.Close()
+				t.Fatal(err)
+			}
+			_, err = io.Copy(out, rc)
+			rc.Close()
+			out.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return bin
+		}
+		t.Fatalf("no aperture binary in %s", url)
+		return ""
 	}
 	gz, err := gzip.NewReader(resp.Body)
 	if err != nil {
@@ -121,7 +161,7 @@ var (
 	bridgeIDPattern = regexp.MustCompile(`bridge-[0-9a-f]{6}`)
 	// detailsPattern matches the run-log path reportFailure prints after an
 	// error, which carries the run's temp directory.
-	detailsPattern = regexp.MustCompile(`details: \S+aperture\.log`)
+	detailsPattern = regexp.MustCompile(`details: .*?aperture\.log`)
 )
 
 // normalizeGolden replaces the random parts of command output with fixed

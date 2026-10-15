@@ -95,6 +95,11 @@ func TestCompatOldBridgeLoginReusedByNewBinary(t *testing.T) {
 	recordDir := installStubPi(t, binDir)
 	env := append(hermeticEnv(t, binDir), "APERTURE_E2E_RECORD="+recordDir, "TS_AUTHKEY="+key)
 
+	t.Cleanup(func() {
+		// Log the bridge out of the tailnet so it leaves no machine behind.
+		_, _, _ = run(t, apertureBin, env, "bridge", "delete", "compatbridge", "--force")
+	})
+
 	// The released binary logs the bridge in and launches the stub through
 	// it against the tailnet's own Aperture.
 	term := spawn(t, old, []string{"-bridge", "compatbridge", "-endpoint", "http://ai"}, env)

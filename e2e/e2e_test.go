@@ -113,6 +113,7 @@ func TestLaunchPi(t *testing.T) {
 
 	// "q" quits only from the root menu: a clean exit here also proves the
 	// TUI took the terminal back after the child exited.
+	term.waitFor(t, "[0] Quick select")
 	term.send("q")
 	term.waitExit(t)
 
