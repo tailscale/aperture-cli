@@ -71,6 +71,30 @@ func TestBridgeDeleteRefusesABridgeInUse(t *testing.T) {
 	}
 }
 
+func TestBridgeDeleteForceRemovesBridgeAndEndpoints(t *testing.T) {
+	scratchHome(t)
+	if _, _, err := runCLI(t, "bridge", "add", "work"); err != nil {
+		t.Fatalf("bridge add: %v", err)
+	}
+	if _, _, err := runCLI(t, "endpoint", "add", "e1", "--bridge", "work", "http://ai"); err != nil {
+		t.Fatalf("endpoint add: %v", err)
+	}
+	if _, _, err := runCLI(t, "bridge", "delete", "work"); err == nil {
+		t.Fatal("bridge delete without --force succeeded on bridge in use")
+	}
+	if _, _, err := runCLI(t, "bridge", "delete", "work", "--force"); err != nil {
+		t.Fatalf("bridge delete with --force: %v", err)
+	}
+	stdout, _, _ := runCLI(t, "bridge", "list")
+	if strings.Contains(stdout, "work") {
+		t.Errorf("bridge list = %q, want work gone", stdout)
+	}
+	stdout, _, _ = runCLI(t, "endpoint", "list")
+	if strings.Contains(stdout, "e1") {
+		t.Errorf("endpoint list = %q, want e1 gone", stdout)
+	}
+}
+
 // endpoint add is a management command: a typo in --bridge must error and
 // leave settings untouched, not create a bridge nobody logged in.
 func TestEndpointAddRefusesAMissingBridge(t *testing.T) {

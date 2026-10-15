@@ -44,6 +44,49 @@ func bridgeCommand() *cobra.Command {
 		},
 	}
 	add.Flags().IntP("port", "p", 0, "fixed loopback port serve binds for this bridge")
+	del := &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Log out the bridge's machines and remove it",
+		Example: `  aperture bridge delete work
+
+The logout can take a minute; the tailnet answers slowly. A bridge an
+endpoint still uses, or one another aperture process is running, is
+refused with the reason named.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			g, err := loadGlobal(cmd)
+			if err != nil {
+				return err
+			}
+			b, err := bridgeByName(g, args[0])
+			if err != nil {
+				return err
+			}
+			force, _ := cmd.Flags().GetBool("force")
+			if !force {
+				if err := bridges.CheckRemovable(g, b, nil); err != nil {
+					return err
+				}
+			}
+			if force || bridges.WillDestroyMachine(g, b, nil) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "logging out every machine slot of %s; this can take a minute\n", b.Name)
+				machines := bridges.NewMachines(g.Debug)
+				defer machines.Close()
+				if err := machines.Destroy(cmd.Context(), b, eventPrinter(cmd, g.Debug)); err != nil {
+					return err
+				}
+			}
+			if force {
+				for _, ep := range bridges.EndpointsThroughBridge(g, b.ID) {
+					_ = g.RemoveEndpoint(ep)
+				}
+			}
+			return g.RemoveBridge(b.ID)
+		},
+	}
+	del.Flags().BoolP("force", "f", false, "force removal even if endpoints still connect through this bridge")
+
 	cmd.AddCommand(
 		add,
 		&cobra.Command{
@@ -100,39 +143,7 @@ func bridgeCommand() *cobra.Command {
 				return nil
 			},
 		},
-		&cobra.Command{
-			Use:   "delete <name>",
-			Short: "Log out the bridge's machines and remove it",
-			Example: `  aperture bridge delete work
-
-The logout can take a minute; the tailnet answers slowly. A bridge an
-endpoint still uses, or one another aperture process is running, is
-refused with the reason named.`,
-			Args: cobra.ExactArgs(1),
-			RunE: func(cmd *cobra.Command, args []string) error {
-				cmd.SilenceUsage = true
-				g, err := loadGlobal(cmd)
-				if err != nil {
-					return err
-				}
-				b, err := bridgeByName(g, args[0])
-				if err != nil {
-					return err
-				}
-				if err := bridges.CheckRemovable(g, b, nil); err != nil {
-					return err
-				}
-				if bridges.WillDestroyMachine(g, b, nil) {
-					fmt.Fprintf(cmd.ErrOrStderr(), "logging out every machine slot of %s; this can take a minute\n", b.Name)
-					machines := bridges.NewMachines(g.Debug)
-					defer machines.Close()
-					if err := machines.Destroy(cmd.Context(), b, eventPrinter(cmd, g.Debug)); err != nil {
-						return err
-					}
-				}
-				return g.RemoveBridge(b.ID)
-			},
-		},
+		del,
 	)
 	return cmd
 }
