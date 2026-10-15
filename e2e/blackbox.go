@@ -24,12 +24,7 @@ import (
 func releaseBinary(t *testing.T) string {
 	t.Helper()
 	tag := latestReleaseTag(t)
-	var name string
-	if runtime.GOOS == "darwin" {
-		name = fmt.Sprintf("aperture_%s_darwin_%s.zip", tag, runtime.GOARCH)
-	} else {
-		name = fmt.Sprintf("aperture-cli_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
-	}
+	name := fmt.Sprintf("aperture-cli_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 
 	dir := filepath.Join(userCacheDir(t), "aperture-e2e-releases", tag+"-"+runtime.GOOS+"-"+runtime.GOARCH)
 	bin := filepath.Join(dir, "aperture")
@@ -43,6 +38,15 @@ func releaseBinary(t *testing.T) string {
 	resp, err := httpClient().Get(url)
 	if err != nil {
 		t.Fatalf("downloading %s: %v", url, err)
+	}
+	if resp.StatusCode == http.StatusNotFound && runtime.GOOS == "darwin" {
+		resp.Body.Close()
+		name = fmt.Sprintf("aperture_%s_darwin_%s.zip", tag, runtime.GOARCH)
+		url = "https://github.com/tailscale/aperture-cli/releases/download/" + tag + "/" + name
+		resp, err = httpClient().Get(url)
+		if err != nil {
+			t.Fatalf("downloading %s: %v", url, err)
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
