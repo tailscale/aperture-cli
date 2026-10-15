@@ -78,8 +78,15 @@ func (g *Global) SetActiveEndpoint(ep Endpoint, replacing Endpoint) error {
 	for _, existing := range g.Settings.Endpoints {
 		if existing.Endpoint == ep {
 			head = existing
-		} else if replacing != nil && existing.Endpoint == replacing {
-			head = EndpointEntry{Endpoint: ep, Name: existing.Name}
+			break
+		}
+	}
+	if replacing != nil {
+		for _, existing := range g.Settings.Endpoints {
+			if existing.Endpoint == replacing {
+				head.Name = existing.Name
+				break
+			}
 		}
 	}
 	eps := endpointList{head}

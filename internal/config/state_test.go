@@ -237,6 +237,7 @@ func TestGlobal_SetActiveEndpoint_URLEditKeepsName(t *testing.T) {
 		Settings: config.Settings{
 			Endpoints: []config.EndpointEntry{
 				{Endpoint: config.Direct("http://old"), Name: "work"},
+				{Endpoint: config.Direct("http://new"), Name: ""},
 			},
 		},
 	}
