@@ -19,7 +19,7 @@ var longFlags = []string{
 // be spelled like a command name, so the scanner must skip it rather than
 // mistake it for one.
 var valueFlags = []string{
-	"endpoint", "e", "bridge", "b", "provider", "p", "model", "m", "config", "c",
+	"endpoint", "e", "bridge", "b", "provider", "p", "model", "m", "config", "c", "port",
 }
 
 // tailStart returns the index where a client command's tail begins: the
@@ -64,7 +64,13 @@ func tailStart(args []string, clientNames []string) int {
 // (ADR 0007) and will be removed in a future release.
 func gnuForm(args []string, long []string, clientNames []string) (rewritten, deprecated []string) {
 	head, tail := args[:tailStart(args, clientNames)], args[tailStart(args, clientNames):]
+	expectingValue := false
 	for _, arg := range head {
+		if expectingValue {
+			expectingValue = false
+			rewritten = append(rewritten, arg)
+			continue
+		}
 		if rest, ok := strings.CutPrefix(arg, "-"); ok && !strings.HasPrefix(rest, "-") && len(rest) > 1 {
 			name, value, hasValue := strings.Cut(rest, "=")
 			if slices.Contains(long, name) {
@@ -74,6 +80,10 @@ func gnuForm(args []string, long []string, clientNames []string) (rewritten, dep
 					arg += "=" + value
 				}
 			}
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if !hasValue && slices.Contains(valueFlags, name) {
+			expectingValue = true
 		}
 		rewritten = append(rewritten, arg)
 	}
@@ -87,11 +97,19 @@ func gnuForm(args []string, long []string, clientNames []string) (rewritten, dep
 // an earlier one, same as splitLaunchArgs' --debug.
 func versionRequested(args []string, clientNames []string) bool {
 	requested := false
+	expectingValue := false
 	for _, arg := range args[:tailStart(args, clientNames)] {
+		if expectingValue {
+			expectingValue = false
+			continue
+		}
 		if !strings.HasPrefix(arg, "-") {
 			continue
 		}
 		name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if !hasValue && slices.Contains(valueFlags, name) {
+			expectingValue = true
+		}
 		if name != "version" && name != "v" {
 			continue
 		}

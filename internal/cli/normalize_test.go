@@ -64,6 +64,11 @@ func TestGnuForm(t *testing.T) {
 			want:       []string{"--debug", "pi", "-config", "x"},
 			deprecated: []string{"debug"},
 		},
+		{
+			name: "a flag value named like a deprecated flag is not rewritten",
+			in:   []string{"--config", "-debug", "bridge", "list"},
+			want: []string{"--config", "-debug", "bridge", "list"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -92,6 +97,8 @@ func TestVersionRequested(t *testing.T) {
 		{name: "the bare shorthand", in: []string{"-v"}, want: true},
 		{name: "a positional named version is not a flag", in: []string{"bridge", "add", "version"}, want: false},
 		{name: "a false attached value is honored", in: []string{"--version=false"}, want: false},
+		{name: "a flag value named like a version flag is not requested", in: []string{"--config", "-v", "bridge", "list"}, want: false},
+		{name: "a flag value named like version is not requested", in: []string{"--endpoint", "--version", "bridge", "list"}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
