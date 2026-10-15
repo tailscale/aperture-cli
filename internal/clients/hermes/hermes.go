@@ -136,7 +136,11 @@ func (c *Client) resolve(g *config.Global, provider, model string) (config.Provi
 	if last := g.LastLaunch; last.LastClientName == name && last.LastBackendType == backendType {
 		if p, ok := g.Provider(last.LastProviderID); ok && providerMatches(p) {
 			if model == "" {
-				model = last.LastModel
+				if slices.Contains(fqnModels(p), last.LastModel) {
+					model = last.LastModel
+				} else {
+					model = defaultModel(p)
+				}
 			}
 			return p, model, nil
 		}

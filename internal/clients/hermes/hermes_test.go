@@ -162,6 +162,17 @@ func TestSpec(t *testing.T) {
 		t.Errorf("replay model = %q, want LastLaunch's model", got)
 	}
 
+	// A stale model in LastLaunch falls back to the provider's default model.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastBackendType: backendType, LastProviderID: "openrouter", LastModel: "openrouter/stale-model"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec with stale model: %v", err)
+	}
+	if got := spec.Env["HERMES_INFERENCE_MODEL"]; got != "gpt-5" {
+		t.Errorf("stale model = %q, want the provider's first model", got)
+	}
+
 	// Errors: an unknown provider names the compatible ids, an incompatible
 	// one says which API it lacks.
 	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openrouter") {

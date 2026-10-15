@@ -196,6 +196,17 @@ func TestSpec(t *testing.T) {
 		t.Errorf("model flag env = %v, want the flag model on the LastLaunch backend", spec.Env)
 	}
 
+	// A stale model in LastLaunch falls back to the provider's default model.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastBackendType: "openai_responses", LastProviderID: "openai", LastModel: "openai/stale-model"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec with stale model: %v", err)
+	}
+	if spec.Env["COPILOT_MODEL"] != "gpt-5" {
+		t.Errorf("stale model env = %v, want the provider's default model", spec.Env)
+	}
+
 	// Errors: an unknown provider names the compatible ids, an incompatible
 	// one names the backends it lacks.
 	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openai, anthropic") {

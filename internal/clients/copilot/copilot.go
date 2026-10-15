@@ -182,7 +182,11 @@ func (c *Client) resolve(g *config.Global, provider, model string) (config.Provi
 			bs := backendsFor(p)
 			if i := slices.IndexFunc(bs, func(b backend) bool { return b.id == last.LastBackendType }); i >= 0 {
 				if model == "" {
-					model = last.LastModel
+					if slices.Contains(fqnModels(p), last.LastModel) {
+						model = last.LastModel
+					} else if models := fqnModels(p); len(models) > 0 {
+						model = models[0]
+					}
 				}
 				return p, bs[i], model, nil
 			}

@@ -964,6 +964,11 @@ func TestSpec(t *testing.T) {
 			wantModel: "aperture-openai/gpt-5-mini", wantAPI: "openai-completions",
 		},
 		{
+			name:      "replay_model_gone_falls_back_to_first_model",
+			last:      openaiReplay("openai_chat", "openai/stale-model"),
+			wantModel: "aperture-openai/gpt-5", wantAPI: "openai-completions",
+		},
+		{
 			name: "replay_model_flag_beats_last_model",
 			last: openaiReplay("openai_chat", "openai/gpt-5-mini"), model: "openai/gpt-5",
 			wantModel: "aperture-openai/gpt-5", wantAPI: "openai-completions",

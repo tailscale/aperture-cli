@@ -276,6 +276,17 @@ func TestSpec(t *testing.T) {
 		t.Errorf("replay args = %v, want LastLaunch's model", spec.Args)
 	}
 
+	// A stale model in LastLaunch falls back to the provider's default model.
+	g = newGlobal()
+	g.LastLaunch = config.LaunchState{LastClientName: name, LastProviderID: "openai", LastModel: "openai/stale-model"}
+	spec, err = c.Spec(g, "", "", nil)
+	if err != nil {
+		t.Fatalf("Spec with stale model: %v", err)
+	}
+	if !argsContain(spec.Args, "--model", "openai/gpt-5") {
+		t.Errorf("stale model args = %v, want the provider's default model", spec.Args)
+	}
+
 	// Errors: an unknown provider names what the endpoint offers, an
 	// incompatible one says why.
 	if _, err := c.Spec(newGlobal(), "ghost", "", nil); err == nil || !strings.Contains(err.Error(), "openai") {

@@ -237,7 +237,7 @@ func (c *Client) resolve(g *config.Global, provider, model string) (config.Provi
 	}
 	if last := g.LastLaunch; last.LastClientName == c.V.Name {
 		if p, ok := g.Provider(last.LastProviderID); ok && isCompatible(p) {
-			if model == "" {
+			if model == "" && slices.Contains(fqnModels(p), last.LastModel) {
 				model = last.LastModel
 			}
 			return launchTarget(p, last.LastBackendType, model)
