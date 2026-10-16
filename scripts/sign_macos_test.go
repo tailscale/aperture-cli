@@ -176,3 +176,20 @@ case "$tool $1" in
     ;;
 esac
 `
+
+// install.sh reports the version of what it just installed. It has to use the
+// GNU form: the single-dash long form is deprecated, so it both prints a
+// deprecation warning on stderr and would greet every fresh install with a
+// notice about a flag the user never typed.
+func TestInstallScriptReportsVersionInGNUForm(t *testing.T) {
+	script, err := os.ReadFile("../install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(script), " -version") {
+		t.Error("install.sh calls the installed binary with the deprecated -version form")
+	}
+	if !strings.Contains(string(script), `aperture" --version`) {
+		t.Error("install.sh no longer reports the installed version")
+	}
+}
