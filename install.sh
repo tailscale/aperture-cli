@@ -81,4 +81,4 @@ fi
 $sudo mkdir -p "$INSTALL_DIR"
 $sudo install -m 0755 "$bin" "$INSTALL_DIR/aperture"
 
-echo "==> Installed $("$INSTALL_DIR/aperture" -version | head -1) to $INSTALL_DIR/aperture"
+echo "==> Installed $("$INSTALL_DIR/aperture" --version | head -1) to $INSTALL_DIR/aperture"
