@@ -8,7 +8,7 @@ One naming note before you start. This guide says "harness" because that is the 
 
 Before you start, make sure the following are true. The guide does not teach these things and will not work well without them.
 
-- You have Go 1.26.6 or newer installed, which is the version pinned in `go.mod` and the lower bound of the CI matrix.
+- You have Go 1.26.10 or newer installed, which is the version pinned in `go.mod` and the lower bound of the CI matrix.
 - You have cloned the `tailscale/aperture-cli` repository and can run `make build` and `make test` successfully on an unmodified checkout.
 - You are comfortable reading and writing Go, including interfaces, methods on pointer receivers, closures, and table-driven tests.
 - You have the harness you want to add already installed on your machine, so you can test a real launch.
@@ -488,7 +488,7 @@ func (c *Client) providerStep(g *config.Global) menu.Result {
 
 Three conventions are at work there, and every existing client follows all three. An empty list produces an error rather than an empty menu. A single option descends straight to the next step instead of making the user press Enter on a menu of one. Anything more shows a submenu returned as `Result.Next`, which pushes onto the TUI's menu stack so Esc pops back.
 
-The loop variable capture is safe here because each iteration gets a fresh `p`. That has been true since Go 1.22, and this repository targets Go 1.26.6, so you do not need the old workaround. You may still see `c := c` or `p := p` lines in code such as `internal/tui/menus.go:195`; they are no longer necessary and you do not need to copy them.
+The loop variable capture is safe here because each iteration gets a fresh `p`. That has been true since Go 1.22, and this repository targets Go 1.26.10, so you do not need the old workaround. You may still see `c := c` or `p := p` lines in code such as `internal/tui/menus.go:195`; they are no longer necessary and you do not need to copy them.
 
 Add the model step next. This one shows the model picker only when there is a real choice to make.
 
