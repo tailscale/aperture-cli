@@ -10,13 +10,20 @@ import (
 	"github.com/tailscale/aperture-cli/internal/config"
 )
 
-// isolateConfig points the bridge state directories at a per-test throwaway
-// config dir, on every platform os.UserConfigDir reads.
-func isolateConfig(t *testing.T) {
+// isolateConfig points os.UserConfigDir at a per-test throwaway directory and
+// returns it. Each platform reads a different variable, and darwin reads only
+// HOME, so setting XDG_CONFIG_HOME alone shares one directory across tests.
+func isolateConfig(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("APPDATA", tmp)
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // APT-330: two aperture processes opening the same bridge must not open the
