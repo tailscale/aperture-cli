@@ -50,19 +50,32 @@ changelog:
       - "^test:"
       - "^chore:"
 
-# Pushes the formula straight to the tap's default branch (no PR) once the
+# Pushes the cask straight to the tap's default branch (no PR) once the
 # signed archives are uploaded, so the sha256 values are the notarized ones.
-brews:
-  - name: aperture-cli
+# The cask also covers the unsigned Linux archives, so the preflight step that
+# re-verifies the Developer ID signature and notarization is macOS-only.
+homebrew_casks:
+  - name: aperture
+    binaries:
+      - aperture
     repository:
       owner: tailscale
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: https://github.com/tailscale/aperture-cli
-    description: Agentic coding launcher for Aperture by Tailscale
-    license: BSD-3-Clause
+    description: Launch AI coding agents through Tailscale Aperture
     commit_author:
       use_github_app_token: true
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/aperture --version")
+    hooks:
+      pre:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/codesign",
+                args:           [
+                  "--verify", "--strict", "--check-notarization", "-R",
+                  '=anchor apple generic and identifier "aperture" and certificate leaf[subject.OU] = "W5364U7YZB"',
+                  "{{ .StagedPath }}/aperture"
+                ],
+                network_access: true
+          end
