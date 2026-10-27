@@ -152,27 +152,29 @@ func TestSignMacOS(t *testing.T) {
 	}
 }
 
+// fakeAppleTool fails with an explicit exit: macOS ships bash 3.2, where a
+// failing [[ ]] does not trip set -e.
 const fakeAppleTool = `#!/usr/bin/env bash
 set -euo pipefail
 tool=$(basename "$0")
 printf '%s %s\n' "$tool" "$*" >> "$TEST_LOG"
 case "$tool $1" in
   "codesign --sign")
-    [[ "$TEST_FAILURE" != sign ]]
+    [[ "$TEST_FAILURE" != sign ]] || exit 1
     printf 'signed\n' >> "$TEST_BINARY"
     ;;
   "codesign --verify")
-    [[ "$TEST_FAILURE" != verify ]]
+    [[ "$TEST_FAILURE" != verify ]] || exit 1
     ;;
   "xcrun notarytool")
-    [[ "$TEST_FAILURE" != notary ]]
+    [[ "$TEST_FAILURE" != notary ]] || exit 1
     unzip -p "$3" aperture > "$TEST_ARCHIVE_CONTENTS"
     if [[ -n "${TEST_RESPONSE:-}" ]]; then
       printf '%s\n' "$TEST_RESPONSE"
     else
       printf '{"id":"test-submission","status":"%s"}\n' "$TEST_STATUS"
     fi
-    [[ "$TEST_FAILURE" != notary-after ]]
+    [[ "$TEST_FAILURE" != notary-after ]] || exit 1
     ;;
 esac
 `

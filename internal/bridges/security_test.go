@@ -68,7 +68,7 @@ func (n *sharedPeerNode) DialContext(ctx context.Context, network, address strin
 }
 
 func TestProxyRequiresExplicitSharedPeerName(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfig(t)
 	const payload = "synthetic-private-prompt"
 	received := make(chan string, 2)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +123,7 @@ func TestRunLogOmitsLoginCapabilities(t *testing.T) {
 	for _, level := range []slog.Level{slog.LevelInfo, slog.LevelDebug} {
 		for _, source := range []string{"login event", "rejected link", "health warning", "backend and startup error"} {
 			t.Run(level.String()+"/"+source, func(t *testing.T) {
-				t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+				isolateConfig(t)
 				f, err := config.OpenRunLog()
 				if err != nil {
 					t.Fatal(err)

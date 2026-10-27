@@ -40,7 +40,7 @@ func (n *pendingNode) Close() error {
 }
 
 func TestActivateWaitsForCancelledNodeCleanup(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfig(t)
 	n := &pendingNode{
 		fakeNode: &fakeNode{}, started: make(chan struct{}), cancelling: make(chan struct{}),
 		releaseUp: make(chan struct{}), closing: make(chan struct{}), releaseClose: make(chan struct{}),
@@ -119,7 +119,7 @@ func (n *needsLoginNode) BringUp(ctx context.Context, _ events) (*ipnstate.Statu
 }
 
 func TestSwitchTailnetDoesNotRequireAuthorization(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfig(t)
 	n := &needsLoginNode{fakeNode: &fakeNode{}}
 	m := NewMachines(false)
 	m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return n }
@@ -187,7 +187,7 @@ func (n *closingNode) Close() error {
 func TestConcurrentCloseSharesCompletionAndError(t *testing.T) {
 	for _, closeErr := range []error{nil, errors.New("node shutdown failed")} {
 		t.Run(fmt.Sprint(closeErr), func(t *testing.T) {
-			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			isolateConfig(t)
 			node := &closingNode{fakeNode: &fakeNode{}, closing: make(chan struct{}), release: make(chan struct{}), err: closeErr}
 			m := NewMachines(false)
 			m.newNode = func(config.Bridge, int, string, func(string, ...any), func(string, ...any)) tailnetNode { return node }
@@ -250,7 +250,7 @@ func stateDir(t *testing.T, bridgeID string) string {
 }
 
 func TestDestroyLeavesNoMachineBehind(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfig(t)
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	dir := stateDir(t, bridge.ID)
 	if !HasMachine(bridge.ID) {
@@ -278,7 +278,7 @@ func TestDestroyLeavesNoMachineBehind(t *testing.T) {
 // A failed logout keeps the local records: they are the only thing naming the
 // device, so the caller must be able to leave settings alone and say so.
 func TestDestroyKeepsStateWhenTheTailnetRefuses(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfig(t)
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	dir := stateDir(t, bridge.ID)
 	n := &fakeNode{logoutErr: errors.New("control plane said no")}
@@ -297,7 +297,7 @@ func TestDestroyKeepsStateWhenTheTailnetRefuses(t *testing.T) {
 // A bridge nobody finished a login for has no device to deregister, and
 // starting a node to discover that would demand the login it never had.
 func TestDestroySkipsABridgeThatNeverStarted(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfig(t)
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	if HasMachine(bridge.ID) {
 		t.Fatal("an unstarted bridge reports a machine")
@@ -320,7 +320,7 @@ func TestDestroySkipsABridgeThatNeverStarted(t *testing.T) {
 // next operation on it waits rather than opening the state directory under a
 // close still running.
 func TestDestroyReturnsAtTheDeadlineWhileCloseHangs(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfig(t)
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	stateDir(t, bridge.ID)
 	n := &pendingNode{fakeNode: &fakeNode{}, closing: make(chan struct{}), releaseClose: make(chan struct{})}

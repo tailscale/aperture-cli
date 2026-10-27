@@ -14,8 +14,7 @@ import (
 // config directory, so the writes the Attempt makes can be checked and broken.
 func settingsGlobal(t *testing.T, s config.Settings) (*config.Global, string) {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	dir := isolateConfig(t)
 	if err := config.SaveSettings(s); err != nil {
 		t.Fatal(err)
 	}
