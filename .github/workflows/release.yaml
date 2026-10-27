@@ -41,6 +41,15 @@ jobs:
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
         run: bash scripts/setup-macos-signing.sh
       -
+        name: Mint tap token
+        id: tap-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: tailscale
+          repositories: homebrew-tap
+      -
         name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a #v6.4.0
         with:
@@ -49,8 +58,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Fine-grained PAT with contents:write on the tap repo; GITHUB_TOKEN is scoped to this repo only.
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # GITHUB_TOKEN is scoped to this repo only; the tap needs the App token.
+          HOMEBREW_TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
       -
         name: Tear down signing keychain
         if: always()

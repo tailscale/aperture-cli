@@ -63,7 +63,6 @@ brews:
     description: Agentic coding launcher for Aperture by Tailscale
     license: BSD-3-Clause
     commit_author:
-      name: guygrigsby
-      email: guygrigsby@users.noreply.github.com
+      use_github_app_token: true
     test: |
       assert_match version.to_s, shell_output("#{bin}/aperture --version")
