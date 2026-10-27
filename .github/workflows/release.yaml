@@ -49,6 +49,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT with contents:write on the tap repo; GITHUB_TOKEN is scoped to this repo only.
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
       -
         name: Tear down signing keychain
         if: always()

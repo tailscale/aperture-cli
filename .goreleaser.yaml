@@ -49,3 +49,21 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+
+# Pushes the formula straight to the tap's default branch (no PR) once the
+# signed archives are uploaded, so the sha256 values are the notarized ones.
+brews:
+  - name: aperture-cli
+    repository:
+      owner: tailscale
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/tailscale/aperture-cli
+    description: Agentic coding launcher for Aperture by Tailscale
+    license: BSD-3-Clause
+    commit_author:
+      name: guygrigsby
+      email: guygrigsby@users.noreply.github.com
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/aperture --version")
