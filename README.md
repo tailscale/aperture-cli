@@ -51,7 +51,7 @@ make build
 
 macOS builds are Developer ID signed and notarized. curl and `go install` never set the quarantine attribute, so Gatekeeper stays out of the way. If you download the archive in a browser and double-click the binary instead, macOS may block it anyway (common on managed Macs): open System Settings > Privacy & Security and click **Open Anyway** next to the blocked entry.
 
-Windows builds ship as a zip containing `aperture.exe`; the install script is Unix-only, so on Windows download the archive from the release page or use `go install`. Windows builds are not code-signed yet, so SmartScreen may warn until the binary builds reputation.
+Windows builds ship as a zip containing `aperture.exe`; the install script is Unix-only, so on Windows download the archive from the release page or use `go install`. Windows builds are Authenticode signed through Azure Artifact Signing (formerly Trusted Signing) with a timestamp, so the signature stays valid after the short-lived certificate expires. `go install` builds locally and is unsigned.
 
 ## Usage
 
@@ -217,7 +217,11 @@ and testing an installed binary with `APERTURE_E2E_BIN`.
 
 ## Releasing
 
-Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so no unsigned darwin build is ever published. Linux and Windows binaries cross-compile from the same run and are published unsigned. A failed signature or a rejected notarization fails the run before upload. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so no unsigned darwin build is ever published. Windows binaries cross-compile from the same run and a second build hook Authenticode-signs each `aperture.exe` with [Jsign](https://ebourg.github.io/jsign/) against Azure Artifact Signing, authenticated by GitHub OIDC rather than a stored secret. Linux binaries are published unsigned. A failed signature or a rejected notarization fails the run before upload, and a `verify-windows` job then downloads the published zips and has Windows confirm each signature is valid, timestamped and issued to Tailscale Inc. ([ADR 0009](docs/adr/0009-windows-signing-with-artifact-signing.md)).
+
+Required for macOS: secrets `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+
+Required for Windows: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` of an Entra app with a federated credential for the `release` GitHub environment and the *Artifact Signing Certificate Profile Signer* role on the signing account; variables `ARTIFACT_SIGNING_ENDPOINT` (the account's regional host, e.g. `weu.codesigning.azure.net`), `ARTIFACT_SIGNING_ACCOUNT` and `ARTIFACT_SIGNING_PROFILE`.
 
 Local fallback on a Mac that has the certificate and a stored notary profile, for when the workflow could not sign:
 

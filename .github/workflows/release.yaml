@@ -14,12 +14,21 @@ on:
 
 permissions:
   contents: write
+  # azure/login exchanges the run's OIDC token for an Azure access token.
+  id-token: write
 
 jobs:
-  # One macOS job builds everything: the linux binaries cross-compile with CGO off, and the darwin hooks sign and notarize before archiving.
+  # One macOS job builds everything: the linux binaries cross-compile with CGO off, and the darwin and windows hooks sign before archiving (darwin also notarizes).
   goreleaser:
     runs-on: macos-latest
     timeout-minutes: 60
+    # The Entra federated credential trusts this environment's OIDC subject.
+    # A ref-based subject would need one credential per tag.
+    environment: release
+    env:
+      ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+      ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+      ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -32,6 +41,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      -
+        name: Log in to Azure
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      -
+        name: Set up Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      -
+        name: Set up Windows signing
+        run: bash scripts/setup-windows-signing.sh
       -
         name: Set up signing keychain and notary credentials
         env:
@@ -64,3 +89,34 @@ jobs:
         name: Tear down signing keychain
         if: always()
         run: security delete-keychain "$SIGNING_KEYCHAIN"
+
+  # Reads the published Windows zips back and asks Windows itself whether the
+  # signature is valid, timestamped and ours. The goreleaser job cannot: the
+  # trust store that matters is Windows'.
+  verify-windows:
+    needs: goreleaser
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Download Windows archives
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*_windows_*.zip'
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          $zips = Get-ChildItem -Filter '*_windows_*.zip'
+          if ($zips.Count -ne 2) { throw "expected 2 Windows archives, found $($zips.Count)" }
+          foreach ($zip in $zips) {
+            $dir = Join-Path $env:RUNNER_TEMP $zip.BaseName
+            Expand-Archive -Path $zip.FullName -DestinationPath $dir
+            $sig = Get-AuthenticodeSignature (Join-Path $dir 'aperture.exe')
+            "$($zip.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { throw "$($zip.Name): signature is $($sig.Status)" }
+            if ($sig.SignerCertificate.Subject -notmatch 'O=Tailscale Inc\.') { throw "$($zip.Name): unexpected signer" }
+            if ($null -eq $sig.TimeStamperCertificate) { throw "$($zip.Name): no timestamp" }
+          }

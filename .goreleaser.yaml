@@ -22,11 +22,14 @@ builds:
     goarch:
       - amd64
       - arm64
-    # Darwin releases require signatures and notarization. Only snapshots
-    # may skip these checks; Linux and Windows builds pass through unsigned.
+    # Darwin and Windows releases require signatures (and, on darwin,
+    # notarization). Only snapshots may skip these checks; Linux builds pass
+    # through unsigned.
     hooks:
       post:
         - cmd: 'bash scripts/sign-macos.sh "{{ .Path }}" "{{ .Target }}" "{{ .IsSnapshot }}"'
+          output: true
+        - cmd: 'bash scripts/sign-windows.sh "{{ .Path }}" "{{ .Target }}" "{{ .IsSnapshot }}"'
           output: true
 
 archives:
