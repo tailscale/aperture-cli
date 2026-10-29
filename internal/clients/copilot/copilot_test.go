@@ -134,7 +134,10 @@ func TestStripProviderPrefix(t *testing.T) {
 // leave empty, and anything left goes to the first compatible provider on
 // its first backend.
 func TestSpec(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	both := map[string]bool{config.EndpointOpenAIChat: true, config.EndpointOpenAIResponses: true}
 	bedrock := config.ProviderInfo{ID: "bedrock", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockConverse: true}}
 	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: both}

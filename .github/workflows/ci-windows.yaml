@@ -1,0 +1,37 @@
+name: Windows CI
+
+on:
+  push:
+    branches: ["main"]
+
+  pull_request:
+    branches: ["main"]
+
+  # Allows manual triggering of the workflow
+  workflow_dispatch:
+
+jobs:
+  run-tests:
+    name: Go ${{ matrix.go-version }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        go-version: ["1.26.10", "1.27.x"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      # The Makefile is the one definition of the gate. GNU make is not on
+      # the runner image, so it comes from chocolatey; the Makefile pins
+      # SHELL to /bin/bash, which does not resolve on Windows, so the
+      # command line overrides it with Git Bash from the runner image.
+      - name: Check
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/Git/bin:/c/Program Files/Git/usr/bin:$PATH"
+          choco install make --no-progress
+          make SHELL=bash check

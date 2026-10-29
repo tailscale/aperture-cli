@@ -105,7 +105,10 @@ func TestInstallUninstall(t *testing.T) {
 }
 
 func TestSpec(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	chat := map[string]bool{config.EndpointOpenAIChat: true}
 	openrouter := config.ProviderInfo{ID: "openrouter", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: chat}
 	responses := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}

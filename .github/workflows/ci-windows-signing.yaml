@@ -1,0 +1,79 @@
+name: Windows signing
+
+# Proves the release signing path end to end with a throwaway self-signed key:
+# the same setup and hook scripts the release runs, then Windows' own verdict
+# on the result. What it cannot prove is trust in the production CA; the
+# release's verify-windows job does that.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/ci-windows-signing.yaml"
+      - ".goreleaser.yaml"
+      - "scripts/*windows*"
+      - "scripts/*selfsigned*"
+
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/ci-windows-signing.yaml"
+      - ".goreleaser.yaml"
+      - "scripts/*windows*"
+      - "scripts/*selfsigned*"
+
+  # Allows manual triggering of the workflow
+  workflow_dispatch:
+
+jobs:
+  sign-and-verify:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Exports JSIGN_JAR and the readiness flag to the steps below, exactly
+      # as it does in the release.
+      - name: Set up Windows signing
+        shell: bash
+        run: bash scripts/setup-windows-signing.sh
+
+      # Both architectures, because the release ships both and the arm64 PE
+      # is the one nobody on this runner can run.
+      - name: Build and sign with a self-signed key
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP//\\//}/signing-smoke"
+          password=$(openssl rand -hex 16)
+          echo "::add-mask::$password"
+          CODESIGN_P12_PASSWORD="$password" bash scripts/make-selfsigned-codesign.sh "$work"
+          export WINDOWS_SIGN_STORETYPE=PKCS12
+          export WINDOWS_SIGN_KEYSTORE="$work/codesign.p12"
+          export WINDOWS_SIGN_STOREPASS="$password"
+          for arch in amd64 arm64; do
+            GOOS=windows GOARCH=$arch go build -ldflags '-s -w' -o "$work/aperture_$arch.exe" ./cmd/aperture
+            bash scripts/sign-windows.sh "$work/aperture_$arch.exe" "windows_${arch}_v1" false
+          done
+          echo "WORK=$work" >> "$GITHUB_ENV"
+
+      # The runner is an administrator, so the throwaway certificate can be
+      # trusted for the length of the job and Windows can answer Valid.
+      - name: Verify with Windows
+        shell: pwsh
+        run: |
+          Import-Certificate -FilePath "$env:WORK/codesign.crt" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          ./scripts/verify-windows-signature.ps1 -SignerPattern 'CN=Aperture Test Signing' -Path @(
+            "$env:WORK/aperture_amd64.exe", "$env:WORK/aperture_arm64.exe")
