@@ -14,7 +14,7 @@ on:
 
 permissions:
   contents: write
-  # azure/login exchanges the run's OIDC token for an Azure access token.
+  # google-github-actions/auth exchanges the run's OIDC token for a Google access token.
   id-token: write
 
 jobs:
@@ -22,13 +22,9 @@ jobs:
   goreleaser:
     runs-on: macos-latest
     timeout-minutes: 60
-    # The Entra federated credential trusts this environment's OIDC subject.
-    # A ref-based subject would need one credential per tag.
+    # The workload identity provider's attribute condition trusts this
+    # environment. A ref-based condition would match a different tag each run.
     environment: release
-    env:
-      ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-      ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-      ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -42,12 +38,13 @@ jobs:
           go-version-file: go.mod
           cache: false
       -
-        name: Log in to Azure
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        name: Log in to Google Cloud
+        id: gcp
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
       -
         name: Set up Java
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -85,6 +82,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # GITHUB_TOKEN is scoped to this repo only; the tap needs the App token.
           HOMEBREW_TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
+          # scripts/sign-windows.sh reads the Windows key store from here. The
+          # ci-windows-signing workflow runs the same hook with PKCS12 and a
+          # throwaway key; this is the line that differs.
+          WINDOWS_SIGN_STORETYPE: GOOGLECLOUD
+          WINDOWS_SIGN_KEYSTORE: ${{ vars.GCP_KMS_KEYRING }}
+          WINDOWS_SIGN_ALIAS: ${{ vars.GCP_KMS_KEY }}
+          WINDOWS_SIGN_CERTFILE: scripts/windows-codesign-chain.pem
+          WINDOWS_SIGN_STOREPASS: ${{ steps.gcp.outputs.access_token }}
       -
         name: Tear down signing keychain
         if: always()
@@ -100,6 +105,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Download Windows archives
         shell: bash
         env:
@@ -111,12 +120,9 @@ jobs:
         run: |
           $zips = Get-ChildItem -Filter '*_windows_*.zip'
           if ($zips.Count -ne 2) { throw "expected 2 Windows archives, found $($zips.Count)" }
-          foreach ($zip in $zips) {
+          $exes = foreach ($zip in $zips) {
             $dir = Join-Path $env:RUNNER_TEMP $zip.BaseName
             Expand-Archive -Path $zip.FullName -DestinationPath $dir
-            $sig = Get-AuthenticodeSignature (Join-Path $dir 'aperture.exe')
-            "$($zip.Name): $($sig.Status) $($sig.SignerCertificate.Subject)"
-            if ($sig.Status -ne 'Valid') { throw "$($zip.Name): signature is $($sig.Status)" }
-            if ($sig.SignerCertificate.Subject -notmatch 'O=Tailscale Inc\.') { throw "$($zip.Name): unexpected signer" }
-            if ($null -eq $sig.TimeStamperCertificate) { throw "$($zip.Name): no timestamp" }
+            Join-Path $dir 'aperture.exe'
           }
+          ./scripts/verify-windows-signature.ps1 -SignerPattern 'O=Tailscale Inc\.' -Path $exes

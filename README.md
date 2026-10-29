@@ -51,7 +51,7 @@ make build
 
 macOS builds are Developer ID signed and notarized. curl and `go install` never set the quarantine attribute, so Gatekeeper stays out of the way. If you download the archive in a browser and double-click the binary instead, macOS may block it anyway (common on managed Macs): open System Settings > Privacy & Security and click **Open Anyway** next to the blocked entry.
 
-Windows builds ship as a zip containing `aperture.exe`; the install script is Unix-only, so on Windows download the archive from the release page or use `go install`. Windows builds are Authenticode signed through Azure Artifact Signing (formerly Trusted Signing) with a timestamp, so the signature stays valid after the short-lived certificate expires. `go install` builds locally and is unsigned.
+Windows builds ship as a zip containing `aperture.exe`; the install script is Unix-only, so on Windows download the archive from the release page or use `go install`. Windows builds are Authenticode signed with a key held in a Google Cloud HSM, and timestamped so the signature stays valid after the certificate expires. `go install` builds locally and is unsigned.
 
 ## Usage
 
@@ -217,11 +217,21 @@ and testing an installed binary with `APERTURE_E2E_BIN`.
 
 ## Releasing
 
-Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so no unsigned darwin build is ever published. Windows binaries cross-compile from the same run and a second build hook Authenticode-signs each `aperture.exe` with [Jsign](https://ebourg.github.io/jsign/) against Azure Artifact Signing, authenticated by GitHub OIDC rather than a stored secret. Linux binaries are published unsigned. A failed signature or a rejected notarization fails the run before upload, and a `verify-windows` job then downloads the published zips and has Windows confirm each signature is valid, timestamped and issued to Tailscale Inc. ([ADR 0009](docs/adr/0009-windows-signing-with-artifact-signing.md)).
+Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so no unsigned darwin build is ever published. Windows binaries cross-compile from the same run and a second build hook Authenticode-signs each `aperture.exe` with [Jsign](https://ebourg.github.io/jsign/), using a key that stays in a Google Cloud HSM. GitHub OIDC and workload identity federation stand in for a stored credential. Linux binaries are published unsigned. A failed signature or a rejected notarization fails the run before upload, and a `verify-windows` job then downloads the published zips and has Windows confirm each signature is valid, timestamped and issued to Tailscale Inc. ([ADR 0009](docs/adr/0009-windows-signing-with-a-cloud-hsm-key.md)).
 
 Required for macOS: secrets `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
 
-Required for Windows: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` of an Entra app with a federated credential for the `release` GitHub environment and the *Artifact Signing Certificate Profile Signer* role on the signing account; variables `ARTIFACT_SIGNING_ENDPOINT` (the account's regional host, e.g. `weu.codesigning.azure.net`), `ARTIFACT_SIGNING_ACCOUNT` and `ARTIFACT_SIGNING_PROFILE`.
+Required for Windows: variables `GCP_WIF_PROVIDER` and `GCP_SERVICE_ACCOUNT` (the service account holds *Cloud KMS CryptoKey Signer* on the signing key only, and the provider trusts only this repository's `release` environment), `GCP_KMS_KEYRING` (`projects/…/locations/…/keyRings/…`) and `GCP_KMS_KEY` (`<key>/cryptoKeyVersions/N`), plus the CA's PEM chain committed as `scripts/windows-codesign-chain.pem`. The `release` GitHub environment is restricted to tags.
+
+The signing path is exercised without the HSM key by the Windows signing workflow, which builds both architectures, signs them with a throwaway self-signed key (`scripts/make-selfsigned-codesign.sh`) through the same hook with `WINDOWS_SIGN_STORETYPE=PKCS12`, and asks Windows to verify them. Run the same locally with Java 17+ and `openssl`:
+
+```sh
+CODESIGN_P12_PASSWORD=x bash scripts/make-selfsigned-codesign.sh /tmp/id
+bash scripts/setup-windows-signing.sh          # then export JSIGN_JAR it prints
+APERTURE_WINDOWS_SIGNING_READY=1 WINDOWS_SIGN_STORETYPE=PKCS12 \
+  WINDOWS_SIGN_KEYSTORE=/tmp/id/codesign.p12 WINDOWS_SIGN_STOREPASS=x \
+  bash scripts/sign-windows.sh aperture.exe windows_amd64_v1 false
+```
 
 Local fallback on a Mac that has the certificate and a stored notary profile, for when the workflow could not sign:
 

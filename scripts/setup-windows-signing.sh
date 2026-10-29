@@ -1,54 +1,39 @@
 #!/usr/bin/env bash
-# setup-windows-signing.sh prepares a GitHub runner for the goreleaser signing
-# hook (scripts/sign-windows.sh): it downloads a pinned Jsign, which signs
-# Windows executables from any OS, and exchanges the runner's Azure login for
-# a short-lived Artifact Signing access token. Run it after azure/login; no
-# long-lived Windows signing secret exists anywhere.
+# setup-windows-signing.sh prepares a runner for the goreleaser signing hook
+# (scripts/sign-windows.sh): it downloads Jsign, which signs Windows
+# executables from any OS, and checks it against a pinned digest. Credentials
+# are not its business; the workflow hands the hook its key store settings.
 #
-# Required environment:
-#   ARTIFACT_SIGNING_ENDPOINT  regional endpoint host, e.g. weu.codesigning.azure.net
-#   ARTIFACT_SIGNING_ACCOUNT   Artifact Signing account name
-#   ARTIFACT_SIGNING_PROFILE   certificate profile name
-# Required tools: az (logged in), curl, shasum.
+# Required tools: curl, openssl. Java must be on PATH when the hook runs.
 set -euo pipefail
-
-: "${ARTIFACT_SIGNING_ENDPOINT:?set to the Artifact Signing endpoint host}"
-: "${ARTIFACT_SIGNING_ACCOUNT:?set to the Artifact Signing account name}"
-: "${ARTIFACT_SIGNING_PROFILE:?set to the certificate profile name}"
 
 JSIGN_VERSION=7.6
 JSIGN_SHA256=6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5
 
+# Git Bash on Windows hands over RUNNER_TEMP with backslashes, which neither
+# mktemp nor the JVM agree on once the path is spliced into a template.
+base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 umask 077
-workdir=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/aperture-signing.XXXXXX")
+workdir=$(mktemp -d "${base//\\//}/aperture-signing.XXXXXX")
 jar="$workdir/jsign-$JSIGN_VERSION.jar"
 
-# The jar runs with the signing token in its environment, so it is verified
-# against a pinned digest rather than trusted because the release URL resolved.
+# The jar runs with the signing credential in its environment, so it is
+# verified against a pinned digest rather than trusted because the release URL
+# resolved. openssl is the one digest tool macOS, Linux and Git Bash share.
 curl --fail --silent --show-error --location --retry 3 -o "$jar" \
   "https://github.com/ebourg/jsign/releases/download/$JSIGN_VERSION/jsign-$JSIGN_VERSION.jar"
-if ! printf '%s  %s\n' "$JSIGN_SHA256" "$jar" | shasum -a 256 -c - >/dev/null; then
+digest=$(openssl dgst -sha256 -r "$jar" | cut -d' ' -f1)
+if [ "$digest" != "$JSIGN_SHA256" ]; then
   rm -f "$jar"
   echo "jsign $JSIGN_VERSION does not match the pinned sha256" >&2
   exit 1
 fi
 
-token=$(az account get-access-token --resource https://codesigning.azure.net \
-  --query accessToken --output tsv)
-if [ -z "$token" ]; then
-  echo "az returned no Artifact Signing access token" >&2
-  exit 1
-fi
-# Masked before it can reach any log line, including the GITHUB_ENV write.
-echo "::add-mask::$token"
-
-echo "Signing endpoint: $ARTIFACT_SIGNING_ENDPOINT"
-echo "Signing profile: $ARTIFACT_SIGNING_ACCOUNT/$ARTIFACT_SIGNING_PROFILE"
+echo "Jsign $JSIGN_VERSION: $jar"
 if [ -n "${GITHUB_ENV:-}" ]; then
   # Windows releases require readiness; local snapshots may remain unsigned.
   {
     echo "APERTURE_WINDOWS_SIGNING_READY=1"
     echo "JSIGN_JAR=$jar"
-    echo "ARTIFACT_SIGNING_TOKEN=$token"
   } >> "$GITHUB_ENV"
 fi

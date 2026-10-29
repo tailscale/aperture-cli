@@ -16,6 +16,20 @@ printf '%s\n' "$*" >> "$TEST_LOG"
 printf 'signed\n' >> "${@: -1}"
 `
 
+// cleanSigningEnv is the test process environment minus anything a developer
+// shell or a CI job exports for the real signing hook, so a run is decided by
+// the test's own settings.
+func cleanSigningEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "WINDOWS_SIGN_") || strings.HasPrefix(kv, "JSIGN_") || strings.HasPrefix(kv, "APERTURE_WINDOWS_SIGNING_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
+}
+
 // Exercise the release hook with a fake JVM. Real signing needs an Azure
 // login; these checks cover publication gating and that the token never
 // appears on the command line.
@@ -30,7 +44,8 @@ func TestSignWindows(t *testing.T) {
 		ready     bool
 		snapshot  string
 		failure   string
-		omit      string // environment variable setup would normally export
+		omit      string // environment variable the workflow would normally set
+		certfile  string // overrides WINDOWS_SIGN_CERTFILE, relative to the test dir
 		wantError bool
 	}
 	tests := []testCase{
@@ -43,11 +58,12 @@ func TestSignWindows(t *testing.T) {
 		{name: "missing readiness explicit false", snapshot: "false", wantError: true},
 		{name: "snapshot true missing readiness", snapshot: "true"},
 		{name: "snapshot true with readiness", ready: true, snapshot: "true"},
-		{name: "missing token", ready: true, omit: "ARTIFACT_SIGNING_TOKEN", wantError: true},
+		{name: "missing storepass", ready: true, omit: "WINDOWS_SIGN_STOREPASS", wantError: true},
 		{name: "missing jar", ready: true, omit: "JSIGN_JAR", wantError: true},
-		{name: "missing endpoint", ready: true, omit: "ARTIFACT_SIGNING_ENDPOINT", wantError: true},
-		{name: "missing account", ready: true, omit: "ARTIFACT_SIGNING_ACCOUNT", wantError: true},
-		{name: "missing profile", ready: true, omit: "ARTIFACT_SIGNING_PROFILE", wantError: true},
+		{name: "missing storetype", ready: true, omit: "WINDOWS_SIGN_STORETYPE", wantError: true},
+		{name: "missing keystore", ready: true, omit: "WINDOWS_SIGN_KEYSTORE", wantError: true},
+		{name: "optional alias omitted", ready: true, omit: "WINDOWS_SIGN_ALIAS"},
+		{name: "certfile that does not exist", ready: true, certfile: "missing.pem", wantError: true},
 		{name: "signing failure", ready: true, failure: "sign", wantError: true},
 	}
 	const token = "test-access-token"
@@ -75,7 +91,7 @@ func TestSignWindows(t *testing.T) {
 				args = append(args, tt.snapshot)
 			}
 			cmd := exec.Command("bash", args...)
-			env := append(os.Environ(),
+			env := append(cleanSigningEnv(),
 				"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"TEST_LOG="+filepath.Join(dir, "commands"),
 				"TEST_FAILURE="+tt.failure,
@@ -83,11 +99,19 @@ func TestSignWindows(t *testing.T) {
 			if tt.ready {
 				env = append(env, "APERTURE_WINDOWS_SIGNING_READY=1")
 			}
+			certfile := filepath.Join(dir, "chain.pem")
+			if err := os.WriteFile(certfile, []byte("chain\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if tt.certfile != "" {
+				certfile = filepath.Join(dir, tt.certfile)
+			}
 			for _, kv := range []string{
-				"ARTIFACT_SIGNING_ENDPOINT=weu.codesigning.azure.net",
-				"ARTIFACT_SIGNING_ACCOUNT=test-account",
-				"ARTIFACT_SIGNING_PROFILE=test-profile",
-				"ARTIFACT_SIGNING_TOKEN=" + token,
+				"WINDOWS_SIGN_STORETYPE=GOOGLECLOUD",
+				"WINDOWS_SIGN_KEYSTORE=projects/p/locations/l/keyRings/r",
+				"WINDOWS_SIGN_ALIAS=key/cryptoKeyVersions/1",
+				"WINDOWS_SIGN_CERTFILE=" + certfile,
+				"WINDOWS_SIGN_STOREPASS=" + token,
 				"JSIGN_JAR=" + filepath.Join(dir, "jsign.jar"),
 			} {
 				if tt.omit == "" || !strings.HasPrefix(kv, tt.omit+"=") {
@@ -134,14 +158,22 @@ func TestSignWindows(t *testing.T) {
 			if strings.Contains(commands+string(output), token) {
 				t.Errorf("access token leaked into the command line or output:\n%s%s", commands, output)
 			}
-			for _, want := range []string{
-				"--storetype TRUSTEDSIGNING",
-				"--keystore weu.codesigning.azure.net",
-				"--alias test-account/test-profile",
-				"--storepass env:ARTIFACT_SIGNING_TOKEN",
+			wants := []string{
+				"--storetype GOOGLECLOUD",
+				"--keystore projects/p/locations/l/keyRings/r",
+				"--alias key/cryptoKeyVersions/1",
+				"--certfile " + filepath.Join(dir, "chain.pem"),
+				"--storepass env:WINDOWS_SIGN_STOREPASS",
 				"--tsmode RFC3161",
 				binary,
-			} {
+			}
+			if tt.omit == "WINDOWS_SIGN_ALIAS" {
+				wants = wants[:2]
+				if strings.Contains(commands, "--alias") {
+					t.Errorf("an unset alias must not be passed to the signer:\n%s", commands)
+				}
+			}
+			for _, want := range wants {
 				if !strings.Contains(commands, want) {
 					t.Errorf("signer invocation lacks %q:\n%s", want, commands)
 				}
@@ -150,9 +182,9 @@ func TestSignWindows(t *testing.T) {
 	}
 }
 
-// The signer runs with the access token in its environment, so setup must
-// refuse a jar that is not the pinned build, and say so, before any token is
-// requested or exported.
+// The signer runs with the signing credential in its environment, so setup
+// must refuse a jar that is not the pinned build, and say so, before it
+// exports readiness.
 func TestSetupWindowsSigningRejectsUnpinnedJsign(t *testing.T) {
 	if _, err := os.ReadFile("setup-windows-signing.sh"); err != nil {
 		t.Fatal(err)
@@ -162,26 +194,17 @@ func TestSetupWindowsSigningRejectsUnpinnedJsign(t *testing.T) {
 	if err := os.Mkdir(binDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	fakes := map[string]string{
-		// Writes whatever the pinned digest does not match to the -o target.
-		"curl": "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do [[ \"$1\" == -o ]] && printf tampered > \"$2\"; shift; done\n",
-		"az":   "#!/usr/bin/env bash\necho az >> \"$TEST_LOG\"\necho secret-token\n",
-	}
-	for name, body := range fakes {
-		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0700); err != nil {
-			t.Fatal(err)
-		}
+	// Writes whatever the pinned digest does not match to the -o target.
+	curl := "#!/usr/bin/env bash\nwhile [[ $# -gt 0 ]]; do [[ \"$1\" == -o ]] && printf tampered > \"$2\"; shift; done\n"
+	if err := os.WriteFile(filepath.Join(binDir, "curl"), []byte(curl), 0700); err != nil {
+		t.Fatal(err)
 	}
 	githubEnv := filepath.Join(dir, "github-env")
 	cmd := exec.Command("bash", "setup-windows-signing.sh")
 	cmd.Env = append(os.Environ(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"TEST_LOG="+filepath.Join(dir, "commands"),
 		"RUNNER_TEMP="+dir,
 		"GITHUB_ENV="+githubEnv,
-		"ARTIFACT_SIGNING_ENDPOINT=weu.codesigning.azure.net",
-		"ARTIFACT_SIGNING_ACCOUNT=test-account",
-		"ARTIFACT_SIGNING_PROFILE=test-profile",
 	)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
@@ -190,10 +213,54 @@ func TestSetupWindowsSigningRejectsUnpinnedJsign(t *testing.T) {
 	if !strings.Contains(string(output), "pinned sha256") {
 		t.Errorf("setup failed for another reason:\n%s", output)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "commands")); !os.IsNotExist(err) {
-		t.Errorf("setup requested a token before verifying the jar: %v", err)
-	}
 	if exported, err := os.ReadFile(githubEnv); err == nil && len(exported) > 0 {
 		t.Errorf("a rejected setup must export nothing, got:\n%s", exported)
+	}
+}
+
+// The self-signed identity stands in for the production key in CI, so it has
+// to be what Authenticode demands of a signing certificate: a code-signing
+// extended key usage, and a PKCS#12 that opens with the password it was given
+// and holds both the key and the certificate.
+func TestMakeSelfSignedCodesign(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("openssl not installed")
+	}
+	if _, err := os.ReadFile("make-selfsigned-codesign.sh"); err != nil {
+		t.Fatal(err)
+	}
+	for _, alg := range []string{"ec", "rsa"} {
+		t.Run(alg, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			cmd := exec.Command("bash", "make-selfsigned-codesign.sh", dir, alg)
+			cmd.Env = append(os.Environ(), "CODESIGN_P12_PASSWORD=test-password")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("generate: %v\n%s", err, output)
+			}
+			for _, leaked := range []string{"codesign.key", "codesign.cnf"} {
+				if _, err := os.Stat(filepath.Join(dir, leaked)); !os.IsNotExist(err) {
+					t.Errorf("%s was left behind: %v", leaked, err)
+				}
+			}
+			cert, err := exec.Command("openssl", "x509", "-in", filepath.Join(dir, "codesign.crt"), "-noout", "-text").CombinedOutput()
+			if err != nil {
+				t.Fatalf("read certificate: %v\n%s", err, cert)
+			}
+			if !strings.Contains(string(cert), "Code Signing") {
+				t.Errorf("certificate lacks the code-signing extended key usage:\n%s", cert)
+			}
+			p12 := filepath.Join(dir, "codesign.p12")
+			opened, err := exec.Command("openssl", "pkcs12", "-in", p12, "-passin", "pass:test-password", "-nodes").CombinedOutput()
+			if err != nil {
+				t.Fatalf("open pkcs12 with its password: %v\n%s", err, opened)
+			}
+			if !strings.Contains(string(opened), "PRIVATE KEY") || !strings.Contains(string(opened), "BEGIN CERTIFICATE") {
+				t.Errorf("pkcs12 must hold the key and the certificate:\n%s", opened)
+			}
+			if exec.Command("openssl", "pkcs12", "-in", p12, "-passin", "pass:wrong", "-nodes").Run() == nil {
+				t.Error("pkcs12 opened with the wrong password")
+			}
+		})
 	}
 }
