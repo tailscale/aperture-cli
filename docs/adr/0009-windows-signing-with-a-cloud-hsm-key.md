@@ -88,5 +88,5 @@ as before.
 
 The CA will not issue against an EC key, Google Cloud signing latency or
 quota fails releases, the client team's builder can take over signing for
-aperture, or a Windows-only artifact (an MSI) appears that needs a Windows
+aperture, or a Windows-only artifact (an NSIS installer) appears that needs a Windows
 step in the release.
