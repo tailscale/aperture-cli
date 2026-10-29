@@ -14,6 +14,8 @@ import (
 func TestLaunchState_RoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg == "" {
 		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 	}
@@ -43,6 +45,8 @@ func TestLaunchState_RoundTrip(t *testing.T) {
 func TestLaunchState_LegacyMigration(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	// Seed a launcher.json in the old shape that used lastProfileName.
@@ -80,6 +84,8 @@ func TestLaunchState_LegacyMigration(t *testing.T) {
 func TestGlobal_RecordLaunchBindsActiveEndpoint(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	g := &config.Global{Settings: config.Settings{Endpoints: []config.EndpointEntry{
@@ -96,6 +102,8 @@ func TestGlobal_RecordLaunchBindsActiveEndpoint(t *testing.T) {
 func TestSettings_RoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	want := config.Settings{
@@ -133,6 +141,8 @@ func TestSettings_RoundTrip(t *testing.T) {
 func TestSettings_MissingFileUsesDefaults(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	got, err := config.LoadSettings()
@@ -147,6 +157,8 @@ func TestSettings_MissingFileUsesDefaults(t *testing.T) {
 func TestSettings_InvalidJSONReturnsErrorWithoutReplacingFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 	// Ask for the config dir rather than assuming XDG layout: on darwin
 	// os.UserConfigDir ignores XDG_CONFIG_HOME and resolves under HOME.
@@ -179,6 +191,8 @@ func TestSettings_InvalidJSONReturnsErrorWithoutReplacingFile(t *testing.T) {
 func TestGlobal_SetApertureHost_RotatesToFront(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	g := &config.Global{
@@ -207,6 +221,8 @@ func TestGlobal_SetApertureHost_RotatesToFront(t *testing.T) {
 func TestGlobal_SetActiveEndpoint_DistinguishesBridge(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	g := &config.Global{
@@ -231,6 +247,8 @@ func TestGlobal_SetActiveEndpoint_DistinguishesBridge(t *testing.T) {
 func TestGlobal_SetActiveEndpoint_URLEditKeepsName(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	g := &config.Global{
@@ -255,6 +273,8 @@ func TestGlobal_SetActiveEndpoint_URLEditKeepsName(t *testing.T) {
 func TestGlobal_RemoveInactiveEndpointPreservesRuntimeHost(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	g := &config.Global{
@@ -275,6 +295,8 @@ func TestGlobal_RemoveInactiveEndpointPreservesRuntimeHost(t *testing.T) {
 func TestGlobal_ReplaceEndpointDeduplicates(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	active := config.Direct("http://active")
@@ -291,6 +313,8 @@ func TestGlobal_ReplaceEndpointDeduplicates(t *testing.T) {
 func TestGlobal_SetBridgeTailnetPersists(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	g := &config.Global{Settings: config.Settings{
@@ -315,6 +339,8 @@ func TestGlobal_SetBridgeTailnetPersists(t *testing.T) {
 func TestBridgeStateDir(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	got, err := config.BridgeStateDir("bridge-abcdef", 1)
@@ -342,6 +368,8 @@ func TestBridgeStateDir(t *testing.T) {
 func TestBridgeStateSlots(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	slots, err := config.BridgeStateSlots("bridge-abcdef")
@@ -375,6 +403,8 @@ func TestBridgeStateSlots(t *testing.T) {
 func TestClientConfig_TypedStore(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	type myCfg struct {

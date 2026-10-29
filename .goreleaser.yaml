@@ -18,11 +18,12 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
     # Darwin releases require signatures and notarization. Only snapshots
-    # may skip these checks; Linux builds pass through unsigned.
+    # may skip these checks; Linux and Windows builds pass through unsigned.
     hooks:
       post:
         - cmd: 'bash scripts/sign-macos.sh "{{ .Path }}" "{{ .Target }}" "{{ .IsSnapshot }}"'
@@ -33,7 +34,7 @@ archives:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
-    # leaving this here for when windows builds are supported
+    # Windows users expect a zip.
     format_overrides:
       - goos: windows
         formats:

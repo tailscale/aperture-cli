@@ -51,6 +51,8 @@ make build
 
 macOS builds are Developer ID signed and notarized. curl and `go install` never set the quarantine attribute, so Gatekeeper stays out of the way. If you download the archive in a browser and double-click the binary instead, macOS may block it anyway (common on managed Macs): open System Settings > Privacy & Security and click **Open Anyway** next to the blocked entry.
 
+Windows builds ship as a zip containing `aperture.exe`; the install script is Unix-only, so on Windows download the archive from the release page or use `go install`. Windows builds are not code-signed yet, so SmartScreen may warn until the binary builds reputation.
+
 ## Usage
 
 ```sh
@@ -215,7 +217,7 @@ and testing an installed binary with `APERTURE_E2E_BIN`.
 
 ## Releasing
 
-Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so nothing unsigned is ever published. A failed signature or a rejected notarization fails the run before upload. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so no unsigned darwin build is ever published. Linux and Windows binaries cross-compile from the same run and are published unsigned. A failed signature or a rejected notarization fails the run before upload. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
 
 Local fallback on a Mac that has the certificate and a stored notary profile, for when the workflow could not sign:
 

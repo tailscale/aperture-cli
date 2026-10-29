@@ -16,6 +16,8 @@ import (
 func TestOpenRunLogAppendsThenTruncates(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	write := func(s string) {
@@ -62,6 +64,8 @@ func TestOpenRunLogAppendsThenTruncates(t *testing.T) {
 func TestStartRunLogAndRaiseRunLog(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	closeLog := config.StartRunLog()
