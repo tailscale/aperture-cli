@@ -26,8 +26,9 @@ runs GoReleaser on one macOS runner, and `signtool.exe` does not run there.
    describe signed bytes. Only snapshots may skip it, and a non-snapshot
    Windows build without readiness fails the release.
 3. The signer is Jsign 7.6, pinned by sha256 in `setup-windows-signing.sh`. It
-   runs on the existing macOS runner, so no Windows job sits inside the
-   release. Every signature carries an RFC 3161 timestamp.
+   runs on the existing macOS runner, so the exe is signed before anything is
+   published. Every signature carries an RFC 3161 timestamp. The MSIs are
+   signed afterwards on Windows, by the same hook and key (ADR 0010).
 4. The key store is configuration. The hook reads `WINDOWS_SIGN_STORETYPE`,
    `_KEYSTORE`, `_ALIAS`, `_CERTFILE` and `_STOREPASS`, and knows nothing
    about Google. The release sets `GOOGLECLOUD`; the `ci-windows-signing`
@@ -37,8 +38,10 @@ runs GoReleaser on one macOS runner, and `signtool.exe` does not run there.
 5. The runner holds no long-lived credential. Workload identity federation
    trades the run's OIDC token for an access token whose service account has
    `roles/cloudkms.signer` on that one key. The provider trusts only this
-   repository's `release` environment.
-6. `verify-windows` downloads the published zips on `windows-latest` and runs
+   repository's `release` environment, and both signing jobs refuse a commit
+   that is not on `main` before they log in.
+6. `windows-msi` (ADR 0010, formerly `verify-windows`) downloads the
+   published zips on `windows-latest` and runs
    `scripts/verify-windows-signature.ps1`: `Get-AuthenticodeSignature` must say
    `Valid`, with a timestamp and a signer subject containing `O=Tailscale Inc.`.
    The same script judges the self-signed CI build.
@@ -55,7 +58,7 @@ The release job now needs Java and `id-token: write`. A failure of Google
 Cloud, the signing key or the timestamp server fails the whole release, macOS
 included, because the hooks share one run.
 
-`verify-windows` runs after publication, so a bad signature is caught after
+`windows-msi` runs after publication, so a bad signature is caught after
 the zips are public. The hook is what keeps unsigned bytes out; the job proves
 that what it produced is what Windows trusts.
 
@@ -88,5 +91,5 @@ as before.
 
 The CA will not issue against an EC key, Google Cloud signing latency or
 quota fails releases, the client team's builder can take over signing for
-aperture, or a Windows-only artifact (a WiX MSI) appears that needs a Windows
-step in the release.
+aperture, or the Windows step ADR 0010 added for the MSI starts signing
+before publication, which would let the exe move there too.
