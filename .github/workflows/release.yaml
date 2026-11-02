@@ -17,8 +17,18 @@ permissions:
   # google-github-actions/auth exchanges the run's OIDC token for a Google access token.
   id-token: write
 
+# scripts/sign-windows.sh reads the Windows key store from here, in both jobs
+# that sign. The ci-windows-signing workflow runs the same hook with PKCS12 and
+# a throwaway key; these are the lines that differ, with WINDOWS_SIGN_STOREPASS,
+# the access token, set where each job logs in.
+env:
+  WINDOWS_SIGN_STORETYPE: GOOGLECLOUD
+  WINDOWS_SIGN_KEYSTORE: ${{ vars.GCP_KMS_KEYRING }}
+  WINDOWS_SIGN_ALIAS: ${{ vars.GCP_KMS_KEY }}
+  WINDOWS_SIGN_CERTFILE: scripts/windows-codesign-chain.pem
+
 jobs:
-  # One macOS job builds everything: the linux binaries cross-compile with CGO off, and the darwin and windows hooks sign before archiving (darwin also notarizes).
+  # One macOS job builds and publishes every binary: the linux binaries cross-compile with CGO off, and the darwin and windows hooks sign before archiving (darwin also notarizes). The MSIs need WiX, so windows-msi builds them after.
   goreleaser:
     runs-on: macos-latest
     timeout-minutes: 60
@@ -31,6 +41,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
+      -
+        name: Refuse a release from outside main
+        run: bash scripts/check-release-on-main.sh
       -
         name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -82,47 +95,95 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # GITHUB_TOKEN is scoped to this repo only; the tap needs the App token.
           HOMEBREW_TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
-          # scripts/sign-windows.sh reads the Windows key store from here. The
-          # ci-windows-signing workflow runs the same hook with PKCS12 and a
-          # throwaway key; this is the line that differs.
-          WINDOWS_SIGN_STORETYPE: GOOGLECLOUD
-          WINDOWS_SIGN_KEYSTORE: ${{ vars.GCP_KMS_KEYRING }}
-          WINDOWS_SIGN_ALIAS: ${{ vars.GCP_KMS_KEY }}
-          WINDOWS_SIGN_CERTFILE: scripts/windows-codesign-chain.pem
           WINDOWS_SIGN_STOREPASS: ${{ steps.gcp.outputs.access_token }}
       -
         name: Tear down signing keychain
         if: always()
         run: security delete-keychain "$SIGNING_KEYCHAIN"
 
-  # Reads the published Windows zips back and asks Windows itself whether the
-  # signature is valid, timestamped and ours. The goreleaser job cannot: the
-  # trust store that matters is Windows'.
-  verify-windows:
+  # Pulls the signed exes back out of the published zips, has Windows confirm
+  # each signature, then packages, signs and verifies one MSI per architecture.
+  # The order is forced: signing an MSI does not sign the exe inside it, and a
+  # signed MSI cannot change. WiX and Windows' trust store both need Windows.
+  # Every step is idempotent, so a failure here is fixed by re-running this
+  # job; until then the release has zips and no MSIs.
+  windows-msi:
     needs: goreleaser
     runs-on: windows-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
+    timeout-minutes: 30
+    environment: release
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Refuse a release from outside main
+        shell: bash
+        run: bash scripts/check-release-on-main.sh
       - name: Download Windows archives
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*_windows_*.zip'
-      - name: Verify Authenticode signatures
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*_windows_*.zip' --dir dl --clobber
+      - name: Verify exe signatures
         shell: pwsh
         run: |
-          $zips = Get-ChildItem -Filter '*_windows_*.zip'
+          $zips = Get-ChildItem dl -Filter '*_windows_*.zip'
           if ($zips.Count -ne 2) { throw "expected 2 Windows archives, found $($zips.Count)" }
           $exes = foreach ($zip in $zips) {
-            $dir = Join-Path $env:RUNNER_TEMP $zip.BaseName
-            Expand-Archive -Path $zip.FullName -DestinationPath $dir
-            Join-Path $dir 'aperture.exe'
+            Expand-Archive -Path $zip.FullName -DestinationPath "dl/$($zip.BaseName)" -Force
+            "dl/$($zip.BaseName)/aperture.exe"
           }
           ./scripts/verify-windows-signature.ps1 -SignerPattern 'O=Tailscale Inc\.' -Path $exes
+      # MSI versions have no prerelease field, so only stable tags get one.
+      - name: Log in to Google Cloud
+        if: ${{ !contains(env.TAG, '-') }}
+        id: gcp
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+      - name: Set up Java
+        if: ${{ !contains(env.TAG, '-') }}
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Windows signing
+        if: ${{ !contains(env.TAG, '-') }}
+        shell: bash
+        run: bash scripts/setup-windows-signing.sh
+      - name: Set up WiX
+        if: ${{ !contains(env.TAG, '-') }}
+        shell: bash
+        run: bash scripts/setup-wix.sh
+      - name: Build and sign MSIs
+        if: ${{ !contains(env.TAG, '-') }}
+        shell: bash
+        env:
+          WINDOWS_SIGN_STOREPASS: ${{ steps.gcp.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            msi="dist/aperture_windows_$arch.msi"
+            bash scripts/build-windows-msi.sh "dl/aperture_windows_$arch/aperture.exe" "$TAG" "$arch" "$msi"
+            bash scripts/sign-windows.sh "$msi" "windows_$arch" false
+          done
+      - name: Verify MSI signatures
+        if: ${{ !contains(env.TAG, '-') }}
+        shell: pwsh
+        run: ./scripts/verify-windows-signature.ps1 -SignerPattern 'O=Tailscale Inc\.' -Path (Get-ChildItem dist -Filter '*.msi').FullName
+      # Rewrites checksums.txt rather than appending, so a re-run does not list
+      # an MSI twice.
+      - name: Upload MSIs and checksums
+        if: ${{ !contains(env.TAG, '-') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt --dir dl --clobber
+          { grep -v '\.msi$' dl/checksums.txt || [ $? -eq 1 ]; (cd dist && sha256sum *.msi); } > dist/checksums.txt
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*.msi dist/checksums.txt
