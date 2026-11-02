@@ -67,7 +67,8 @@ jobs:
         run: bash scripts/setup-wix.sh
 
       # The release order: sign the exe, package it, sign the MSI. Two
-      # versions so the install test can upgrade one to the other.
+      # versions so the install test can upgrade one to the other, and a
+      # second build of the newer one, as a re-run release job would make.
       - name: Build, sign and package with a self-signed key
         shell: bash
         env:
@@ -84,9 +85,9 @@ jobs:
           export WINDOWS_SIGN_STOREPASS="$password"
           GOOS=windows GOARCH=$ARCH go build -ldflags '-s -w' -o "$work/aperture.exe" ./cmd/aperture
           bash scripts/sign-windows.sh "$work/aperture.exe" "windows_$ARCH" false
-          for tag in v0.0.1 v0.0.2; do
-            bash scripts/build-windows-msi.sh "$work/aperture.exe" "$tag" "$ARCH" "$work/aperture-$tag.msi"
-            bash scripts/sign-windows.sh "$work/aperture-$tag.msi" "windows_$ARCH" false
+          for name in v0.0.1 v0.0.2 v0.0.2-rebuild; do
+            bash scripts/build-windows-msi.sh "$work/aperture.exe" "${name%-rebuild}" "$ARCH" "$work/aperture-$name.msi"
+            bash scripts/sign-windows.sh "$work/aperture-$name.msi" "windows_$ARCH" false
           done
           echo "WORK=$work" >> "$GITHUB_ENV"
 
@@ -99,9 +100,10 @@ jobs:
           ./scripts/verify-windows-signature.ps1 -SignerPattern 'CN=Aperture Test Signing' -Path @(
             "$env:WORK/aperture.exe", "$env:WORK/aperture-v0.0.1.msi", "$env:WORK/aperture-v0.0.2.msi")
 
-      - name: Install, upgrade and uninstall
+      - name: Install, upgrade, reinstall and uninstall
         shell: pwsh
         run: |
           ./scripts/test-windows-msi-install.ps1 `
             -Old "$env:WORK/aperture-v0.0.1.msi" -OldVersion 0.0.1 `
-            -New "$env:WORK/aperture-v0.0.2.msi" -NewVersion 0.0.2
+            -New "$env:WORK/aperture-v0.0.2.msi" -NewVersion 0.0.2 `
+            -Rebuild "$env:WORK/aperture-v0.0.2-rebuild.msi"

@@ -5,10 +5,13 @@
 # the machine, so it is for a throwaway runner or VM, run as administrator.
 #
 #   -Old, -New                MSIs of the same architecture, -New the higher version
+#   -Rebuild                  a second build of -New's version, as a re-run
+#                             release job makes, with a different ProductCode
 #   -OldVersion, -NewVersion  the versions they carry, e.g. 0.0.1
 param(
   [Parameter(Mandatory)][string]$Old,
   [Parameter(Mandatory)][string]$New,
+  [Parameter(Mandatory)][string]$Rebuild,
   [Parameter(Mandatory)][string]$OldVersion,
   [Parameter(Mandatory)][string]$NewVersion
 )
@@ -16,6 +19,7 @@ $ErrorActionPreference = 'Stop'
 # msiexec wants a Windows path, not the forward slashes a workflow hands over.
 $Old = (Resolve-Path $Old).Path
 $New = (Resolve-Path $New).Path
+$Rebuild = (Resolve-Path $Rebuild).Path
 $installDir = Join-Path $env:ProgramFiles 'Aperture CLI'
 
 function Invoke-Msiexec([string[]]$Arguments) {
@@ -46,12 +50,16 @@ $code = Invoke-Msiexec '/i', $New
 if ($code -ne 0) { throw "upgrade to $New exited $code" }
 Assert-Installed $NewVersion
 
+$code = Invoke-Msiexec '/i', $Rebuild
+if ($code -ne 0) { throw "same-version reinstall of $Rebuild exited $code" }
+Assert-Installed $NewVersion
+
 # MajorUpgrade blocks a downgrade with a fatal error, 1603.
 $code = Invoke-Msiexec '/i', $Old
 if ($code -ne 1603) { throw "downgrade to $Old exited $code, want 1603" }
 Assert-Installed $NewVersion
 
-$code = Invoke-Msiexec '/x', $New
+$code = Invoke-Msiexec '/x', $Rebuild
 if ($code -ne 0) { throw "uninstall exited $code" }
 if (Test-Path $installDir) { throw "$installDir is left behind" }
 if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -like "*$installDir*") { throw "PATH still names $installDir" }

@@ -14,7 +14,11 @@
            UpgradeCode="f5f4e380-4076-4b6e-ac1b-af4fc89efc43"
            Scope="perMachine">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Aperture CLI is already installed." />
+    <!-- A re-run release job rebuilds an MSI at the same version with a new
+         ProductCode; without same-version upgrades it would install beside
+         the first build as a second Add/Remove Programs entry. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Aperture CLI is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
