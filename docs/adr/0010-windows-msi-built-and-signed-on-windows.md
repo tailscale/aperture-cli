@@ -19,8 +19,8 @@ the exe has to be signed before WiX packages it. WiX runs only on Windows.
 1. `installer/aperture.wxs` defines a per-machine MSI that installs
    `aperture.exe` to `Program Files\Aperture CLI` and appends that folder to
    the machine `PATH`. Its `UpgradeCode` is fixed forever; WiX assigns a new
-   `ProductCode` per build, so every release is a major upgrade and a
-   downgrade is refused.
+   `ProductCode` per build, so every release is a major upgrade, a rebuild at
+   the same version replaces the first, and a downgrade is refused.
 2. One MSI per architecture, `aperture_windows_amd64.msi` and
    `aperture_windows_arm64.msi`, because an MSI installs only on the platform
    it names. The names carry no version, matching the zips, so
@@ -29,15 +29,20 @@ the exe has to be signed before WiX packages it. WiX runs only on Windows.
    `scripts/build-windows-msi.sh` refuses anything else. Prereleases still ship
    zips.
 4. A `windows-msi` job runs on `windows-latest` after goreleaser publishes. It
-   downloads the signed zips, verifies each exe, builds both MSIs with WiX
+   takes the signed exes from goreleaser as a run artifact, not from the
+   release, which anyone with write access can change. It verifies them and the
+   published zips, builds both MSIs with WiX
    7.0.1, signs them through the same `sign-windows.sh` hook and key as the
    exe, verifies them, and adds them to the release and `checksums.txt`. It
    replaces ADR 0009's `verify-windows` job.
-5. Both release jobs refuse a commit that is not on `main`
-   (`scripts/check-release-on-main.sh`) before they log in to Google Cloud.
+5. Both release jobs refuse a commit that is not on `main` before anything
+   from the checkout runs. The check is inline in the workflow, because a
+   dispatched run executes main's workflow but the tag's scripts, and a
+   dispatched ref must be a tag. Google Cloud login comes after WiX, so the
+   access token never sits beside it.
 6. `ci-windows-signing` signs, packages and installs the MSI on native amd64
-   and arm64 runners, then upgrades it, has a downgrade refused, and
-   uninstalls it, using a throwaway key.
+   and arm64 runners, then upgrades it, reinstalls a rebuild of the same
+   version, has a downgrade refused, and uninstalls it, using a throwaway key.
 
 ## Consequences
 
@@ -53,9 +58,13 @@ WiX 7 is under the Open Source Maintenance Fee. The build passes
 `-acceptEula wix7` on the strength of Tailscale's existing sponsorship of
 wixtoolset. If that sponsorship lapses, the flag is no longer true.
 
-The main-only check stops a mistaken tag, not a hostile one. A tag runs the
-workflow file at that tag, so anyone who can push tags can push one whose
-workflow skips the check. The tag ruleset is what stops them.
+The main-only check covers dispatched runs and mistaken tags, not a hostile
+tag push. A tag push runs the workflow file at that tag, so anyone who can
+push tags can push one whose workflow skips the check. The tag ruleset and the
+`release` environment's protection rules are what stop them.
+
+A re-run that rebuilds an MSI changes the bytes behind a published version, so
+a hash taken from the first build no longer matches.
 
 The MSI appends to the machine `PATH`. Some deployers object to that, and
 removing it means they have to add the folder to `PATH` themselves.

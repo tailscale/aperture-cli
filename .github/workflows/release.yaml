@@ -40,10 +40,19 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+      # Inline, not a script, and before anything from the checkout runs: a
+      # dispatched run executes this file from main but scripts from the
+      # checked-out tag, so a script could be the tag author's own. HEAD, not
+      # GITHUB_SHA, which a dispatched run sets to main's head. This stops a
+      # dispatch of a tag that is not on main; a tag push runs the tag's own
+      # copy of this file, which only the tag ruleset controls.
       -
         name: Refuse a release from outside main
-        run: bash scripts/check-release-on-main.sh
+        run: |
+          git fetch --no-tags --quiet origin main
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "::error::$(git rev-parse --short HEAD) is not on main; refusing to sign a release from it"; exit 1; }
       -
         name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -58,6 +67,9 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
+          # The token goes to the signer through its output; no later step
+          # needs a credentials file.
+          create_credentials_file: false
       -
         name: Set up Java
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -96,17 +108,26 @@ jobs:
           # GITHUB_TOKEN is scoped to this repo only; the tap needs the App token.
           HOMEBREW_TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
           WINDOWS_SIGN_STOREPASS: ${{ steps.gcp.outputs.access_token }}
+      # Hands the MSI job the exes goreleaser signed, rather than letting it
+      # trust release assets anyone with write access could replace.
+      -
+        name: Keep the signed Windows exes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-exes
+          path: dist/aperture_windows_*/aperture.exe
+          if-no-files-found: error
+          retention-days: 1
       -
         name: Tear down signing keychain
         if: always()
         run: security delete-keychain "$SIGNING_KEYCHAIN"
 
-  # Pulls the signed exes back out of the published zips, has Windows confirm
-  # each signature, then packages, signs and verifies one MSI per architecture.
-  # The order is forced: signing an MSI does not sign the exe inside it, and a
-  # signed MSI cannot change. WiX and Windows' trust store both need Windows.
-  # Every step is idempotent, so a failure here is fixed by re-running this
-  # job; until then the release has zips and no MSIs.
+  # Has Windows confirm the signed exes, then packages, signs and verifies one
+  # MSI per architecture. The order is forced: signing an MSI does not sign
+  # the exe inside it, and a signed MSI cannot change. WiX and Windows' trust
+  # store both need Windows. Every step is idempotent, so a failure here is
+  # fixed by re-running this job; until then the release has zips and no MSIs.
   windows-msi:
     needs: goreleaser
     runs-on: windows-latest
@@ -114,30 +135,59 @@ jobs:
     environment: release
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+      # The same inline check as the goreleaser job, for the same reason.
       - name: Refuse a release from outside main
         shell: bash
-        run: bash scripts/check-release-on-main.sh
+        run: |
+          git fetch --no-tags --quiet origin main
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "::error::$(git rev-parse --short HEAD) is not on main; refusing to sign a release from it"; exit 1; }
+      - name: Fetch the signed exes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-exes
+          path: exe
       - name: Download Windows archives
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*_windows_*.zip' --dir dl --clobber
+      # Both the exes that go into the MSIs and the ones users get in the zips.
       - name: Verify exe signatures
         shell: pwsh
         run: |
           $zips = Get-ChildItem dl -Filter '*_windows_*.zip'
           if ($zips.Count -ne 2) { throw "expected 2 Windows archives, found $($zips.Count)" }
-          $exes = foreach ($zip in $zips) {
+          $zipped = foreach ($zip in $zips) {
             Expand-Archive -Path $zip.FullName -DestinationPath "dl/$($zip.BaseName)" -Force
             "dl/$($zip.BaseName)/aperture.exe"
           }
-          ./scripts/verify-windows-signature.ps1 -SignerPattern 'O=Tailscale Inc\.' -Path $exes
+          $built = (Get-ChildItem exe -Recurse -Filter aperture.exe).FullName
+          if ($built.Count -ne 2) { throw "expected 2 signed exes, found $($built.Count)" }
+          ./scripts/verify-windows-signature.ps1 -SignerPattern 'O=Tailscale Inc\.' -Path ($zipped + $built)
       # MSI versions have no prerelease field, so only stable tags get one.
+      - name: Set up WiX
+        if: ${{ !contains(env.TAG, '-') }}
+        shell: bash
+        run: bash scripts/setup-wix.sh
+      - name: Build MSIs
+        if: ${{ !contains(env.TAG, '-') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            exes=(exe/aperture_windows_"$arch"_*/aperture.exe)
+            [ "${#exes[@]}" -eq 1 ] && [ -f "${exes[0]}" ] || { echo "want one $arch exe, found: ${exes[*]}" >&2; exit 1; }
+            bash scripts/build-windows-msi.sh "${exes[0]}" "$TAG" "$arch" "dist/aperture_windows_$arch.msi"
+          done
+      # Logged in only now, so WiX and its setup never run beside the token.
       - name: Log in to Google Cloud
         if: ${{ !contains(env.TAG, '-') }}
         id: gcp
@@ -146,6 +196,7 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
+          create_credentials_file: false
       - name: Set up Java
         if: ${{ !contains(env.TAG, '-') }}
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -156,22 +207,15 @@ jobs:
         if: ${{ !contains(env.TAG, '-') }}
         shell: bash
         run: bash scripts/setup-windows-signing.sh
-      - name: Set up WiX
-        if: ${{ !contains(env.TAG, '-') }}
-        shell: bash
-        run: bash scripts/setup-wix.sh
-      - name: Build and sign MSIs
+      - name: Sign MSIs
         if: ${{ !contains(env.TAG, '-') }}
         shell: bash
         env:
           WINDOWS_SIGN_STOREPASS: ${{ steps.gcp.outputs.access_token }}
         run: |
           set -euo pipefail
-          mkdir -p dist
           for arch in amd64 arm64; do
-            msi="dist/aperture_windows_$arch.msi"
-            bash scripts/build-windows-msi.sh "dl/aperture_windows_$arch/aperture.exe" "$TAG" "$arch" "$msi"
-            bash scripts/sign-windows.sh "$msi" "windows_$arch" false
+            bash scripts/sign-windows.sh "dist/aperture_windows_$arch.msi" "windows_$arch" false
           done
       - name: Verify MSI signatures
         if: ${{ !contains(env.TAG, '-') }}
@@ -182,6 +226,8 @@ jobs:
       - name: Upload MSIs and checksums
         if: ${{ !contains(env.TAG, '-') }}
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern checksums.txt --dir dl --clobber
