@@ -25,6 +25,11 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
+      # Without WiX the real MSI build test in scripts/ skips.
+      - name: Set up WiX
+        shell: bash
+        run: bash scripts/setup-wix.sh
+
       # The Makefile is the one definition of the gate. GNU make is not on
       # the runner image, so it comes from chocolatey; the Makefile pins
       # SHELL to /bin/bash, which does not resolve on Windows, so the

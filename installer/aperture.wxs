@@ -1,0 +1,32 @@
+<!--
+  aperture.wxs is the Windows installer: one per-machine MSI per architecture,
+  built by scripts/build-windows-msi.sh from an already signed aperture.exe.
+  wix build -arch sets the platform, so this file serves x64 and arm64.
+
+  UpgradeCode is fixed for the life of the product; changing it makes the next
+  MSI install beside the old one instead of upgrading it. ProductCode is left
+  to WiX, so every build is a major upgrade.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Aperture CLI"
+           Manufacturer="Tailscale Inc."
+           Version="$(var.Version)"
+           UpgradeCode="f5f4e380-4076-4b6e-ac1b-af4fc89efc43"
+           Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Aperture CLI is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Aperture CLI" />
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <Component Directory="INSTALLFOLDER">
+        <File Id="ApertureExe" Source="$(var.SourceExe)" KeyPath="yes" />
+        <Environment Id="PathEntry" Name="PATH" Value="[INSTALLFOLDER]"
+                     Part="last" Action="set" System="yes" Permanent="no" />
+      </Component>
+    </Feature>
+  </Package>
+</Wix>
