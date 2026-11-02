@@ -8,5 +8,7 @@ WIX_VERSION=7.0.1
 
 dotnet tool install --global wix --version "$WIX_VERSION"
 tools="$HOME/.dotnet/tools"
-[ -z "${GITHUB_PATH:-}" ] || echo "$tools" >> "$GITHUB_PATH"
+# GITHUB_PATH is read by Windows, not Git Bash, so it needs C:\..., not /c/...
+command -v cygpath >/dev/null && gh_path=$(cygpath -w "$tools") || gh_path=$tools
+[ -z "${GITHUB_PATH:-}" ] || echo "$gh_path" >> "$GITHUB_PATH"
 "$tools/wix" --version
