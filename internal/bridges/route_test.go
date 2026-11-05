@@ -60,6 +60,50 @@ func TestRouteDropsClientAuthorization(t *testing.T) {
 	}
 }
 
+// The Aperture redirects plain HTTP to HTTPS on its FQDN, and a client
+// behind a Route cannot resolve that name because only the bridge's node is
+// on the tailnet (tailscale/aperture#2974). Every request must ask for no
+// redirect, whatever the client set.
+func TestRouteAsksForNoRedirect(t *testing.T) {
+	var got []string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Values("X-Aperture-No-Redirect")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	node := &fakeNode{backendAddr: strings.TrimPrefix(backend.URL, "http://")}
+	m := NewMachines(false)
+	m.newNode = func(_ config.Bridge, _ int, _ string, _ func(string, ...any), _ func(string, ...any)) tailnetNode {
+		return node
+	}
+	defer m.Close()
+
+	localURL, err := activateMachine(m,
+		context.Background(),
+		config.Bridge{ID: "bridge-abcdef", Name: "Work"},
+		"http://127.0.0.1",
+		collect(&[]string{}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, localURL+"/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Aperture-No-Redirect", "false")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if len(got) != 1 || got[0] != "true" {
+		t.Fatalf("X-Aperture-No-Redirect = %q, want [\"true\"]", got)
+	}
+}
+
 // A serve binds the port it was given and fails when that port is taken
 // (ADR 0008): a silent fallback to a free port would leave the client config
 // pointing at nothing.
