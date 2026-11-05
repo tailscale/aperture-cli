@@ -103,6 +103,11 @@ func (mc *Machine) openRoute(target *url.URL, port int) (*Route, error) {
 		// Machine's tailnet identity, so the header is never load-bearing,
 		// and a gateway that treats it as authoritative rejects it.
 		req.Header.Del("Authorization")
+		// The Aperture redirects plain HTTP to HTTPS on its FQDN, which the
+		// client cannot resolve because only the bridge's node is on the
+		// tailnet. Ask it to answer over HTTP instead
+		// (tailscale/aperture#2974).
+		req.Header.Set("X-Aperture-No-Redirect", "true")
 	}
 	proxy.Transport = transport
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
