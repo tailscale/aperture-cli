@@ -76,6 +76,8 @@ func TestValidateHost(t *testing.T) {
 func TestWriteConfig_Vertex(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 
 	home, err := writeConfig("vertex-ai")
@@ -105,7 +107,10 @@ func TestWriteConfig_Vertex(t *testing.T) {
 // The headless launch (ADR 0007): flags win, LastLaunch fills what they
 // leave empty, and anything left goes to the first compatible provider.
 func TestSpec(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	openai := config.ProviderInfo{ID: "openai", SupportedEndpoints: map[string]bool{config.EndpointOpenAIChat: true}}
 	vertexOnly := config.ProviderInfo{ID: "vertex", SupportedEndpoints: map[string]bool{config.EndpointVertexGemini: true}}
