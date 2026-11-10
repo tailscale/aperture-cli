@@ -301,6 +301,8 @@ func TestSettingsMenu_ToggleYolo(t *testing.T) {
 	withFakeClients(t, nil)
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 
 	g := &config.Global{}
@@ -533,6 +535,8 @@ func TestSetupGuideMenu_BridgeDoesNotRequireSystemTailscale(t *testing.T) {
 func TestEndpointBridgeMenu_AddsFirstBridgeInline(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	m := &model{
 		g: &config.Global{Settings: config.Settings{
@@ -591,6 +595,8 @@ func TestEndpointBridgeMenu_AddsFirstBridgeInline(t *testing.T) {
 func TestEndpointBridgeMenu_ConnectsExistingBridgeWithoutPrompting(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	m := &model{
@@ -626,6 +632,8 @@ func TestEndpointBridgeMenu_ConnectsExistingBridgeWithoutPrompting(t *testing.T)
 func TestInitOpensOnTheStartEndpoint(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	saved := config.Direct("http://saved")
@@ -654,6 +662,8 @@ func TestInitOpensOnTheStartEndpoint(t *testing.T) {
 func TestInitOpensOnTheSavedEndpointWhenNothingIsNamed(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	saved := config.Direct("http://saved")
 	g := &config.Global{Settings: config.Settings{Endpoints: []config.EndpointEntry{{Endpoint: saved}}}}
@@ -673,6 +683,8 @@ func TestInitOpensOnTheSavedEndpointWhenNothingIsNamed(t *testing.T) {
 func TestPreflightOverrideReplacesGuessedEndpoint(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	previous := config.Direct("http://other")
@@ -714,6 +726,8 @@ func TestPreflightOverrideReplacesGuessedEndpoint(t *testing.T) {
 func TestPreflightOverrideRejectsBadURLWithoutStoppingTheAttempt(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	m := &model{
@@ -767,6 +781,8 @@ func TestTextFieldTakesTypedAndPastedTextOnly(t *testing.T) {
 func TestPreflightEscapeAbandonsDiscovery(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	previous := config.Direct("http://other")
@@ -841,6 +857,8 @@ func TestSetupGuideEditPrefillsFailedURL(t *testing.T) {
 func TestEndpointsMenu_EditRetargetsWorkingEndpoint(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Work"}
 	connected := config.Bridged(config.DefaultLocation, bridge.ID)
@@ -896,6 +914,8 @@ func pickerModel(t *testing.T) *model {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	return &model{
 		g: &config.Global{
@@ -1146,6 +1166,8 @@ func TestEndpointBridgeMenu_OffersAddBridgeWhenOneExists(t *testing.T) {
 func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	old := config.Direct("http://old")
 	bridge := config.Bridge{ID: "bridge-abcdef", Name: "Second"}
@@ -1206,6 +1228,8 @@ func TestBridgeEndpointFailureKeepsPreviousEndpointActive(t *testing.T) {
 func TestDirectEndpointIsPromotedOnlyAfterModelsSucceed(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
 	srv := modelsServer(t)
 	old := config.Direct("http://old")

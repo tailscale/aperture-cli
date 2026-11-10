@@ -14,6 +14,8 @@ func loadInto(t *testing.T, s config.Settings) *config.Global {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
 	if err := config.SaveSettings(s); err != nil {
 		t.Fatalf("SaveSettings: %v", err)

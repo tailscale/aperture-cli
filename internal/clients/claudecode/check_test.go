@@ -10,6 +10,8 @@ import (
 func TestCheck_NoSettingsFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	if err := checkClaudeSettings(); err != nil {
 		t.Fatalf("Check returned error when settings.json missing: %v", err)
 	}
@@ -18,6 +20,8 @@ func TestCheck_NoSettingsFile(t *testing.T) {
 func TestCheck_NoConflicts(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 
 	claudeDir := filepath.Join(tmp, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -35,6 +39,8 @@ func TestCheck_NoConflicts(t *testing.T) {
 func TestCheck_WithConflicts(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 
 	claudeDir := filepath.Join(tmp, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -63,6 +69,8 @@ func TestCheck_WithConflicts(t *testing.T) {
 func TestCheck_InvalidJSON(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 
 	claudeDir := filepath.Join(tmp, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -83,6 +91,8 @@ func TestCheck_InvalidJSON(t *testing.T) {
 func TestCheck_EmptyEnv(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 
 	claudeDir := filepath.Join(tmp, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {

@@ -3,6 +3,7 @@ package claudecode
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -256,9 +257,19 @@ func TestTierModelEnv_Mantle(t *testing.T) {
 func TestMantleMenuLaunchAndReplay(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("PATH", "")
 	bin := filepath.Join(home, ".local", "bin", "claude")
+	pathEnv := ""
+	if runtime.GOOS == "windows" {
+		// Windows only treats PATHEXT extensions as executable and the
+		// common-dirs fallback probes the bare name, so the fake must ride
+		// PATH as a .bat.
+		bin += ".bat"
+		pathEnv = filepath.Dir(bin)
+	}
+	t.Setenv("PATH", pathEnv)
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +399,10 @@ func lower(s string) string {
 }
 
 func TestSpec(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude-opus", "claude-sonnet"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
 	bedrock := config.ProviderInfo{ID: "bedrock", Models: []string{"us.anthropic.claude-opus-4"}, SupportedEndpoints: map[string]bool{config.EndpointBedrockInvoke: true}}
 	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5"}, SupportedEndpoints: map[string]bool{config.EndpointOpenAIResponses: true}}
@@ -479,7 +493,7 @@ func TestSpec(t *testing.T) {
 	}
 
 	// A conflicting ~/.claude/settings.json blocks the headless launch too.
-	claudeDir := filepath.Join(os.Getenv("HOME"), ".claude")
+	claudeDir := filepath.Join(tmp, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
