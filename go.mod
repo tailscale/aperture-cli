@@ -1,6 +1,6 @@
 module github.com/tailscale/aperture-cli
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1
