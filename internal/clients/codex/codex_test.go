@@ -220,7 +220,10 @@ func TestReplay_StaleProvider(t *testing.T) {
 // The headless launch (ADR 0007): flags win, LastLaunch fills what they
 // leave empty, and anything left goes to the first compatible provider.
 func TestSpec(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("APPDATA", tmp)
 	responses := map[string]bool{config.EndpointOpenAIResponses: true}
 	openai := config.ProviderInfo{ID: "openai", Models: []string{"gpt-5", "gpt-5-mini"}, SupportedEndpoints: responses}
 	anthropic := config.ProviderInfo{ID: "anthropic", Models: []string{"claude"}, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}

@@ -1,0 +1,4 @@
+# The Windows runners check out with core.autocrlf=true, which turns LF
+# into CRLF. gofmt then flags every .go file and make lint fails; Git Bash
+# also chokes on CRLF shell scripts. Binary files are unaffected by text=auto.
+* text=auto eol=lf

@@ -51,6 +51,8 @@ make build
 
 macOS builds are Developer ID signed and notarized. curl and `go install` never set the quarantine attribute, so Gatekeeper stays out of the way. If you download the archive in a browser and double-click the binary instead, macOS may block it anyway (common on managed Macs): open System Settings > Privacy & Security and click **Open Anyway** next to the blocked entry.
 
+Windows builds ship as a zip containing `aperture.exe`; the install script is Unix-only, so on Windows download the archive from the release page or use `go install`. Windows builds are Authenticode signed with a key held in a Google Cloud HSM, and timestamped so the signature stays valid after the certificate expires. `go install` builds locally and is unsigned.
+
 ## Usage
 
 ```sh
@@ -215,7 +217,23 @@ and testing an installed binary with `APERTURE_E2E_BIN`.
 
 ## Releasing
 
-Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so nothing unsigned is ever published. A failed signature or a rejected notarization fails the run before upload. Required secrets: `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+Push a tag. The release workflow runs GoReleaser on a macOS runner: it imports the Developer ID certificate from GitHub secrets into a temporary keychain, and a build hook signs and notarizes each darwin binary before archiving, so no unsigned darwin build is ever published. Windows binaries cross-compile from the same run and a second build hook Authenticode-signs each `aperture.exe` with [Jsign](https://ebourg.github.io/jsign/), using a key that stays in a Google Cloud HSM. GitHub OIDC and workload identity federation stand in for a stored credential. Linux binaries are published unsigned. A failed signature or a rejected notarization fails the run before upload. A `windows-msi` job then takes the signed exes from that run, has Windows confirm each one and each published zip is valid, timestamped and issued to Tailscale Inc., and packages each exe into a WiX MSI (`installer/aperture.wxs`), which it signs, verifies and adds to the release with its checksum. Only stable `vX.Y.Z` tags get MSIs. Both jobs refuse a commit that is not on `main`, and a manual run must name a tag ([ADR 0009](docs/adr/0009-windows-signing-with-a-cloud-hsm-key.md), [ADR 0010](docs/adr/0010-windows-msi-built-and-signed-on-windows.md)).
+
+Fleets deploy the MSI silently with `msiexec /i aperture_windows_amd64.msi /qn`. It installs per machine to `Program Files\Aperture CLI`, adds that folder to the machine `PATH`, and upgrades in place.
+
+Required for macOS: secrets `APPLE_CERT_P12` (the base64-encoded .p12), `APPLE_CERT_PASSWORD`, `APPLE_ID` and `APPLE_ID_PASSWORD` (an app-specific password).
+
+Required for Windows: variables `GCP_WIF_PROVIDER` and `GCP_SERVICE_ACCOUNT` (the service account holds *Cloud KMS CryptoKey Signer* on the signing key only, and the provider trusts only this repository's `release` environment), `GCP_KMS_KEYRING` (`projects/…/locations/…/keyRings/…`) and `GCP_KMS_KEY` (`<key>/cryptoKeyVersions/N`), plus the CA's PEM chain committed as `scripts/windows-codesign-chain.pem`. The `release` GitHub environment is restricted to tags, and the tag ruleset decides who may push one: the main-only check stops a manual run or a mistaken tag, not someone who can write a workflow at their own tag.
+
+The signing path is exercised without the HSM key by the Windows signing workflow. On an amd64 and an arm64 runner it builds the exe, signs it with a throwaway self-signed key (`scripts/make-selfsigned-codesign.sh`) through the same hook with `WINDOWS_SIGN_STORETYPE=PKCS12`, packages and signs two MSI versions and a rebuild, asks Windows to verify them, then installs, upgrades, reinstalls and uninstalls the MSI (`scripts/test-windows-msi-install.ps1`). Run the same locally with Java 17+ and `openssl`:
+
+```sh
+CODESIGN_P12_PASSWORD=x bash scripts/make-selfsigned-codesign.sh /tmp/id
+bash scripts/setup-windows-signing.sh          # then export JSIGN_JAR it prints
+APERTURE_WINDOWS_SIGNING_READY=1 WINDOWS_SIGN_STORETYPE=PKCS12 \
+  WINDOWS_SIGN_KEYSTORE=/tmp/id/codesign.p12 WINDOWS_SIGN_STOREPASS=x \
+  bash scripts/sign-windows.sh aperture.exe windows_amd64_v1 false
+```
 
 Local fallback on a Mac that has the certificate and a stored notary profile, for when the workflow could not sign:
 
