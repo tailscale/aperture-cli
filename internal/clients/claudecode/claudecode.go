@@ -221,7 +221,11 @@ func (c *Client) resolve(g *config.Global, provider, model string) (config.Provi
 	if model == "" && sameProvider && slices.Contains(models, last.LastModel) {
 		model = last.LastModel
 	}
-	if model == "" && len(models) > 0 {
+	// Claude Code picks its own default when the provider offers Claude. The
+	// first model sorts alphabetically and may not be Claude, and then auto
+	// mode's server-side classifier has nothing to answer it.
+	isClaude := func(m string) bool { return strings.Contains(strings.ToLower(m), "claude") }
+	if model == "" && len(models) > 0 && !slices.ContainsFunc(models, isClaude) {
 		model = models[0]
 	}
 	return p, b, model, nil
