@@ -397,13 +397,13 @@ func TestSpec(t *testing.T) {
 	}
 	c := &Client{}
 
-	// Defaults: the first compatible provider, its first backend, its first model.
+	// Defaults: the first compatible provider, its first backend, Claude Code's own model.
 	spec, err := c.Spec(newGlobal(), "", "", nil)
 	if err != nil {
 		t.Fatalf("Spec: %v", err)
 	}
-	if spec.Env["ANTHROPIC_BASE_URL"] != testHost || spec.Env["ANTHROPIC_MODEL"] != "claude-opus" {
-		t.Errorf("default env = %v, want the Anthropic backend on its first model", spec.Env)
+	if _, ok := spec.Env["ANTHROPIC_MODEL"]; spec.Env["ANTHROPIC_BASE_URL"] != testHost || ok {
+		t.Errorf("default env = %v, want the Anthropic backend with no model set", spec.Env)
 	}
 
 	// Flags win, and passthrough args land after aperture's own.
@@ -488,5 +488,32 @@ func TestSpec(t *testing.T) {
 	}
 	if _, err := c.Spec(newGlobal(), "", "", nil); err == nil || !strings.Contains(err.Error(), "ANTHROPIC_BASE_URL") {
 		t.Errorf("conflicting settings: %v, want the conflict named", err)
+	}
+}
+
+func TestSpec_DefaultModel(t *testing.T) {
+	tests := []struct {
+		name   string
+		models []string
+		want   string
+	}{
+		{name: "claude offered after a non-claude model", models: []string{"alibaba/qwen3.8-max", "anthropic/claude-haiku-4.5"}, want: ""},
+		{name: "no claude offered", models: []string{"glm-5.1", "glm-5-turbo"}, want: "glm-5.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			p := config.ProviderInfo{ID: "gw", Models: tt.models, SupportedEndpoints: map[string]bool{config.EndpointAnthropicMessages: true}}
+			g := &config.Global{ApertureHost: testHost, Providers: []config.ProviderInfo{p}}
+
+			spec, err := (&Client{}).Spec(g, "", "", nil)
+
+			if err != nil {
+				t.Fatalf("Spec: %v", err)
+			}
+			if got := spec.Env["ANTHROPIC_MODEL"]; got != tt.want {
+				t.Errorf("ANTHROPIC_MODEL = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
