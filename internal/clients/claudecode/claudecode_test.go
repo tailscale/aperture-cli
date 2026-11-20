@@ -498,7 +498,14 @@ func TestSpec_DefaultModel(t *testing.T) {
 		want   string
 	}{
 		{name: "claude offered after a non-claude model", models: []string{"alibaba/qwen3.8-max", "anthropic/claude-haiku-4.5"}, want: ""},
+		{name: "claude offered last", models: []string{"deepseek/deepseek-v4-pro", "moonshotai/kimi-k3", "anthropic/claude-sonnet-5.5"}, want: ""},
+		{name: "bare claude ids", models: []string{"claude-opus-5-5", "claude-sonnet-5-5"}, want: ""},
+		{name: "claude fast variant", models: []string{"anthropic/claude-opus-5-5-fast"}, want: ""},
+		{name: "bedrock inference profile", models: []string{"meta.llama4-maverick-17b-instruct-v1:0", "us.anthropic.claude-opus-4-1-20250805-v1:0"}, want: ""},
+		{name: "vertex versioned id", models: []string{"gemini-3-pro", "claude-opus-4@20250514"}, want: ""},
 		{name: "no claude offered", models: []string{"glm-5.1", "glm-5-turbo"}, want: "glm-5.1"},
+		{name: "no claude offered, prefixed ids", models: []string{"alibaba/qwen3.8-max", "deepseek/deepseek-v4-pro"}, want: "alibaba/qwen3.8-max"},
+		{name: "no models", models: nil, want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
