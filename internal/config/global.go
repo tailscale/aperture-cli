@@ -215,6 +215,16 @@ func checkName(name string) error {
 	return nil
 }
 
+// CheckTailnetID rejects a Tailnet ID that would change which tailnets a
+// registration asks for. Control reads the required tailnet as a comma
+// separated list behind a "required:" prefix.
+func CheckTailnetID(id string) error {
+	if strings.ContainsFunc(id, func(r rune) bool { return r == ',' || r == ':' || unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("tailnet ID %q contains a comma, colon or space", id)
+	}
+	return nil
+}
+
 // AddBridge creates a bridge named name with a generated ID, saves it and
 // returns it. port is the fixed port serve binds, zero for none. tailnetID
 // pins the bridge to one tailnet, empty for any. The name is the bridge's
@@ -231,10 +241,8 @@ func (g *Global) AddBridge(name string, port int, tailnetID string) (Bridge, err
 		return Bridge{}, fmt.Errorf("port %d is outside 0-65535", port)
 	}
 	tailnetID = strings.TrimSpace(tailnetID)
-	// Control reads the required tailnet as a comma separated list behind a
-	// "required:" prefix, so these would change which tailnets are asked for.
-	if strings.ContainsFunc(tailnetID, func(r rune) bool { return r == ',' || r == ':' || unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return Bridge{}, fmt.Errorf("tailnet ID %q contains a comma, colon or space", tailnetID)
+	if err := CheckTailnetID(tailnetID); err != nil {
+		return Bridge{}, err
 	}
 	for _, b := range g.Settings.Bridges {
 		if strings.EqualFold(b.Name, name) {

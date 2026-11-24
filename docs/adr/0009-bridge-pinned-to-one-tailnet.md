@@ -25,7 +25,8 @@ on aperture.
 3. Bring-up fails a Running Machine of a pinned Bridge unless the status
    reports that Tailnet ID. A missing ID fails too. The failed Open shuts
    the node down, so nothing dials through it.
-4. `bridge add` refuses an ID containing whitespace, a comma or a colon.
+4. `bridge add`, and every Machine for a hand-edited bridge, refuses an
+   ID containing whitespace, a comma or a colon.
    Control reads the value as a comma separated list with a `required:`
    prefix, so those characters would change what is asked for.
 5. `tailscale.com` is pinned to the head of tailscale/tailscale#22606

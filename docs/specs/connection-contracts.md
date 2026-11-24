@@ -121,7 +121,8 @@ Rules:
   SIGTERM or SIGINT. A port already bound is a hard error, never an
   ephemeral fallback. Client launches through a bridge keep ephemeral ports.
 - `bridge add --tailnet-id` pins the bridge's Machines to that tailnet and
-  refuses an ID with whitespace, a comma or a colon. `bridge describe`
+  refuses an ID with whitespace, a comma or a colon, and so does any
+  command that opens a hand-edited bridge. `bridge describe`
   prints it as `tailnet id:`. `bridge list` does not, so its columns stay
   as scripts read them. A Machine that comes up in another tailnet fails
   its Open with both IDs named.

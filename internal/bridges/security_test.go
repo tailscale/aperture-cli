@@ -213,3 +213,18 @@ func TestRedactURLKeepsOnlyTheOrigin(t *testing.T) {
 		}
 	}
 }
+
+// A hand-edited settings file skips bridge add, and a Tailnet ID of
+// "TWork,THome" asks control for required:TWork,THome, which lets a login
+// register a device in THome before bring-up refuses it. The guard is at the
+// door every bridge comes through, the same as the bridge ID's.
+func TestMachinesRefusesAHandEditedTailnetID(t *testing.T) {
+	ms := NewMachines(false)
+	defer ms.Close()
+	if _, err := ms.For(config.Bridge{ID: "bridge-abcdef", TailnetID: "TWork,THome"}); err == nil {
+		t.Fatal("For took a tailnet ID listing two tailnets")
+	}
+	if _, err := ms.For(config.Bridge{ID: "bridge-abcdef", TailnetID: "TWork1CNTRL"}); err != nil {
+		t.Fatalf("For refused a well-formed tailnet ID: %v", err)
+	}
+}

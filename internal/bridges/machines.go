@@ -59,6 +59,10 @@ func (ms *Machines) For(bridge config.Bridge) (*Machine, error) {
 	if err := validateBridgeID(bridge.ID); err != nil {
 		return nil, err
 	}
+	// A hand-edited settings file never went through bridge add.
+	if err := config.CheckTailnetID(bridge.TailnetID); err != nil {
+		return nil, err
+	}
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	if ms.closed {
