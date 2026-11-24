@@ -20,8 +20,8 @@ on aperture.
    `bridge add <name> --tailnet-id <id>`. Empty means unpinned, today's
    behaviour.
 2. Every Machine of a pinned Bridge sets `tsnet.Server.Tailnet`, so its
-   registration asks control for `required:<id>` and control refuses a
-   login to any other tailnet.
+   registration asks control for `required:<id>`, which keeps an
+   interactive login to that tailnet.
 3. Bring-up fails a Running Machine of a pinned Bridge unless the status
    reports that Tailnet ID. A missing ID fails too. The failed Open shuts
    the node down, so nothing dials through it.
@@ -37,7 +37,11 @@ on aperture.
 Bring-up repeats `tsnet.Server.Up`'s tailnet check because we own the
 bus watch instead of calling `Up` (ADR 0001, decision 4). The check is
 unexported upstream, so it is a second copy, and a change to its rule
-upstream has to be followed here by hand.
+upstream has to be followed here by hand. It is also the only guard for
+an auth key: on 2026-11-24 a `TS_AUTHKEY` from another tailnet
+registered and came up Running despite `required:<id>`, and this check
+is what refused it. The node is still registered in that tailnet until
+the bridge is deleted.
 
 The pin cannot be added to an existing bridge. A user with a bridge
 already in the wrong tailnet deletes it and adds it pinned. A pinned
