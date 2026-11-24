@@ -30,6 +30,7 @@ The context boundaries below also describe the proposed broader event refactor.
 | Phase | What the Attempt is waiting on right now, named for what the user is waiting for. | `ipn.State`. |
 | Progress | The trail of phases an Attempt passed through and how long each took. The thing that was missing when a 29s wait could not be attributed. | The scrolling log. |
 | Tailnet | The network a Machine joined. Recorded on the Bridge so the picker can name it before the Machine exists. | |
+| Tailnet ID | The stable ID of the only tailnet a Bridge's Machines may join, as the admin console shows it. Set on the Bridge at add; empty means any tailnet. See [ADR 0009](../adr/0009-bridge-pinned-to-one-tailnet.md). | The Tailnet name, which is recorded after a join and changes on a rename. |
 | Provider | A model provider read from the Aperture's `/v1/models`. | |
 
 `Machine` is not our coinage. It is the word the thing already has in the system
@@ -101,6 +102,7 @@ what `Up` does beyond waiting for `ipn.Running` (`tsnet/tsnet.go:533`):
 | fails on any `Notify.ErrMessage` | same, surfaced as `Failed` |
 | `lc.Status` and a non-empty `TailscaleIPs` check | same call, already on the port |
 | `resetServeStateOnce` | skipped |
+| `checkTailnet`, when `Server.Tailnet` is set | same rule, repeated in `bringUp`: the status must report that stable ID |
 
 Skipping `resetServeStateOnce` is deliberate. It clears serve config and
 service advertisements left by an earlier run of a differently configured
@@ -132,7 +134,7 @@ two while a login is outstanding, then to one: it exits when the state leaves
 | Fact | Where it lives |
 |---|---|
 | Endpoint list, endpoint names, active endpoint | stored, `settings.json` |
-| Bridge id, name, port, last tailnet | stored, `settings.json` |
+| Bridge id, name, port, last tailnet, tailnet ID | stored, `settings.json` |
 | Machine tailnet credentials | stored by tsnet under the slot's bridge state dir, never by us |
 | Slot lock | a held-open file lock under `bridges/locks/`, process lifetime, file content empty |
 | Machine, Route | transient, process lifetime, keyed by bridge id |

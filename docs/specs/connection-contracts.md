@@ -75,11 +75,12 @@ service surface with scripts and aliases as its callers.
 The command line's callers are scripts, aliases and other tools, so its
 grammar and its output rules are the compatibility contract. Decisions:
 [ADR 0007](../adr/0007-headless-cli.md) and
-[ADR 0008](../adr/0008-persistent-bridge-fixed-port.md).
+[ADR 0008](../adr/0008-persistent-bridge-fixed-port.md) and
+[ADR 0009](../adr/0009-bridge-pinned-to-one-tailnet.md).
 
 ```
 aperture [flags]                                  the TUI, unchanged
-aperture bridge add <name> [--port N]
+aperture bridge add <name> [--port N] [--tailnet-id <id>]
 aperture bridge list
 aperture bridge describe <name>
 aperture bridge delete <name>
@@ -119,6 +120,11 @@ Rules:
 - `serve` binds the Bridge's Port on loopback and holds the Route until
   SIGTERM or SIGINT. A port already bound is a hard error, never an
   ephemeral fallback. Client launches through a bridge keep ephemeral ports.
+- `bridge add --tailnet-id` pins the bridge's Machines to that tailnet and
+  refuses an ID with whitespace, a comma or a colon. `bridge describe`
+  prints it as `tailnet id:`. `bridge list` does not, so its columns stay
+  as scripts read them. A Machine that comes up in another tailnet fails
+  its Open with both IDs named.
 - `endpoint delete` removes the endpoint only. A bridge it used stays until
   `bridge delete`; the picker's orphan cascade is a TUI nicety, not a rule.
 - Writes stay where they are today. `add` and `delete` write settings. A
@@ -210,8 +216,11 @@ Everything else persisted is unconditional: `Endpoint.URL`, `Endpoint.BridgeID`
 Two optional facts join them. `Endpoint.Name` is the endpoint's command-line
 handle and stays empty when the user never named it; an unnamed endpoint is
 addressed by URL, so empty is a real state. `Bridge.Port` is the fixed port
-`serve` binds, and zero means the bridge has none. Old files carry neither
-field and load unchanged.
+`serve` binds, and zero means the bridge has none. `Bridge.TailnetID`
+(`tailnetId`) is the only tailnet the bridge may join, and empty means any.
+Each is a setting the user chose, not a fact waiting to happen, so empty is a
+real state and not the absence the `Bridge.Tailnet` exception covers. Old
+files carry none of them and load unchanged.
 
 A Bridge's Machine identity lives outside settings, in the config directory:
 one state directory per Slot, `bridges/<hex>` for slot 1 and
@@ -245,6 +254,7 @@ and no surface displays it.
 | Machine `Starting → Joining` | none | Deliberately silent. The credentials-on-disk path has nothing to tell the user and no cross-aggregate reaction; the Attempt's own `PhaseEntered` covers the screen. |
 | Machine `NeedsLogin → Joining` | none | Same. The authorization that caused it is already on screen. |
 | Machine `Joining → Open` | `TailnetJoined` | |
+| Machine `Joining → Closed`, not the Bridge's Tailnet ID | `Failed` | Carries both IDs. No typed event: nothing reacts beyond showing the error, and Settings keeps the pin. |
 | Machine `→ Closed` via `Close` | none | Deliberately silent. Process teardown; there is no consumer left to react. |
 | Machine `→ Closed` via `LeaveTailnet` | `Noted` | Weak, and knowingly so. The user asked to switch tailnets and wants to see it happen, but nothing reacts to it, so it does not earn a typed event yet. Promote it if Settings ever needs to clear `Bridge.Tailnet` on logout, which it arguably already does. |
 

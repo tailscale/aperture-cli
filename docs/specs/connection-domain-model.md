@@ -249,6 +249,7 @@ Invariants:
 - `LeaveTailnet` logs out before closing: credentials live behind the node's own LocalAPI, so a close without a logout silently reuses them next time. `Destroy` also discards the state directory, last and only on success, because it holds the key a later attempt needs to deregister.
 - Closing closes every Route first.
 - Exactly one IPN bus watch per Machine.
+- A Machine of a Bridge with a Tailnet ID is Open only in that tailnet. It registers asking control for it, and bring-up refuses a Running node whose status reports another ID or none ([ADR 0009](../adr/0009-bridge-pinned-to-one-tailnet.md)).
 
 ### States
 
@@ -264,6 +265,7 @@ stateDiagram-v2
     Starting --> Closed: error
     NeedsLogin --> Closed: cancelled
     Joining --> Closed: error
+    Joining --> Closed: not the Bridge's Tailnet ID
     Closed --> [*]
 ```
 
