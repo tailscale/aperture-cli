@@ -1,5 +1,5 @@
 exit 0
 -- stdout --
-NAME  ID             PORT  TAILNET
-work  bridge-XXXXXX  8991  -
+NAME  ID             PORT  TAILNET  TAILNET ID
+work  bridge-XXXXXX  8991  -        -
 -- stderr --

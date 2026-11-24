@@ -177,23 +177,28 @@ func bridgeByName(g *config.Global, name string) (config.Bridge, error) {
 	return config.Bridge{}, fmt.Errorf("%d bridges are called %q; fix the duplicate in the settings file", len(matched), name)
 }
 
-// writeBridges prints bridges as tabbed columns. A missing port or tailnet
-// is a dash, so scripts can read fixed columns.
+// writeBridges prints bridges as tabbed columns. A missing port, tailnet or
+// tailnet ID is a dash, so scripts can read fixed columns. The tailnet ID is
+// last so the columns before it keep their positions.
 func writeBridges(cmd *cobra.Command, g *config.Global, list []config.Bridge) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tID\tPORT\tTAILNET")
+	fmt.Fprintln(w, "NAME\tID\tPORT\tTAILNET\tTAILNET ID")
 	for _, b := range list {
 		port := "-"
 		if b.Port != 0 {
 			port = strconv.Itoa(b.Port)
 		}
-		tailnet := b.Tailnet
-		if tailnet == "" {
-			tailnet = "-"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, b.ID, port, tailnet)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", b.Name, b.ID, port, orDash(b.Tailnet), orDash(b.TailnetID))
 	}
 	w.Flush()
+}
+
+// orDash returns s, or a dash when s is empty.
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // eventPrinter reports a long bridge operation to the user: login links

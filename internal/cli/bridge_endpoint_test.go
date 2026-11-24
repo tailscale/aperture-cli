@@ -56,8 +56,9 @@ func TestBridgeCommands(t *testing.T) {
 	}
 }
 
-// A pinned bridge is the scripted setup ADR 0009 is for, so describe has to
-// show the pin and a malformed ID has to be refused before anything is saved.
+// A pinned bridge is the scripted setup ADR 0009 is for, so describe and list
+// have to show the pin and a malformed ID has to be refused before anything is
+// saved.
 func TestBridgeAddPinsATailnet(t *testing.T) {
 	scratchHome(t)
 	if _, _, err := runCLI(t, "bridge", "add", "work", "--tailnet-id", "TWork1CNTRL"); err != nil {
@@ -69,6 +70,15 @@ func TestBridgeAddPinsATailnet(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "tailnet id: TWork1CNTRL") {
 		t.Errorf("describe = %q, want the tailnet ID", stdout)
+	}
+	// An older binary drops the pin when it saves settings, so list has to
+	// show it for the loss to be noticed.
+	stdout, _, err = runCLI(t, "bridge", "list")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(stdout, "TWork1CNTRL") {
+		t.Errorf("list = %q, want the tailnet ID", stdout)
 	}
 
 	if _, _, err := runCLI(t, "bridge", "add", "home", "--tailnet-id", "T1,T2"); err == nil {
