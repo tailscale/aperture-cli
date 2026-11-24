@@ -59,6 +59,9 @@ type Bridge struct {
 	// after a successful connection, so the connection picker can name the
 	// tailnet before the node starts again.
 	Tailnet string `json:"tailnet,omitempty"`
+	// TailnetID is the stable ID of the only tailnet the bridge's machines
+	// may join. Empty means any (ADR 0009).
+	TailnetID string `json:"tailnetId,omitempty"`
 }
 
 // ParseEndpointURL turns user input into an Endpoint URL. A bare host gets

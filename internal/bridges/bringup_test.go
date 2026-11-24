@@ -10,6 +10,7 @@ import (
 	"github.com/tailscale/aperture-cli/internal/connection"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 )
 
 // notifies replays a recorded bus. The second return of Next is what a closed
@@ -52,6 +53,7 @@ func TestBringUpReportsFromTheWatchItWaitsOn(t *testing.T) {
 		}},
 		func(context.Context) (*ipnstate.Status, error) { return want, nil },
 		collect(&got),
+		"",
 	)
 	if err != nil || status != want {
 		t.Fatalf("bringUp = %v, %v; want the running status", status, err)
@@ -81,6 +83,7 @@ func TestBringUpFailsOnABackendError(t *testing.T) {
 			return nil, nil
 		},
 		sink(nil),
+		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), msg) {
 		t.Fatalf("bringUp error = %v, want the backend message", err)
@@ -96,8 +99,54 @@ func TestBringUpRefusesARunningNodeWithNoAddress(t *testing.T) {
 		&notifies{seq: []*ipn.Notify{state(ipn.Running)}},
 		func(context.Context) (*ipnstate.Status, error) { return &ipnstate.Status{}, nil },
 		sink(nil),
+		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), "address") {
 		t.Fatalf("bringUp error = %v, want a running node with no address refused", err)
+	}
+}
+
+// TestBringUpHoldsAPinnedBridgeToItsTailnet is tsnet.Up's tailnet check,
+// which owning the watch means repeating (ADR 0009). Control refuses a fresh
+// login to another tailnet, but state saved before the pin comes up Running
+// wherever it was, and a node let through there dials the wrong tailnet.
+func TestBringUpHoldsAPinnedBridgeToItsTailnet(t *testing.T) {
+	const pinned tailcfg.StableTailnetID = "TWork1CNTRL"
+	in := func(id tailcfg.StableTailnetID) *ipnstate.Status {
+		st := addressed("100.64.0.2")
+		st.CurrentTailnet = &ipnstate.TailnetStatus{Name: "example.com", StableID: id}
+		return st
+	}
+	tests := []struct {
+		name   string
+		want   tailcfg.StableTailnetID
+		status *ipnstate.Status
+		ok     bool
+	}{
+		{name: "pinned and in that tailnet", want: pinned, status: in(pinned), ok: true},
+		{name: "pinned and in another tailnet", want: pinned, status: in("THome2CNTRL")},
+		{name: "pinned and control reports no ID", want: pinned, status: in("")},
+		{name: "pinned and no tailnet at all", want: pinned, status: addressed("100.64.0.2")},
+		{name: "unpinned joins any tailnet", status: in("THome2CNTRL"), ok: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := bringUp(
+				context.Background(),
+				&notifies{seq: []*ipn.Notify{state(ipn.Running)}},
+				func(context.Context) (*ipnstate.Status, error) { return tt.status, nil },
+				sink(nil),
+				tt.want,
+			)
+			if tt.ok {
+				if err != nil {
+					t.Fatalf("bringUp = %v, want the node up", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), string(pinned)) {
+				t.Fatalf("bringUp error = %v, want the wrong tailnet refused naming %s", err, pinned)
+			}
+		})
 	}
 }

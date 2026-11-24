@@ -19,15 +19,17 @@ func bridgeCommand() *cobra.Command {
 		Use:   "bridge",
 		Short: "Configure tailnet bridges",
 		Example: `  aperture bridge add work --port 8991
+  aperture bridge add work --tailnet-id T1234CNTRL
   aperture bridge list
   aperture bridge describe work
   aperture bridge delete work`,
 	}
 	add := &cobra.Command{
-		Use:     "add <name>",
-		Short:   "Add a bridge",
-		Example: "  aperture bridge add work --port 8991",
-		Args:    cobra.ExactArgs(1),
+		Use:   "add <name>",
+		Short: "Add a bridge",
+		Example: `  aperture bridge add work --port 8991
+  aperture bridge add work --tailnet-id T1234CNTRL`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			g, err := loadGlobal(cmd)
@@ -35,7 +37,8 @@ func bridgeCommand() *cobra.Command {
 				return err
 			}
 			port, _ := cmd.Flags().GetInt("port")
-			b, err := g.AddBridge(args[0], port)
+			tailnetID, _ := cmd.Flags().GetString("tailnet-id")
+			b, err := g.AddBridge(args[0], port, tailnetID)
 			if err != nil {
 				return err
 			}
@@ -44,6 +47,7 @@ func bridgeCommand() *cobra.Command {
 		},
 	}
 	add.Flags().IntP("port", "p", 0, "fixed loopback port serve binds for this bridge")
+	add.Flags().String("tailnet-id", "", "the only tailnet this bridge may join, by the stable ID in the admin console")
 	del := &cobra.Command{
 		Use:   "delete <name>",
 		Short: "Log out the bridge's machines and remove it",
@@ -129,6 +133,9 @@ endpoints connecting through it.`,
 				}
 				if b.Tailnet != "" {
 					fmt.Fprintf(out, "tailnet: %s\n", b.Tailnet)
+				}
+				if b.TailnetID != "" {
+					fmt.Fprintf(out, "tailnet id: %s\n", b.TailnetID)
 				}
 				slots, err := config.BridgeStateSlots(b.ID)
 				if err != nil {

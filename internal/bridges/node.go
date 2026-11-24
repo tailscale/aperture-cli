@@ -13,6 +13,7 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -51,7 +52,7 @@ func (n *tsnetNode) BringUp(ctx context.Context, ev events) (*ipnstate.Status, e
 		return nil, err
 	}
 	defer watcher.Close()
-	return bringUp(ctx, watcher, lc.Status, ev)
+	return bringUp(ctx, watcher, lc.Status, ev, n.server.Tailnet)
 }
 
 func (n *tsnetNode) Status(ctx context.Context) (*ipnstate.Status, error) {
@@ -76,8 +77,8 @@ type ipnBusWatch interface {
 // enters it. The login link comes off the bus rather than tsnet's five second
 // poll loop. The poll loop hides a link that lands just after a tick: one
 // bridge was killed a few hundred milliseconds before its link would have
-// printed.
-func bringUp(ctx context.Context, w ipnBusWatch, statusOf func(context.Context) (*ipnstate.Status, error), ev events) (*ipnstate.Status, error) {
+// printed. A non-empty tailnet refuses a node running anywhere else.
+func bringUp(ctx context.Context, w ipnBusWatch, statusOf func(context.Context) (*ipnstate.Status, error), ev events, tailnet tailcfg.StableTailnetID) (*ipnstate.Status, error) {
 	progress := bringUpProgress{ev: ev}
 	for {
 		notify, err := w.Next()
@@ -98,8 +99,31 @@ func bringUp(ctx context.Context, w ipnBusWatch, statusOf func(context.Context) 
 		if status == nil || len(status.TailscaleIPs) == 0 {
 			return nil, errors.New("bridge node is running with no tailnet address")
 		}
+		if err := checkTailnet(status, tailnet); err != nil {
+			return nil, err
+		}
 		return status, nil
 	}
+}
+
+// checkTailnet is tsnet.Server.Up's check of Server.Tailnet, which owning the
+// bus watch means repeating (ADR 0009). Control refuses a login to another
+// tailnet, so this catches state saved before the bridge was pinned.
+func checkTailnet(status *ipnstate.Status, want tailcfg.StableTailnetID) error {
+	if want == "" {
+		return nil
+	}
+	var got tailcfg.StableTailnetID
+	if status.CurrentTailnet != nil {
+		got = status.CurrentTailnet.StableID
+	}
+	if got == "" {
+		return fmt.Errorf("the tailnet did not report its ID; this bridge only joins tailnet %s", want)
+	}
+	if got != want {
+		return fmt.Errorf("bridge machine is in tailnet %s, but this bridge only joins tailnet %s; switch tailnet in aperture, or delete and re-add the bridge", got, want)
+	}
+	return nil
 }
 
 // bringUpProgress translates IPN bus notifications into connection phases. It
@@ -232,6 +256,7 @@ func newTSNetNode(debug bool) func(bridge config.Bridge, slot int, stateDir stri
 			Hostname: MachineName(bridge.ID, slot),
 			AuthKey:  os.Getenv("TS_AUTHKEY"),
 			UserLogf: userLogf,
+			Tailnet:  tailcfg.StableTailnetID(bridge.TailnetID),
 		}
 		if debug {
 			s.Logf = debugLogf

@@ -199,7 +199,7 @@ func (m *model) bridgesMenu() *menu.Menu {
 		Hidden:   true,
 		Action: func() menu.Result {
 			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
-				if _, err := m.g.AddBridge(v, 0); err != nil {
+				if _, err := m.g.AddBridge(v, 0, ""); err != nil {
 					return func() tea.Msg { return menu.SimpleDoneMsg{Err: err} }
 				}
 				m.refreshBridgesMenu()
@@ -660,7 +660,7 @@ func (m *model) endpointBridgeMenu() *menu.Menu {
 		Label: "Add Bridge",
 		Action: func() menu.Result {
 			m.promptForInput("Add Bridge:", "Name", "", func(v string) tea.Cmd {
-				bridge, err := m.g.AddBridge(v, 0)
+				bridge, err := m.g.AddBridge(v, 0, "")
 				if err != nil {
 					return simpleErrorCmd(err)
 				}
