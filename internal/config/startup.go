@@ -84,7 +84,7 @@ func bridgeNamed(g *Global, name string) (Bridge, error) {
 	}
 	switch len(matched) {
 	case 0:
-		return g.AddBridge(name, 0)
+		return g.AddBridge(name, 0, "")
 	case 1:
 		return matched[0], nil
 	}

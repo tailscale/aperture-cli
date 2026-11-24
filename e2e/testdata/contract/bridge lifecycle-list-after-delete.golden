@@ -1,4 +1,4 @@
 exit 0
 -- stdout --
-NAME  ID  PORT  TAILNET
+NAME  ID  PORT  TAILNET  TAILNET ID
 -- stderr --

@@ -215,11 +215,21 @@ func checkName(name string) error {
 	return nil
 }
 
+// CheckTailnetID rejects a Tailnet ID that would change which tailnets a
+// registration asks for. Control reads the required tailnet as a comma
+// separated list behind a "required:" prefix.
+func CheckTailnetID(id string) error {
+	if strings.ContainsFunc(id, func(r rune) bool { return r == ',' || r == ':' || unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("tailnet ID %q contains a comma, colon or space", id)
+	}
+	return nil
+}
+
 // AddBridge creates a bridge named name with a generated ID, saves it and
-// returns it. port is the fixed port serve binds, zero for none. The name
-// is the bridge's command-line handle, so a duplicate is refused without
-// case.
-func (g *Global) AddBridge(name string, port int) (Bridge, error) {
+// returns it. port is the fixed port serve binds, zero for none. tailnetID
+// pins the bridge to one tailnet, empty for any. The name is the bridge's
+// command-line handle, so a duplicate is refused without case.
+func (g *Global) AddBridge(name string, port int, tailnetID string) (Bridge, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return Bridge{}, fmt.Errorf("bridge name is empty")
@@ -230,6 +240,10 @@ func (g *Global) AddBridge(name string, port int) (Bridge, error) {
 	if port < 0 || port > 65535 {
 		return Bridge{}, fmt.Errorf("port %d is outside 0-65535", port)
 	}
+	tailnetID = strings.TrimSpace(tailnetID)
+	if err := CheckTailnetID(tailnetID); err != nil {
+		return Bridge{}, err
+	}
 	for _, b := range g.Settings.Bridges {
 		if strings.EqualFold(b.Name, name) {
 			return Bridge{}, fmt.Errorf("a bridge called %q already exists", name)
@@ -239,7 +253,7 @@ func (g *Global) AddBridge(name string, port int) (Bridge, error) {
 	if err != nil {
 		return Bridge{}, err
 	}
-	p := Bridge{ID: id, Name: name, Port: port}
+	p := Bridge{ID: id, Name: name, Port: port, TailnetID: tailnetID}
 	next := g.Settings
 	next.Bridges = append(append([]Bridge(nil), g.Settings.Bridges...), p)
 	if err := SaveSettings(next); err != nil {

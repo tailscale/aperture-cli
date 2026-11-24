@@ -19,15 +19,17 @@ func bridgeCommand() *cobra.Command {
 		Use:   "bridge",
 		Short: "Configure tailnet bridges",
 		Example: `  aperture bridge add work --port 8991
+  aperture bridge add work --tailnet-id T1234CNTRL
   aperture bridge list
   aperture bridge describe work
   aperture bridge delete work`,
 	}
 	add := &cobra.Command{
-		Use:     "add <name>",
-		Short:   "Add a bridge",
-		Example: "  aperture bridge add work --port 8991",
-		Args:    cobra.ExactArgs(1),
+		Use:   "add <name>",
+		Short: "Add a bridge",
+		Example: `  aperture bridge add work --port 8991
+  aperture bridge add work --tailnet-id T1234CNTRL`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			g, err := loadGlobal(cmd)
@@ -35,7 +37,8 @@ func bridgeCommand() *cobra.Command {
 				return err
 			}
 			port, _ := cmd.Flags().GetInt("port")
-			b, err := g.AddBridge(args[0], port)
+			tailnetID, _ := cmd.Flags().GetString("tailnet-id")
+			b, err := g.AddBridge(args[0], port, tailnetID)
 			if err != nil {
 				return err
 			}
@@ -44,6 +47,7 @@ func bridgeCommand() *cobra.Command {
 		},
 	}
 	add.Flags().IntP("port", "p", 0, "fixed loopback port serve binds for this bridge")
+	add.Flags().String("tailnet-id", "", "the only tailnet this bridge may join, by the stable ID in the admin console")
 	del := &cobra.Command{
 		Use:   "delete <name>",
 		Short: "Log out the bridge's machines and remove it",
@@ -130,6 +134,9 @@ endpoints connecting through it.`,
 				if b.Tailnet != "" {
 					fmt.Fprintf(out, "tailnet: %s\n", b.Tailnet)
 				}
+				if b.TailnetID != "" {
+					fmt.Fprintf(out, "tailnet id: %s\n", b.TailnetID)
+				}
 				slots, err := config.BridgeStateSlots(b.ID)
 				if err != nil {
 					return err
@@ -170,23 +177,28 @@ func bridgeByName(g *config.Global, name string) (config.Bridge, error) {
 	return config.Bridge{}, fmt.Errorf("%d bridges are called %q; fix the duplicate in the settings file", len(matched), name)
 }
 
-// writeBridges prints bridges as tabbed columns. A missing port or tailnet
-// is a dash, so scripts can read fixed columns.
+// writeBridges prints bridges as tabbed columns. A missing port, tailnet or
+// tailnet ID is a dash, so scripts can read fixed columns. The tailnet ID is
+// last so the columns before it keep their positions.
 func writeBridges(cmd *cobra.Command, g *config.Global, list []config.Bridge) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tID\tPORT\tTAILNET")
+	fmt.Fprintln(w, "NAME\tID\tPORT\tTAILNET\tTAILNET ID")
 	for _, b := range list {
 		port := "-"
 		if b.Port != 0 {
 			port = strconv.Itoa(b.Port)
 		}
-		tailnet := b.Tailnet
-		if tailnet == "" {
-			tailnet = "-"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.Name, b.ID, port, tailnet)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", b.Name, b.ID, port, orDash(b.Tailnet), orDash(b.TailnetID))
 	}
 	w.Flush()
+}
+
+// orDash returns s, or a dash when s is empty.
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // eventPrinter reports a long bridge operation to the user: login links

@@ -130,3 +130,28 @@ func TestFailedCommandLogsToRunLog(t *testing.T) {
 		t.Errorf("aperture.log = %q, want error record for failed command", logStr)
 	}
 }
+
+// A pinned bridge through the built binary: the ID is stored and shown, and a
+// malformed one is refused with a non-zero exit (ADR 0009).
+func TestCLIBridgeAddPinsATailnet(t *testing.T) {
+	env := hermeticEnv(t, "")
+
+	if _, stderr, err := run(t, apertureBin, env, "bridge", "add", "work", "--tailnet-id", "TWork1CNTRL"); err != nil {
+		t.Fatalf("bridge add: %v (%s)", err, stderr)
+	}
+	stdout, _, err := run(t, apertureBin, env, "bridge", "describe", "work")
+	if err != nil {
+		t.Fatalf("bridge describe: %v", err)
+	}
+	if !strings.Contains(stdout, "tailnet id: TWork1CNTRL") {
+		t.Errorf("bridge describe = %q, want the tailnet ID", stdout)
+	}
+
+	_, stderr, err := run(t, apertureBin, env, "bridge", "add", "home", "--tailnet-id", "required:T1")
+	if err == nil {
+		t.Fatal("bridge add took a tailnet ID with a colon")
+	}
+	if !strings.Contains(stderr, "tailnet ID") {
+		t.Errorf("stderr = %q, want the refusal to name the tailnet ID", stderr)
+	}
+}

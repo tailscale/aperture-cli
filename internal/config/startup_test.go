@@ -144,7 +144,7 @@ func TestResolveRejectsAnAmbiguousBridgeName(t *testing.T) {
 func TestAddBridgeStoresThePort(t *testing.T) {
 	g := loadInto(t, config.Settings{})
 
-	b, err := g.AddBridge("Work", 8991)
+	b, err := g.AddBridge("Work", 8991, "")
 	if err != nil {
 		t.Fatalf("AddBridge: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestAddBridgeStoresThePort(t *testing.T) {
 func TestAddBridgeRefusesADuplicateName(t *testing.T) {
 	g := loadInto(t, config.Settings{Bridges: []config.Bridge{{ID: "bridge-abc123", Name: "Work"}}})
 
-	if _, err := g.AddBridge("work", 0); err == nil {
+	if _, err := g.AddBridge("work", 0, ""); err == nil {
 		t.Error("AddBridge took a second bridge called work")
 	}
 	if len(g.Settings.Bridges) != 1 {
@@ -173,11 +173,47 @@ func TestAddBridgeRefusesADuplicateName(t *testing.T) {
 	}
 }
 
+// The Tailnet ID is the only tailnet the bridge may join, so it has to
+// survive the round trip to disk or the next process runs unpinned.
+func TestAddBridgeStoresTheTailnetID(t *testing.T) {
+	g := loadInto(t, config.Settings{})
+
+	b, err := g.AddBridge("Work", 0, " TXyz123CNTRL ")
+	if err != nil {
+		t.Fatalf("AddBridge: %v", err)
+	}
+	if b.TailnetID != "TXyz123CNTRL" {
+		t.Errorf("tailnet ID = %q, want it trimmed", b.TailnetID)
+	}
+	saved, err := config.LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if len(saved.Bridges) != 1 || saved.Bridges[0].TailnetID != "TXyz123CNTRL" {
+		t.Errorf("saved bridges = %+v, want the tailnet ID written out", saved.Bridges)
+	}
+}
+
+// Control reads the required tailnet as a comma separated list behind a
+// "required:" prefix, so these characters would change what is asked for.
+func TestAddBridgeRefusesABadTailnetID(t *testing.T) {
+	g := loadInto(t, config.Settings{})
+
+	for _, id := range []string{"T1,T2", "required:T1", "T1 T2", "T1\nT2"} {
+		if _, err := g.AddBridge("Work", 0, id); err == nil {
+			t.Errorf("AddBridge took tailnet ID %q", id)
+		}
+	}
+	if len(g.Settings.Bridges) != 0 {
+		t.Errorf("bridges = %+v, want every bad ID refused", g.Settings.Bridges)
+	}
+}
+
 func TestAddBridgeRefusesABadPort(t *testing.T) {
 	g := loadInto(t, config.Settings{})
 
 	for _, port := range []int{-1, 65536} {
-		if _, err := g.AddBridge("Work", port); err == nil {
+		if _, err := g.AddBridge("Work", port, ""); err == nil {
 			t.Errorf("AddBridge took port %d", port)
 		}
 	}
@@ -276,7 +312,7 @@ func TestResolveFallsBackToAURLForAnUnknownName(t *testing.T) {
 // reads, so a newline would forge a row.
 func TestRefusesControlCharactersInNames(t *testing.T) {
 	g := loadInto(t, config.Settings{})
-	if _, err := g.AddBridge("bad\tbridge", 0); err == nil {
+	if _, err := g.AddBridge("bad\tbridge", 0, ""); err == nil {
 		t.Error("AddBridge took a tab in a name")
 	}
 	if err := g.NameEndpoint(config.Direct("http://ai"), "bad\nendpoint"); err == nil {
