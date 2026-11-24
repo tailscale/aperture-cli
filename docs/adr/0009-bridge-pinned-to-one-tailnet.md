@@ -20,9 +20,9 @@ watches a `bridge add` then `serve` under a supervisor.
    Open closes the node when it fails.
 4. `bridge add` and `Machines.For` refuse an ID with a comma, colon or
    space. Control parses the value as a list behind `required:`.
-5. `tailscale.com` is pinned to
-   [tailscale/tailscale#22606](https://github.com/tailscale/tailscale/pull/22606).
-   We don't release from the pin.
+5. `tailscale.com` is pinned to the merge of
+   [tailscale/tailscale#22606](https://github.com/tailscale/tailscale/pull/22606)
+   on main. It's a pseudo version, so we don't release from the pin.
 
 ## Consequences
 
@@ -48,5 +48,6 @@ The TUI can't set the pin. The ID comes from the admin console.
 
 ## Revisit when
 
-#22606 merges in a different shape, or someone needs to pin a bridge
+A tagged `tailscale.com` release carries `Server.Tailnet`, control
+starts holding an auth key to the pin, or someone needs to pin a bridge
 they already have.

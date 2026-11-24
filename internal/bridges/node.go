@@ -107,8 +107,8 @@ func bringUp(ctx context.Context, w ipnBusWatch, statusOf func(context.Context) 
 }
 
 // checkTailnet is tsnet.Server.Up's check of Server.Tailnet, which owning the
-// bus watch means repeating (ADR 0009). Control refuses a login to another
-// tailnet, so this catches state saved before the bridge was pinned.
+// bus watch means repeating (ADR 0009). Control holds a browser login to the
+// pin but not a TS_AUTHKEY, so for an auth key this is the only guard.
 func checkTailnet(status *ipnstate.Status, want tailcfg.StableTailnetID) error {
 	if want == "" {
 		return nil
