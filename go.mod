@@ -10,7 +10,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.50.0
-	tailscale.com v1.105.0-pre.0.20261123164458-32fe37350167
+	tailscale.com v1.107.0-pre.0.20261124200453-67e092fe7d63
 )
 
 require (
